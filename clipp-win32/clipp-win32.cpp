@@ -15,51 +15,27 @@
 Settings g_settings;
 
 namespace {
-KeyManager g_keyManager(g_settings);
-
-bool ParseHexNetworkKey(const std::string& hex, std::array<unsigned char, KeyManager::NetworkKeySize>& networkKey) {
-    if (hex.size() != KeyManager::NetworkKeySize * 2) {
-        return false;
-    }
-
-    for (size_t i = 0; i < KeyManager::NetworkKeySize; ++i) {
-        const std::string byteHex = hex.substr(i * 2, 2);
-        char* endPtr = nullptr;
-        const long value = std::strtol(byteHex.c_str(), &endPtr, 16);
-        if (endPtr == nullptr || *endPtr != '\0' || value < 0 || value > 255) {
-            return false;
-        }
-        networkKey[i] = static_cast<unsigned char>(value);
-    }
-    return true;
+    KeyManager g_keyManager(g_settings);
 }
 
-std::string ReadHiddenLine(const std::string& prompt) {
+static std::string ReadHiddenLine(const std::string& prompt) {
     std::cout << prompt;
     std::string input;
-
-    while (true) {
-        int ch = _getch();
-        if (ch == '\r' || ch == '\n') {
-            std::cout << std::endl;
-            break;
-        }
-        if (ch == '\b') {
-            if (!input.empty()) {
-                input.pop_back();
-            }
-            continue;
-        }
-        if (ch == 0 || ch == 224) {
-            (void)_getch();
-            continue;
-        }
-        input.push_back(static_cast<char>(ch));
-    }
-
+    // Get the standard input handle
+    HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD mode = 0;
+    // Save the current console mode
+    GetConsoleMode(hStdin, &mode);
+    // Disable the echo input flag
+    SetConsoleMode(hStdin, mode & (~ENABLE_ECHO_INPUT));
+    // Read the input normally (backspaces are handled by the OS automatically)
+    std::getline(std::cin, input);
+    // Restore the original console mode
+    SetConsoleMode(hStdin, mode);
+    // Print a newline since the user's 'Enter' key press was also suppressed
+    std::cout << std::endl;
     return input;
 }
-} // namespace
 
 void OnClipboardNotification() {
     std::cout << "Clipboard debounced and processed!" << std::endl;
@@ -79,7 +55,7 @@ int main(int argc, char* argv[]) {
         std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
         const std::string keyInput = ReadHiddenLine("Enter 64-character network key hex: ");
 
-        if (!ParseHexNetworkKey(keyInput, networkKey)) {
+        if (!g_keyManager.ParseHexNetworkKey(keyInput, networkKey)) {
             std::cerr << "Invalid input. Expected exactly 64 hexadecimal characters." << std::endl;
             return 1;
         }
@@ -99,6 +75,7 @@ int main(int argc, char* argv[]) {
         std::cerr << "Fatal: libsodium failed to initialize!" << std::endl;
         return 1;
     }
+    std::cout << "libsodium initialized successfully." << std::endl;
 
     std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
     std::string keyErrorMessage;
@@ -107,18 +84,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::cout << "libsodium initialized successfully." << std::endl;
-
-    // Let's generate some random bytes just to prove the library is linked and active
-    char buffer[32];
-    randombytes_buf(buffer, sizeof(buffer));
-
-    std::cout << "Generated 32 random bytes." << std::endl;
-
-    // A simple mdns string creation to test the linker
-    mdns_string_t test_string = { "test", 4 };
-    std::cout << "mDNS string created with length: " << test_string.length << std::endl;
-
+    // Start worker threads
     if (StartClipboardNotification(OnClipboardNotification)) {
         if (StartMDNS(OnMDNSNotification)) {
             std::cout << "Press Enter to exit..." << std::endl;
@@ -131,5 +97,6 @@ int main(int argc, char* argv[]) {
     } else {
         std::cerr << "Failed to start clipboard notification thread!" << std::endl;
     }
+
     return 0;
 }

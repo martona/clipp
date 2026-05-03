@@ -1,6 +1,5 @@
-#include "Settings.h"
-
 #include <windows.h>
+#include "Settings.h"
 
 namespace {
     constexpr wchar_t kRegistryPath[] = L"Software\\Clipp";

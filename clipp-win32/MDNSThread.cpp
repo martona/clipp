@@ -61,127 +61,125 @@ struct encrypted_mdns_packet {
 };
 
 namespace {
-
     constexpr const wchar_t* kProtocolSelector = L"clipp";
     constexpr int kProtocolVersion = 1;
     constexpr auto kBroadcastInterval = std::chrono::minutes(1);
+}
 
-    bool GetNetworkKey(std::array<unsigned char, KeyManager::NetworkKeySize>& networkKey) {
-        std::string errorMessage;
-        return g_keyManager.GetNetworkKey(networkKey, &errorMessage);
+static bool GetNetworkKey(std::array<unsigned char, KeyManager::NetworkKeySize>& networkKey) {
+    std::string errorMessage;
+    return g_keyManager.GetNetworkKey(networkKey, &errorMessage);
+}
+
+static bool EncryptPacket(const mdns_packet& packet, encrypted_mdns_packet& encryptedPacket) {
+    std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
+    if (!GetNetworkKey(networkKey))
+        return false;
+
+    randombytes_buf(encryptedPacket.nonce, sizeof(encryptedPacket.nonce));
+    return crypto_secretbox_easy(
+        encryptedPacket.ciphertext,
+        reinterpret_cast<const unsigned char*>(&packet),
+        sizeof(packet),
+        encryptedPacket.nonce,
+        networkKey.data()) == 0;
+}
+
+static bool DecryptPacket(const char* packet, int packetLen, mdns_packet& decryptedPacket) {
+    if (!packet || packetLen != sizeof(encrypted_mdns_packet))
+        return false;
+
+    const encrypted_mdns_packet* encryptedPacket = reinterpret_cast<const encrypted_mdns_packet*>(packet);
+    std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
+    if (!GetNetworkKey(networkKey))
+        return false;
+
+    return crypto_secretbox_open_easy(
+        reinterpret_cast<unsigned char*>(&decryptedPacket),
+        encryptedPacket->ciphertext,
+        sizeof(encryptedPacket->ciphertext),
+        encryptedPacket->nonce,
+        networkKey.data()) == 0;
+}
+
+static std::wstring GetLocalHostName() {
+    char hostName[256] = {};
+	wchar_t wideHostName[256] = {};
+    if (gethostname(hostName, sizeof(hostName)) == 0) {
+		mbstowcs_s(nullptr, wideHostName, sizeof(wideHostName) / sizeof(wchar_t), hostName, sizeof(hostName));
+        return wideHostName;
     }
+    return L"unknown";
+}
 
-    bool EncryptPacket(const mdns_packet& packet, encrypted_mdns_packet& encryptedPacket) {
-        std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
-        if (!GetNetworkKey(networkKey))
-            return false;
+static mdns_packet BuildDiscoveryPacket(const std::wstring& hostName) {
+	mdns_packet packet;
+	packet.version = htons(kProtocolVersion);
+	randombytes_buf(packet.queryID, sizeof(packet.queryID));
+	randombytes_buf(packet.nonce, sizeof(packet.nonce));
+	wcsncpy_s(packet.selector, _countof(packet.selector), kProtocolSelector, _TRUNCATE);
+	wcsncpy_s(packet.hostName, _countof(packet.hostName), hostName.c_str(), _TRUNCATE);
+	wcsncpy_s(packet.verb, _countof(packet.verb), L"query", _TRUNCATE);
+	std::memcpy(g_lastSentQueryID.data(), packet.queryID, sizeof(packet.queryID));
+    return packet;
+}
 
-        randombytes_buf(encryptedPacket.nonce, sizeof(encryptedPacket.nonce));
-        return crypto_secretbox_easy(
-            encryptedPacket.ciphertext,
-            reinterpret_cast<const unsigned char*>(&packet),
-            sizeof(packet),
-            encryptedPacket.nonce,
-            networkKey.data()) == 0;
+static mdns_packet BuildResponsePacket(const std::wstring& hostName, const unsigned char* queryID) {
+    mdns_packet packet;
+    packet.version = htons(kProtocolVersion);
+    randombytes_buf(packet.nonce, sizeof(packet.nonce));
+    wcsncpy_s(packet.selector, _countof(packet.selector), kProtocolSelector, _TRUNCATE);
+    wcsncpy_s(packet.hostName, _countof(packet.hostName), hostName.c_str(), _TRUNCATE);
+    wcsncpy_s(packet.verb, _countof(packet.verb), L"response", _TRUNCATE);
+	packet.port = htons(static_cast<u_short>(g_settings.tcpPort()));
+    std::memcpy(packet.queryID, queryID, sizeof(packet.queryID));
+    return packet;
+}
+
+static bool ParseDiscoveryPacket(mdns_packet& pkt, std::wstring& hostName, std::wstring& verb, std::wstring& queryID, std::wstring& nonce, unsigned short& hostPort, const unsigned char** rawQueryID) {
+    // Validate selector
+    if (wcsncmp(pkt.selector, kProtocolSelector, _countof(pkt.selector)) != 0)
+        return false;
+    // Validate version
+    if (pkt.version != htons(kProtocolVersion))
+        return false;
+    // Validate hostName and verb are not empty
+    if (pkt.hostName[0] == 0 || pkt.verb[0] == 0)
+        return false;
+	// Force null-termination of hostName and verb
+	pkt.hostName[_countof(pkt.hostName) - 1] = 0;
+	pkt.verb[_countof(pkt.verb) - 1] = 0;
+    hostName = pkt.hostName;
+    verb = pkt.verb;
+    if (rawQueryID)
+        *rawQueryID = pkt.queryID;
+
+    if (verb == L"response" && std::memcmp(pkt.queryID, g_lastSentQueryID.data(), sizeof(pkt.queryID)) != 0)
+        return false;
+
+	hostPort = ntohs(pkt.port);
+
+    // Convert queryID and nonce to hex wstring
+    std::wostringstream ossQueryID, ossNonce;
+    for (int i = 0; i < 32; ++i) {
+        ossQueryID << std::hex << std::setw(2) << std::setfill(L'0') << (int)pkt.queryID[i];
+        ossNonce   << std::hex << std::setw(2) << std::setfill(L'0') << (int)pkt.nonce[i];
     }
+    queryID = ossQueryID.str();
+    nonce = ossNonce.str();
+    return true;
+}
 
-    bool DecryptPacket(const char* packet, int packetLen, mdns_packet& decryptedPacket) {
-        if (!packet || packetLen != sizeof(encrypted_mdns_packet))
-            return false;
+static bool SendDiscoveryPacket(SOCKET sock, const sockaddr_in& targetAddr, const std::wstring& hostName) {
+    mdns_packet pkt = BuildDiscoveryPacket(hostName);
+    encrypted_mdns_packet encryptedPacket{};
+    if (!EncryptPacket(pkt, encryptedPacket))
+        return false;
 
-        const encrypted_mdns_packet* encryptedPacket = reinterpret_cast<const encrypted_mdns_packet*>(packet);
-        std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
-        if (!GetNetworkKey(networkKey))
-            return false;
-
-        return crypto_secretbox_open_easy(
-            reinterpret_cast<unsigned char*>(&decryptedPacket),
-            encryptedPacket->ciphertext,
-            sizeof(encryptedPacket->ciphertext),
-            encryptedPacket->nonce,
-            networkKey.data()) == 0;
-    }
-
-    std::wstring GetLocalHostName() {
-        char hostName[256] = {};
-		wchar_t wideHostName[256] = {};
-        if (gethostname(hostName, sizeof(hostName)) == 0) {
-			mbstowcs_s(nullptr, wideHostName, sizeof(wideHostName) / sizeof(wchar_t), hostName, sizeof(hostName));
-            return wideHostName;
-        }
-        return L"unknown";
-    }
-
-    mdns_packet BuildDiscoveryPacket(const std::wstring& hostName) {
-		mdns_packet packet;
-		packet.version = htons(kProtocolVersion);
-		randombytes_buf(packet.queryID, sizeof(packet.queryID));
-		randombytes_buf(packet.nonce, sizeof(packet.nonce));
-		wcsncpy_s(packet.selector, _countof(packet.selector), kProtocolSelector, _TRUNCATE);
-		wcsncpy_s(packet.hostName, _countof(packet.hostName), hostName.c_str(), _TRUNCATE);
-		wcsncpy_s(packet.verb, _countof(packet.verb), L"query", _TRUNCATE);
-		std::memcpy(g_lastSentQueryID.data(), packet.queryID, sizeof(packet.queryID));
-        return packet;
-    }
-
-    mdns_packet BuildResponsePacket(const std::wstring& hostName, const unsigned char* queryID) {
-        mdns_packet packet;
-        packet.version = htons(kProtocolVersion);
-        randombytes_buf(packet.nonce, sizeof(packet.nonce));
-        wcsncpy_s(packet.selector, _countof(packet.selector), kProtocolSelector, _TRUNCATE);
-        wcsncpy_s(packet.hostName, _countof(packet.hostName), hostName.c_str(), _TRUNCATE);
-        wcsncpy_s(packet.verb, _countof(packet.verb), L"response", _TRUNCATE);
-		packet.port = htons(static_cast<u_short>(g_settings.tcpPort()));
-        std::memcpy(packet.queryID, queryID, sizeof(packet.queryID));
-        return packet;
-    }
-
-    bool ParseDiscoveryPacket(mdns_packet& pkt, std::wstring& hostName, std::wstring& verb, std::wstring& queryID, std::wstring& nonce, unsigned short& hostPort, const unsigned char** rawQueryID) {
-        // Validate selector
-        if (wcsncmp(pkt.selector, kProtocolSelector, _countof(pkt.selector)) != 0)
-            return false;
-        // Validate version
-        if (pkt.version != htons(kProtocolVersion))
-            return false;
-        // Validate hostName and verb are not empty
-        if (pkt.hostName[0] == 0 || pkt.verb[0] == 0)
-            return false;
-		// Force null-termination of hostName and verb
-		pkt.hostName[_countof(pkt.hostName) - 1] = 0;
-		pkt.verb[_countof(pkt.verb) - 1] = 0;
-        hostName = pkt.hostName;
-        verb = pkt.verb;
-        if (rawQueryID)
-            *rawQueryID = pkt.queryID;
-
-        if (verb == L"response" && std::memcmp(pkt.queryID, g_lastSentQueryID.data(), sizeof(pkt.queryID)) != 0)
-            return false;
-
-		hostPort = ntohs(pkt.port);
-
-        // Convert queryID and nonce to hex wstring
-        std::wostringstream ossQueryID, ossNonce;
-        for (int i = 0; i < 32; ++i) {
-            ossQueryID << std::hex << std::setw(2) << std::setfill(L'0') << (int)pkt.queryID[i];
-            ossNonce   << std::hex << std::setw(2) << std::setfill(L'0') << (int)pkt.nonce[i];
-        }
-        queryID = ossQueryID.str();
-        nonce = ossNonce.str();
-        return true;
-    }
-
-    bool SendDiscoveryPacket(SOCKET sock, const sockaddr_in& targetAddr, const std::wstring& hostName) {
-        mdns_packet pkt = BuildDiscoveryPacket(hostName);
-        encrypted_mdns_packet encryptedPacket{};
-        if (!EncryptPacket(pkt, encryptedPacket))
-            return false;
-
-        int sent = sendto(sock, reinterpret_cast<const char*>(&encryptedPacket), sizeof(encryptedPacket), 0,
-            reinterpret_cast<const sockaddr*>(&targetAddr), sizeof(targetAddr));
-        return sent == sizeof(encryptedPacket);
-    }
-
-} // namespace
+    int sent = sendto(sock, reinterpret_cast<const char*>(&encryptedPacket), sizeof(encryptedPacket), 0,
+        reinterpret_cast<const sockaddr*>(&targetAddr), sizeof(targetAddr));
+    return sent == sizeof(encryptedPacket);
+}
 
 static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback) {
     g_mdnsCallback = callback;
