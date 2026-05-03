@@ -1,13 +1,63 @@
 // clipp-win32.cpp : This file contains the 'main' function. Program execution begins and ends there.
 //
 
+#include <conio.h>
+#include <cstdlib>
 #include <iostream>
 #include <sodium.h>
 #include <mdns.h>
 
 #include "ClipboardNotificationThread.h"
+#include "KeyManager.h"
 #include "MDNSThread.h"
 #include <windows.h>
+
+namespace {
+KeyManager g_keyManager;
+
+bool ParseHexNetworkKey(const std::string& hex, std::array<unsigned char, KeyManager::NetworkKeySize>& networkKey) {
+    if (hex.size() != KeyManager::NetworkKeySize * 2) {
+        return false;
+    }
+
+    for (size_t i = 0; i < KeyManager::NetworkKeySize; ++i) {
+        const std::string byteHex = hex.substr(i * 2, 2);
+        char* endPtr = nullptr;
+        const long value = std::strtol(byteHex.c_str(), &endPtr, 16);
+        if (endPtr == nullptr || *endPtr != '\0' || value < 0 || value > 255) {
+            return false;
+        }
+        networkKey[i] = static_cast<unsigned char>(value);
+    }
+    return true;
+}
+
+std::string ReadHiddenLine(const std::string& prompt) {
+    std::cout << prompt;
+    std::string input;
+
+    while (true) {
+        int ch = _getch();
+        if (ch == '\r' || ch == '\n') {
+            std::cout << std::endl;
+            break;
+        }
+        if (ch == '\b') {
+            if (!input.empty()) {
+                input.pop_back();
+            }
+            continue;
+        }
+        if (ch == 0 || ch == 224) {
+            (void)_getch();
+            continue;
+        }
+        input.push_back(static_cast<char>(ch));
+    }
+
+    return input;
+}
+} // namespace
 
 void OnClipboardNotification() {
     std::cout << "Clipboard debounced and processed!" << std::endl;
@@ -21,10 +71,36 @@ void OnMDNSNotification(const wchar_t* hostName, const wchar_t* senderIp, const 
                << L"\n  nonce:   " << nonce << std::endl;
 }
 
-int main() {
+int main(int argc, char* argv[]) {
+    if (argc > 1 && std::string(argv[1]) == "setkey") {
+        std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
+        const std::string keyInput = ReadHiddenLine("Enter 64-character network key hex: ");
+
+        if (!ParseHexNetworkKey(keyInput, networkKey)) {
+            std::cerr << "Invalid input. Expected exactly 64 hexadecimal characters." << std::endl;
+            return 1;
+        }
+
+        std::string errorMessage;
+        if (!g_keyManager.SetNetworkKey(networkKey, &errorMessage)) {
+            std::cerr << "Failed to store network key: " << errorMessage << std::endl;
+            return 1;
+        }
+
+        std::cout << "Network key saved successfully." << std::endl;
+        return 0;
+    }
+
     // libsodium requires initialization before calling any other functions
     if (sodium_init() < 0) {
         std::cerr << "Fatal: libsodium failed to initialize!" << std::endl;
+        return 1;
+    }
+
+    std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
+    std::string keyErrorMessage;
+    if (!g_keyManager.GetNetworkKey(networkKey, &keyErrorMessage)) {
+        std::cerr << "Fatal: failed to load network key before starting threads: " << keyErrorMessage << std::endl;
         return 1;
     }
 
@@ -54,14 +130,3 @@ int main() {
     }
     return 0;
 }
-
-// Run program: Ctrl + F5 or Debug > Start Without Debugging menu
-// Debug program: F5 or Debug > Start Debugging menu
-
-// Tips for Getting Started: 
-//   1. Use the Solution Explorer window to add/manage files
-//   2. Use the Team Explorer window to connect to source control
-//   3. Use the Output window to see build output and other messages
-//   4. Use the Error List window to view errors
-//   5. Go to Project > Add New Item to create new code files, or Project > Add Existing Item to add existing code files to the project
-//   6. In the future, to open this project again, go to File > Open > Project and select the .sln file
