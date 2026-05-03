@@ -5,6 +5,13 @@
 #include <sodium.h>
 #include <mdns.h>
 
+#include "ClipboardNotificationThread.h"
+#include <windows.h>
+
+void OnClipboardNotification() {
+    std::cout << "Clipboard debounced and processed!" << std::endl;
+}
+
 int main() {
     // libsodium requires initialization before calling any other functions
     if (sodium_init() < 0) {
@@ -24,6 +31,16 @@ int main() {
     mdns_string_t test_string = { "test", 4 };
     std::cout << "mDNS string created with length: " << test_string.length << std::endl;
 
+    // Start clipboard notification thread
+    if (!StartClipboardNotification(OnClipboardNotification)) {
+        std::cerr << "Failed to start clipboard notification thread!" << std::endl;
+        return 1;
+    }
+
+    std::cout << "Press Enter to exit..." << std::endl;
+    std::cin.get();
+
+    StopClipboardNotification();
     return 0;
 }
 

@@ -130,7 +130,15 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="ClipboardNotificationThread.cpp" />
+    <ClCompile Include="ClipboardNotificationWindow.cpp" />
     <ClCompile Include="clipp-win32.cpp" />
+    <ClCompile Include="Settings.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="ClipboardNotificationThread.h" />
+    <ClInclude Include="ClipboardNotificationWindow.h" />
+    <ClInclude Include="Settings.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
