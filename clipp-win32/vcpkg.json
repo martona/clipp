@@ -1,0 +1,9 @@
+{
+  "name": "clipp-win32",
+  "version": "0.1.0",
+  "dependencies": [
+    "libsodium",
+    "mdns"
+  ],
+  "builtin-baseline": "4ebb30167f14487dcb71fac13efbf63273ab6a3f"
+}
