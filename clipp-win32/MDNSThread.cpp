@@ -247,7 +247,7 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
                 char senderIp[INET_ADDRSTRLEN] = {0};
                 inet_ntop(AF_INET, &fromAddr.sin_addr, senderIp, sizeof(senderIp));
 				std::wstring senderIpW(senderIp, senderIp + strlen(senderIp));
-                g_mdnsCallback(discoveredHost.c_str(), senderIpW.c_str(), discoveredQueryID.c_str(), discoveredNonce.c_str());
+                g_mdnsCallback(discoveredHost.c_str(), senderIpW.c_str(), discoveredQueryID.c_str(), discoveredNonce.c_str(), verb.c_str());
             }
         }
     }

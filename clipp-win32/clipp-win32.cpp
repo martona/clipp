@@ -13,9 +13,10 @@ void OnClipboardNotification() {
     std::cout << "Clipboard debounced and processed!" << std::endl;
 }
 
-void OnMDNSNotification(const wchar_t* hostName, const wchar_t* senderIp, const wchar_t* queryID, const wchar_t* nonce) {
+void OnMDNSNotification(const wchar_t* hostName, const wchar_t* senderIp, const wchar_t* queryID, const wchar_t* nonce, const wchar_t* verb) {
     std::wcout << L"mDNS notification received for host: " << hostName
                << L" from IP: " << senderIp
+               << L"\n  verb:    " << verb
                << L"\n  queryID: " << queryID
                << L"\n  nonce:   " << nonce << std::endl;
 }
