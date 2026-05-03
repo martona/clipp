@@ -133,11 +133,13 @@
     <ClCompile Include="ClipboardNotificationThread.cpp" />
     <ClCompile Include="ClipboardNotificationWindow.cpp" />
     <ClCompile Include="clipp-win32.cpp" />
+    <ClCompile Include="MDNSThread.cpp" />
     <ClCompile Include="Settings.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ClipboardNotificationThread.h" />
     <ClInclude Include="ClipboardNotificationWindow.h" />
+    <ClInclude Include="MDNSThread.h" />
     <ClInclude Include="Settings.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

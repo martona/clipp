@@ -6,10 +6,15 @@
 #include <mdns.h>
 
 #include "ClipboardNotificationThread.h"
+#include "MDNSThread.h"
 #include <windows.h>
 
 void OnClipboardNotification() {
     std::cout << "Clipboard debounced and processed!" << std::endl;
+}
+
+void OnMDNSNotification(const char* hostName) {
+    std::cout << "mDNS notification received for host: " << hostName << std::endl;
 }
 
 int main() {
@@ -31,16 +36,18 @@ int main() {
     mdns_string_t test_string = { "test", 4 };
     std::cout << "mDNS string created with length: " << test_string.length << std::endl;
 
-    // Start clipboard notification thread
-    if (!StartClipboardNotification(OnClipboardNotification)) {
-        std::cerr << "Failed to start clipboard notification thread!" << std::endl;
-        return 1;
+    if (StartClipboardNotification(OnClipboardNotification)) {
+        if (StartMDNS(OnMDNSNotification)) {
+            std::cout << "Press Enter to exit..." << std::endl;
+            std::cin.get();
+            StopMDNS();
+        } else {
+            std::cerr << "Failed to start mDNS thread!" << std::endl;
+        }
+		StopClipboardNotification();
+    } else {
+		std::cerr << "Failed to start clipboard notification thread!" << std::endl;
     }
-
-    std::cout << "Press Enter to exit..." << std::endl;
-    std::cin.get();
-
-    StopClipboardNotification();
     return 0;
 }
 

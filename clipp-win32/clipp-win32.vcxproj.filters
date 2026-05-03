@@ -27,6 +27,9 @@
     <ClCompile Include="ClipboardNotificationThread.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="MDNSThread.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ClipboardNotificationWindow.h">
@@ -36,6 +39,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="ClipboardNotificationThread.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MDNSThread.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
