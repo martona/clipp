@@ -4,6 +4,7 @@
 namespace {
     constexpr wchar_t kRegistryPath[] = L"Software\\Clipp";
     constexpr wchar_t kMulticastIpName[] = L"MulticastIp";
+	constexpr wchar_t kListenerIpName[] = L"ListenerIp";
     constexpr wchar_t kMdnsPortName[] = L"MdnsPort";
     constexpr wchar_t kTcpPortName[] = L"TcpPort";
     constexpr wchar_t kEncryptedNetworkKeyName[] = L"EncryptedNetworkKey";
@@ -11,12 +12,14 @@ namespace {
 
 Settings::Settings()
     : multicastIp_(DefaultMulticastIp),
+	  listenerIp_(DefaultListenerIp),
       mdnsPort_(DefaultMdnsPort),
       tcpPort_(DefaultTcpPort) {
     LoadCache();
 }
 
 const std::string& Settings::multicastIp() const { return multicastIp_; }
+const std::string& Settings::listenerIp() const { return listenerIp_; }
 int Settings::mdnsPort() const { return mdnsPort_; }
 int Settings::tcpPort() const { return tcpPort_; }
 
@@ -25,6 +28,14 @@ bool Settings::set_multicastIp(const std::string& value) {
         return false;
     }
     multicastIp_ = value;
+    return true;
+}
+
+bool Settings::set_listenerIp(const std::string& value) {
+    if (!WriteStringValue(kListenerIpName, value)) {
+        return false;
+    }
+    listenerIp_ = value;
     return true;
 }
 

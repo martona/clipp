@@ -196,6 +196,12 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
         initPromise.set_value(false);
 		return;
     }
+	in_addr listenerAddrn = {};
+    if (1 != inet_pton(AF_INET, g_settings.listenerIp().c_str(), &listenerAddrn)) {
+        WSACleanup();
+        initPromise.set_value(false);
+        return;
+    }
 
     const std::wstring localHostName = GetLocalHostName();
 
@@ -212,7 +218,7 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
     sockaddr_in bindAddr{};
     bindAddr.sin_family = AF_INET;
     bindAddr.sin_port = htons(static_cast<u_short>(g_settings.mdnsPort()));
-    bindAddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    bindAddr.sin_addr.s_addr = listenerAddrn.S_un.S_addr;
     if (bind(sock, reinterpret_cast<const sockaddr*>(&bindAddr), sizeof(bindAddr)) == SOCKET_ERROR) {
         closesocket(sock);
         WSACleanup();
@@ -222,7 +228,7 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
 
     ip_mreq group{};
     group.imr_multiaddr.s_addr = multicastAddrn.S_un.S_addr;
-    group.imr_interface.s_addr = htonl(INADDR_ANY);
+    group.imr_interface.s_addr = listenerAddrn.S_un.S_addr;
     setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, reinterpret_cast<const char*>(&group), sizeof(group));
 
     sockaddr_in multicastAddr{};
