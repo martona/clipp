@@ -22,7 +22,7 @@ static MDNSCallback g_mdnsCallback = nullptr;
 static std::atomic<bool> g_mdnsRunning{ false };
 static SOCKET g_mdnsSock = INVALID_SOCKET;
 static std::array<unsigned char, 32> g_lastSentQueryID{};
-static KeyManager g_keyManager;
+static KeyManager g_keyManager(g_settings);
 
 // TODO
 
@@ -131,7 +131,7 @@ namespace {
         wcsncpy_s(packet.selector, _countof(packet.selector), kProtocolSelector, _TRUNCATE);
         wcsncpy_s(packet.hostName, _countof(packet.hostName), hostName.c_str(), _TRUNCATE);
         wcsncpy_s(packet.verb, _countof(packet.verb), L"response", _TRUNCATE);
-		packet.port = htons(static_cast<u_short>(Settings::tcpPort()));
+		packet.port = htons(static_cast<u_short>(g_settings.tcpPort()));
         std::memcpy(packet.queryID, queryID, sizeof(packet.queryID));
         return packet;
     }
@@ -193,7 +193,7 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
     }
 
 	in_addr multicastAddrn = {};
-    if (1 != inet_pton(AF_INET, Settings::multicastIp().c_str(), &multicastAddrn)) {
+    if (1 != inet_pton(AF_INET, g_settings.multicastIp().c_str(), &multicastAddrn)) {
         WSACleanup();
         initPromise.set_value(false);
 		return;
@@ -213,7 +213,7 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
 
     sockaddr_in bindAddr{};
     bindAddr.sin_family = AF_INET;
-    bindAddr.sin_port = htons(static_cast<u_short>(Settings::mdnsPort()));
+    bindAddr.sin_port = htons(static_cast<u_short>(g_settings.mdnsPort()));
     bindAddr.sin_addr.s_addr = htonl(INADDR_ANY);
     if (bind(sock, reinterpret_cast<const sockaddr*>(&bindAddr), sizeof(bindAddr)) == SOCKET_ERROR) {
         closesocket(sock);
@@ -229,7 +229,7 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
 
     sockaddr_in multicastAddr{};
     multicastAddr.sin_family = AF_INET;
-    multicastAddr.sin_port = htons(static_cast<u_short>(Settings::mdnsPort()));
+    multicastAddr.sin_port = htons(static_cast<u_short>(g_settings.mdnsPort()));
     multicastAddr.sin_addr.s_addr = multicastAddrn.S_un.S_addr;
 
     g_mdnsSock = sock;

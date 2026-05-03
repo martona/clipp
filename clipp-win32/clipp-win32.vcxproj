@@ -135,6 +135,8 @@
     <ClCompile Include="clipp-win32.cpp" />
     <ClCompile Include="MDNSThread.cpp" />
     <ClCompile Include="KeyManager.cpp" />
+    <ClCompile Include="Peer.cpp" />
+    <ClCompile Include="PeerManager.cpp" />
     <ClCompile Include="Settings.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -142,6 +144,8 @@
     <ClInclude Include="ClipboardNotificationWindow.h" />
     <ClInclude Include="MDNSThread.h" />
     <ClInclude Include="KeyManager.h" />
+    <ClInclude Include="Peer.h" />
+    <ClInclude Include="PeerManager.h" />
     <ClInclude Include="Settings.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

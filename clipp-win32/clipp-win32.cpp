@@ -12,8 +12,10 @@
 #include "MDNSThread.h"
 #include <windows.h>
 
+Settings g_settings;
+
 namespace {
-KeyManager g_keyManager;
+KeyManager g_keyManager(g_settings);
 
 bool ParseHexNetworkKey(const std::string& hex, std::array<unsigned char, KeyManager::NetworkKeySize>& networkKey) {
     if (hex.size() != KeyManager::NetworkKeySize * 2) {

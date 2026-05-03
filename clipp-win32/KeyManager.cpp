@@ -7,15 +7,16 @@
 #include <vector>
 
 namespace {
-constexpr wchar_t kRegistryPath[] = L"Software\\clipp";
-constexpr wchar_t kRegistryValueName[] = L"EncryptedNetworkKey";
-
 std::string MakeWin32ErrorMessage(const char* prefix, DWORD errorCode) {
     std::ostringstream out;
     out << prefix << " (Win32 error " << errorCode << ")";
     return out.str();
 }
 } // namespace
+
+KeyManager::KeyManager(Settings& settings)
+    : settings_(settings) {
+}
 
 bool KeyManager::SetNetworkKey(const std::array<unsigned char, NetworkKeySize>& networkKey, std::string* errorMessage) {
     DATA_BLOB plainData{};
@@ -37,40 +38,12 @@ bool KeyManager::SetNetworkKey(const std::array<unsigned char, NetworkKeySize>& 
         return false;
     }
 
-    HKEY keyHandle = nullptr;
-    LONG registryStatus = RegCreateKeyExW(
-        HKEY_CURRENT_USER,
-        kRegistryPath,
-        0,
-        nullptr,
-        0,
-        KEY_SET_VALUE,
-        nullptr,
-        &keyHandle,
-        nullptr);
-
-    if (registryStatus != ERROR_SUCCESS) {
-        LocalFree(encryptedData.pbData);
-        if (errorMessage != nullptr) {
-            *errorMessage = MakeWin32ErrorMessage("RegCreateKeyExW failed", registryStatus);
-        }
-        return false;
-    }
-
-    registryStatus = RegSetValueExW(
-        keyHandle,
-        kRegistryValueName,
-        0,
-        REG_BINARY,
-        encryptedData.pbData,
-        encryptedData.cbData);
-
-    RegCloseKey(keyHandle);
+    std::vector<unsigned char> encryptedBuffer(encryptedData.pbData, encryptedData.pbData + encryptedData.cbData);
     LocalFree(encryptedData.pbData);
 
-    if (registryStatus != ERROR_SUCCESS) {
+    if (!settings_.setEncryptedNetworkKey(encryptedBuffer)) {
         if (errorMessage != nullptr) {
-            *errorMessage = MakeWin32ErrorMessage("RegSetValueExW failed", registryStatus);
+            *errorMessage = "Failed to write encrypted key to settings";
         }
         return false;
     }
@@ -86,48 +59,17 @@ bool KeyManager::GetNetworkKey(std::array<unsigned char, NetworkKeySize>& networ
         return true;
     }
 
-    HKEY keyHandle = nullptr;
-    LONG registryStatus = RegOpenKeyExW(HKEY_CURRENT_USER, kRegistryPath, 0, KEY_QUERY_VALUE, &keyHandle);
-    if (registryStatus != ERROR_SUCCESS) {
+    std::vector<unsigned char> encryptedBuffer;
+    if (!settings_.getEncryptedNetworkKey(encryptedBuffer)) {
         if (errorMessage != nullptr) {
-            *errorMessage = MakeWin32ErrorMessage("RegOpenKeyExW failed", registryStatus);
-        }
-        return false;
-    }
-
-    DWORD valueType = 0;
-    DWORD encryptedDataSize = 0;
-    registryStatus = RegQueryValueExW(keyHandle, kRegistryValueName, nullptr, &valueType, nullptr, &encryptedDataSize);
-    if (registryStatus != ERROR_SUCCESS) {
-        RegCloseKey(keyHandle);
-        if (errorMessage != nullptr) {
-            *errorMessage = MakeWin32ErrorMessage("RegQueryValueExW(size) failed", registryStatus);
-        }
-        return false;
-    }
-
-    if (valueType != REG_BINARY || encryptedDataSize == 0) {
-        RegCloseKey(keyHandle);
-        if (errorMessage != nullptr) {
-            *errorMessage = "EncryptedNetworkKey has invalid type or empty data";
-        }
-        return false;
-    }
-
-    std::vector<BYTE> encryptedBuffer(encryptedDataSize);
-    registryStatus = RegQueryValueExW(keyHandle, kRegistryValueName, nullptr, nullptr, encryptedBuffer.data(), &encryptedDataSize);
-    RegCloseKey(keyHandle);
-
-    if (registryStatus != ERROR_SUCCESS) {
-        if (errorMessage != nullptr) {
-            *errorMessage = MakeWin32ErrorMessage("RegQueryValueExW(data) failed", registryStatus);
+            *errorMessage = "Failed to read encrypted key from settings";
         }
         return false;
     }
 
     DATA_BLOB encryptedData{};
     encryptedData.pbData = encryptedBuffer.data();
-    encryptedData.cbData = encryptedDataSize;
+    encryptedData.cbData = static_cast<DWORD>(encryptedBuffer.size());
 
     DATA_BLOB plainData{};
     if (!CryptUnprotectData(
