@@ -1,5 +1,6 @@
 #include "MDNSThread.h"
 #include "Settings.h"
+#include "KeyManager.h"
 #include <sodium.h>
 #include <thread>
 #include <future>
@@ -21,6 +22,7 @@ static MDNSCallback g_mdnsCallback = nullptr;
 static std::atomic<bool> g_mdnsRunning{ false };
 static SOCKET g_mdnsSock = INVALID_SOCKET;
 static std::array<unsigned char, 32> g_lastSentQueryID{};
+static KeyManager g_keyManager;
 
 // TODO
 
@@ -53,11 +55,52 @@ struct mdns_packet {
 	unsigned char nonce[32];
 };
 
+struct encrypted_mdns_packet {
+    unsigned char nonce[crypto_secretbox_NONCEBYTES];
+    unsigned char ciphertext[sizeof(mdns_packet) + crypto_secretbox_MACBYTES];
+};
+
 namespace {
 
     constexpr const wchar_t* kProtocolSelector = L"clipp";
     constexpr int kProtocolVersion = 1;
     constexpr auto kBroadcastInterval = std::chrono::minutes(1);
+
+    bool GetNetworkKey(std::array<unsigned char, KeyManager::NetworkKeySize>& networkKey) {
+        std::string errorMessage;
+        return g_keyManager.GetNetworkKey(networkKey, &errorMessage);
+    }
+
+    bool EncryptPacket(const mdns_packet& packet, encrypted_mdns_packet& encryptedPacket) {
+        std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
+        if (!GetNetworkKey(networkKey))
+            return false;
+
+        randombytes_buf(encryptedPacket.nonce, sizeof(encryptedPacket.nonce));
+        return crypto_secretbox_easy(
+            encryptedPacket.ciphertext,
+            reinterpret_cast<const unsigned char*>(&packet),
+            sizeof(packet),
+            encryptedPacket.nonce,
+            networkKey.data()) == 0;
+    }
+
+    bool DecryptPacket(const char* packet, int packetLen, mdns_packet& decryptedPacket) {
+        if (!packet || packetLen != sizeof(encrypted_mdns_packet))
+            return false;
+
+        const encrypted_mdns_packet* encryptedPacket = reinterpret_cast<const encrypted_mdns_packet*>(packet);
+        std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
+        if (!GetNetworkKey(networkKey))
+            return false;
+
+        return crypto_secretbox_open_easy(
+            reinterpret_cast<unsigned char*>(&decryptedPacket),
+            encryptedPacket->ciphertext,
+            sizeof(encryptedPacket->ciphertext),
+            encryptedPacket->nonce,
+            networkKey.data()) == 0;
+    }
 
     std::wstring GetLocalHostName() {
         char hostName[256] = {};
@@ -92,10 +135,10 @@ namespace {
         return packet;
     }
 
-    bool ParseDiscoveryPacket(const char* packet, int packetLen, std::wstring& hostName, std::wstring& verb, std::wstring& queryID, std::wstring& nonce, const unsigned char** rawQueryID) {
-        if (!packet || packetLen < sizeof(mdns_packet))
+    bool ParseDiscoveryPacket(const mdns_packet& packet, std::wstring& hostName, std::wstring& verb, std::wstring& queryID, std::wstring& nonce, const unsigned char** rawQueryID) {
+        const mdns_packet* pkt = &packet;
+        if (!pkt)
             return false;
-		mdns_packet* pkt = reinterpret_cast<mdns_packet*>(const_cast<char*>(packet));
 
         // Validate selector
         if (wcsncmp(pkt->selector, kProtocolSelector, _countof(pkt->selector)) != 0)
@@ -130,9 +173,13 @@ namespace {
 
     bool SendDiscoveryPacket(SOCKET sock, const sockaddr_in& targetAddr, const std::wstring& hostName) {
         mdns_packet pkt = BuildDiscoveryPacket(hostName);
-        int sent = sendto(sock, (char*)&pkt, sizeof(pkt), 0,
+        encrypted_mdns_packet encryptedPacket{};
+        if (!EncryptPacket(pkt, encryptedPacket))
+            return false;
+
+        int sent = sendto(sock, reinterpret_cast<const char*>(&encryptedPacket), sizeof(encryptedPacket), 0,
             reinterpret_cast<const sockaddr*>(&targetAddr), sizeof(targetAddr));
-        return sent == sizeof(pkt);
+        return sent == sizeof(encryptedPacket);
     }
 
 } // namespace
@@ -220,17 +267,24 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
             if (bytesRead <= 0)
                 continue;
 
+            mdns_packet decryptedPacket;
+            if (!DecryptPacket(recvBuffer.data(), bytesRead, decryptedPacket))
+                continue;
+
             std::wstring discoveredHost, verb, discoveredQueryID, discoveredNonce;
             const unsigned char* rawQueryID = nullptr;
-            if (!ParseDiscoveryPacket(recvBuffer.data(), bytesRead, discoveredHost, verb, discoveredQueryID, discoveredNonce, &rawQueryID))
+            if (!ParseDiscoveryPacket(decryptedPacket, discoveredHost, verb, discoveredQueryID, discoveredNonce, &rawQueryID))
                 continue;
 
             if (verb == L"query" && rawQueryID != nullptr) {
                 SOCKET responseSock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
                 if (responseSock != INVALID_SOCKET) {
                     mdns_packet responsePacket = BuildResponsePacket(localHostName, rawQueryID);
-                    sendto(responseSock, reinterpret_cast<char*>(&responsePacket), sizeof(responsePacket), 0,
-                        reinterpret_cast<const sockaddr*>(&fromAddr), sizeof(fromAddr));
+                    encrypted_mdns_packet encryptedResponse{};
+                    if (EncryptPacket(responsePacket, encryptedResponse)) {
+                        sendto(responseSock, reinterpret_cast<const char*>(&encryptedResponse), sizeof(encryptedResponse), 0,
+                            reinterpret_cast<const sockaddr*>(&fromAddr), sizeof(fromAddr));
+                    }
                     closesocket(responseSock);
                 }
             }
