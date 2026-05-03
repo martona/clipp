@@ -24,19 +24,10 @@ static std::array<unsigned char, 32> g_lastSentQueryID{};
 
 // TODO
 
-// respond to "query" verb with a "response" verb, echoing back the queryID but not the nonce
-// this is a unicast send, not a multicast
-// 
-// validate queryID in the response matches the queryID in the query, and ignore if not
-// 
-
 // build a host_registry object that tracks hostName, hostID, lastSeen, and IP
 
 // host-to-host communication: upon discovery, the host with the lexicographically smaller hostID
 // performs a tcp connect
-
-// implement PSK management (via cmdline for now): CyptProtectData on windows using the logged-on user's
-// security context (on mac we can do better with the keychain, and cert chain verification)
 
 // implement crypto_secretbox for UDP communication using PSK
 
