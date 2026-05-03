@@ -19,6 +19,7 @@ static std::thread g_mdnsThread;
 static MDNSCallback g_mdnsCallback = nullptr;
 static std::atomic<bool> g_mdnsRunning{ false };
 static SOCKET g_mdnsSock = INVALID_SOCKET;
+static std::array<unsigned char, 32> g_lastSentQueryID{};
 
 // TODO
 
@@ -84,10 +85,22 @@ namespace {
 		wcsncpy_s(packet.selector, _countof(packet.selector), kProtocolSelector, _TRUNCATE);
 		wcsncpy_s(packet.hostName, _countof(packet.hostName), hostName.c_str(), _TRUNCATE);
 		wcsncpy_s(packet.verb, _countof(packet.verb), L"query", _TRUNCATE);
+		std::memcpy(g_lastSentQueryID.data(), packet.queryID, sizeof(packet.queryID));
         return packet;
     }
 
-    bool ParseDiscoveryPacket(const char* packet, int packetLen, std::wstring& hostName, std::wstring& verb, std::wstring& queryID, std::wstring& nonce) {
+    mdns_packet BuildResponsePacket(const std::wstring& hostName, const unsigned char* queryID) {
+        mdns_packet packet;
+        packet.version = kProtocolVersion;
+        randombytes_buf(packet.nonce, sizeof(packet.nonce));
+        wcsncpy_s(packet.selector, _countof(packet.selector), kProtocolSelector, _TRUNCATE);
+        wcsncpy_s(packet.hostName, _countof(packet.hostName), hostName.c_str(), _TRUNCATE);
+        wcsncpy_s(packet.verb, _countof(packet.verb), L"response", _TRUNCATE);
+        std::memcpy(packet.queryID, queryID, sizeof(packet.queryID));
+        return packet;
+    }
+
+    bool ParseDiscoveryPacket(const char* packet, int packetLen, std::wstring& hostName, std::wstring& verb, std::wstring& queryID, std::wstring& nonce, const unsigned char** rawQueryID) {
         if (!packet || packetLen < sizeof(mdns_packet))
             return false;
 		mdns_packet* pkt = reinterpret_cast<mdns_packet*>(const_cast<char*>(packet));
@@ -106,6 +119,11 @@ namespace {
 		pkt->verb[_countof(pkt->verb) - 1] = 0;
         hostName = pkt->hostName;
         verb = pkt->verb;
+        if (rawQueryID)
+            *rawQueryID = pkt->queryID;
+
+        if (verb == L"response" && std::memcmp(pkt->queryID, g_lastSentQueryID.data(), sizeof(pkt->queryID)) != 0)
+            return false;
 
         // Convert queryID and nonce to hex wstring
         std::wostringstream ossQueryID, ossNonce;
@@ -211,7 +229,21 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
                 continue;
 
             std::wstring discoveredHost, verb, discoveredQueryID, discoveredNonce;
-            if (ParseDiscoveryPacket(recvBuffer.data(), bytesRead, discoveredHost, verb, discoveredQueryID, discoveredNonce) && g_mdnsCallback) {
+            const unsigned char* rawQueryID = nullptr;
+            if (!ParseDiscoveryPacket(recvBuffer.data(), bytesRead, discoveredHost, verb, discoveredQueryID, discoveredNonce, &rawQueryID))
+                continue;
+
+            if (verb == L"query" && rawQueryID != nullptr) {
+                SOCKET responseSock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+                if (responseSock != INVALID_SOCKET) {
+                    mdns_packet responsePacket = BuildResponsePacket(localHostName, rawQueryID);
+                    sendto(responseSock, reinterpret_cast<char*>(&responsePacket), sizeof(responsePacket), 0,
+                        reinterpret_cast<const sockaddr*>(&fromAddr), sizeof(fromAddr));
+                    closesocket(responseSock);
+                }
+            }
+
+            if (g_mdnsCallback) {
                 char senderIp[INET_ADDRSTRLEN] = {0};
                 inet_ntop(AF_INET, &fromAddr.sin_addr, senderIp, sizeof(senderIp));
 				std::wstring senderIpW(senderIp, senderIp + strlen(senderIp));
