@@ -7,3 +7,7 @@ std::string Settings::multicastIp() {
 int Settings::mdnsPort() {
     return 15353;
 }
+
+int Settings::tcpPort() {
+    return 15353;
+}

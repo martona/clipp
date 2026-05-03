@@ -46,10 +46,10 @@ struct mdns_packet {
 		ZeroMemory(this, sizeof(*this));
     }
 	wchar_t selector[16];
-	int     version;
+	u_short version;
 	wchar_t hostName[256];
 	unsigned char hostID[32];
-	unsigned int  port;
+	u_short port;
 	wchar_t verb[16];
 	unsigned char queryID[32];
 	unsigned char nonce[32];
@@ -114,7 +114,7 @@ namespace {
 
     mdns_packet BuildDiscoveryPacket(const std::wstring& hostName) {
 		mdns_packet packet;
-		packet.version = kProtocolVersion;
+		packet.version = htons(kProtocolVersion);
 		randombytes_buf(packet.queryID, sizeof(packet.queryID));
 		randombytes_buf(packet.nonce, sizeof(packet.nonce));
 		wcsncpy_s(packet.selector, _countof(packet.selector), kProtocolSelector, _TRUNCATE);
@@ -126,45 +126,44 @@ namespace {
 
     mdns_packet BuildResponsePacket(const std::wstring& hostName, const unsigned char* queryID) {
         mdns_packet packet;
-        packet.version = kProtocolVersion;
+        packet.version = htons(kProtocolVersion);
         randombytes_buf(packet.nonce, sizeof(packet.nonce));
         wcsncpy_s(packet.selector, _countof(packet.selector), kProtocolSelector, _TRUNCATE);
         wcsncpy_s(packet.hostName, _countof(packet.hostName), hostName.c_str(), _TRUNCATE);
         wcsncpy_s(packet.verb, _countof(packet.verb), L"response", _TRUNCATE);
+		packet.port = htons(static_cast<u_short>(Settings::tcpPort()));
         std::memcpy(packet.queryID, queryID, sizeof(packet.queryID));
         return packet;
     }
 
-    bool ParseDiscoveryPacket(const mdns_packet& packet, std::wstring& hostName, std::wstring& verb, std::wstring& queryID, std::wstring& nonce, const unsigned char** rawQueryID) {
-        const mdns_packet* pkt = &packet;
-        if (!pkt)
-            return false;
-
+    bool ParseDiscoveryPacket(mdns_packet& pkt, std::wstring& hostName, std::wstring& verb, std::wstring& queryID, std::wstring& nonce, unsigned short& hostPort, const unsigned char** rawQueryID) {
         // Validate selector
-        if (wcsncmp(pkt->selector, kProtocolSelector, _countof(pkt->selector)) != 0)
+        if (wcsncmp(pkt.selector, kProtocolSelector, _countof(pkt.selector)) != 0)
             return false;
         // Validate version
-        if (pkt->version != kProtocolVersion)
+        if (pkt.version != htons(kProtocolVersion))
             return false;
         // Validate hostName and verb are not empty
-        if (pkt->hostName[0] == 0 || pkt->verb[0] == 0)
+        if (pkt.hostName[0] == 0 || pkt.verb[0] == 0)
             return false;
 		// Force null-termination of hostName and verb
-		pkt->hostName[_countof(pkt->hostName) - 1] = 0;
-		pkt->verb[_countof(pkt->verb) - 1] = 0;
-        hostName = pkt->hostName;
-        verb = pkt->verb;
+		pkt.hostName[_countof(pkt.hostName) - 1] = 0;
+		pkt.verb[_countof(pkt.verb) - 1] = 0;
+        hostName = pkt.hostName;
+        verb = pkt.verb;
         if (rawQueryID)
-            *rawQueryID = pkt->queryID;
+            *rawQueryID = pkt.queryID;
 
-        if (verb == L"response" && std::memcmp(pkt->queryID, g_lastSentQueryID.data(), sizeof(pkt->queryID)) != 0)
+        if (verb == L"response" && std::memcmp(pkt.queryID, g_lastSentQueryID.data(), sizeof(pkt.queryID)) != 0)
             return false;
+
+		hostPort = ntohs(pkt.port);
 
         // Convert queryID and nonce to hex wstring
         std::wostringstream ossQueryID, ossNonce;
         for (int i = 0; i < 32; ++i) {
-            ossQueryID << std::hex << std::setw(2) << std::setfill(L'0') << (int)pkt->queryID[i];
-            ossNonce   << std::hex << std::setw(2) << std::setfill(L'0') << (int)pkt->nonce[i];
+            ossQueryID << std::hex << std::setw(2) << std::setfill(L'0') << (int)pkt.queryID[i];
+            ossNonce   << std::hex << std::setw(2) << std::setfill(L'0') << (int)pkt.nonce[i];
         }
         queryID = ossQueryID.str();
         nonce = ossNonce.str();
@@ -252,7 +251,7 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
         FD_SET(sock, &readfds);
 
         timeval tv{};
-        tv.tv_sec = 1;
+        tv.tv_sec = 10;
         tv.tv_usec = 0;
 
         const int ready = select(0, &readfds, nullptr, nullptr, &tv);
@@ -272,8 +271,9 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
                 continue;
 
             std::wstring discoveredHost, verb, discoveredQueryID, discoveredNonce;
+			unsigned short discoveredPort = 0;
             const unsigned char* rawQueryID = nullptr;
-            if (!ParseDiscoveryPacket(decryptedPacket, discoveredHost, verb, discoveredQueryID, discoveredNonce, &rawQueryID))
+            if (!ParseDiscoveryPacket(decryptedPacket, discoveredHost, verb, discoveredQueryID, discoveredNonce, discoveredPort, &rawQueryID))
                 continue;
 
             if (verb == L"query" && rawQueryID != nullptr) {
@@ -293,7 +293,7 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
                 char senderIp[INET_ADDRSTRLEN] = {0};
                 inet_ntop(AF_INET, &fromAddr.sin_addr, senderIp, sizeof(senderIp));
 				std::wstring senderIpW(senderIp, senderIp + strlen(senderIp));
-                g_mdnsCallback(discoveredHost.c_str(), senderIpW.c_str(), discoveredQueryID.c_str(), discoveredNonce.c_str(), verb.c_str());
+                g_mdnsCallback(discoveredHost.c_str(), senderIpW.c_str(), discoveredQueryID.c_str(), discoveredNonce.c_str(), verb.c_str(), discoveredPort);
             }
         }
     }

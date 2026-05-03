@@ -5,4 +5,6 @@ class Settings {
 public:
     static std::string multicastIp();
     static int mdnsPort();
+	static int tcpPort();
+
 };
