@@ -13,8 +13,11 @@ void OnClipboardNotification() {
     std::cout << "Clipboard debounced and processed!" << std::endl;
 }
 
-void OnMDNSNotification(const char* hostName) {
-    std::cout << "mDNS notification received for host: " << hostName << std::endl;
+void OnMDNSNotification(const wchar_t* hostName, const wchar_t* senderIp, const wchar_t* queryID, const wchar_t* nonce) {
+    std::wcout << L"mDNS notification received for host: " << hostName
+               << L" from IP: " << senderIp
+               << L"\n  queryID: " << queryID
+               << L"\n  nonce:   " << nonce << std::endl;
 }
 
 int main() {
@@ -44,9 +47,9 @@ int main() {
         } else {
             std::cerr << "Failed to start mDNS thread!" << std::endl;
         }
-		StopClipboardNotification();
+        StopClipboardNotification();
     } else {
-		std::cerr << "Failed to start clipboard notification thread!" << std::endl;
+        std::cerr << "Failed to start clipboard notification thread!" << std::endl;
     }
     return 0;
 }

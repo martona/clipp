@@ -1,6 +1,6 @@
 #include "MDNSThread.h"
 #include "Settings.h"
-
+#include <sodium.h>
 #include <thread>
 #include <future>
 #include <chrono>
@@ -8,9 +8,10 @@
 #include <string>
 #include <array>
 #include <atomic>
-
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <sstream>
+#include <iomanip>
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -19,61 +20,111 @@ static MDNSCallback g_mdnsCallback = nullptr;
 static std::atomic<bool> g_mdnsRunning{ false };
 static SOCKET g_mdnsSock = INVALID_SOCKET;
 
+// TODO
+
+// respond to "query" verb with a "response" verb, echoing back the queryID but not the nonce
+// this is a unicast send, not a multicast
+// 
+// validate queryID in the response matches the queryID in the query, and ignore if not
+// 
+
+// build a host_registry object that tracks hostName, hostID, lastSeen, and IP
+
+// host-to-host communication: upon discovery, the host with the lexicographically smaller hostID
+// performs a tcp connect
+
+// implement PSK management (via cmdline for now): CyptProtectData on windows using the logged-on user's
+// security context (on mac we can do better with the keychain, and cert chain verification)
+
+// implement crypto_secretbox for UDP communication using PSK
+
+// for tcp communication:
+//   authenticated ephemeral diffie-hellman handshake to establish a shared secret
+//   they swap their ephemeral public keys
+//     wrap the public keys in crypto_secretbox using the PSK
+//     then they communicate using crypto_kx_client_session_keys and crypto_kx_server_session_keys 
+//       (or rather rx and tx keys derived from those but this is in the weeds)
+//     intialize crypto_secretstream using the tx and rx keys
+
+struct mdns_packet {
+    mdns_packet() {
+		ZeroMemory(this, sizeof(*this));
+    }
+	wchar_t selector[16];
+	int     version;
+	wchar_t hostName[256];
+	unsigned char hostID[32];
+	unsigned int  port;
+	wchar_t verb[16];
+	unsigned char queryID[32];
+	unsigned char nonce[32];
+};
+
 namespace {
-constexpr const char* kProtocolSelector = "clipp";
-constexpr int kProtocolVersion = 1;
-constexpr auto kBroadcastInterval = std::chrono::minutes(1);
 
-std::string GetLocalHostName() {
-    char hostName[256] = {};
-    if (gethostname(hostName, sizeof(hostName)) == 0)
-        return hostName;
-    return "unknown";
-}
+    constexpr const wchar_t* kProtocolSelector = L"clipp";
+    constexpr int kProtocolVersion = 1;
+    constexpr auto kBroadcastInterval = std::chrono::minutes(1);
 
-std::string BuildDiscoveryPacket(const std::string& hostName) {
-    // Format: selector|version|hostname
-    return std::string(kProtocolSelector) + "|" + std::to_string(kProtocolVersion) + "|" + hostName;
-}
-
-bool ParseDiscoveryPacket(const char* packet, int packetLen, std::string& hostName) {
-    if (!packet || packetLen <= 0)
-        return false;
-
-    std::string payload(packet, packet + packetLen);
-    const size_t firstSep = payload.find('|');
-    const size_t secondSep = payload.find('|', firstSep == std::string::npos ? 0 : firstSep + 1);
-    if (firstSep == std::string::npos || secondSep == std::string::npos)
-        return false;
-
-    const std::string selector = payload.substr(0, firstSep);
-    const std::string versionStr = payload.substr(firstSep + 1, secondSep - firstSep - 1);
-    const std::string parsedHost = payload.substr(secondSep + 1);
-
-    if (selector != kProtocolSelector)
-        return false;
-
-    int version = 0;
-    try {
-        version = std::stoi(versionStr);
-    }
-    catch (...) {
-        return false;
+    std::wstring GetLocalHostName() {
+        char hostName[256] = {};
+		wchar_t wideHostName[256] = {};
+        if (gethostname(hostName, sizeof(hostName)) == 0) {
+			mbstowcs_s(nullptr, wideHostName, sizeof(wideHostName) / sizeof(wchar_t), hostName, sizeof(hostName));
+            return wideHostName;
+        }
+        return L"unknown";
     }
 
-    if (version != kProtocolVersion || parsedHost.empty())
-        return false;
+    mdns_packet BuildDiscoveryPacket(const std::wstring& hostName) {
+		mdns_packet packet;
+		packet.version = kProtocolVersion;
+		randombytes_buf(packet.queryID, sizeof(packet.queryID));
+		randombytes_buf(packet.nonce, sizeof(packet.nonce));
+		wcsncpy_s(packet.selector, _countof(packet.selector), kProtocolSelector, _TRUNCATE);
+		wcsncpy_s(packet.hostName, _countof(packet.hostName), hostName.c_str(), _TRUNCATE);
+		wcsncpy_s(packet.verb, _countof(packet.verb), L"query", _TRUNCATE);
+        return packet;
+    }
 
-    hostName = parsedHost;
-    return true;
-}
+    bool ParseDiscoveryPacket(const char* packet, int packetLen, std::wstring& hostName, std::wstring& verb, std::wstring& queryID, std::wstring& nonce) {
+        if (!packet || packetLen < sizeof(mdns_packet))
+            return false;
+		mdns_packet* pkt = reinterpret_cast<mdns_packet*>(const_cast<char*>(packet));
 
-bool SendDiscoveryPacket(SOCKET sock, const sockaddr_in& targetAddr, const std::string& hostName) {
-    const std::string packet = BuildDiscoveryPacket(hostName);
-    const int sent = sendto(sock, packet.c_str(), static_cast<int>(packet.size()), 0,
-        reinterpret_cast<const sockaddr*>(&targetAddr), sizeof(targetAddr));
-    return sent == static_cast<int>(packet.size());
-}
+        // Validate selector
+        if (wcsncmp(pkt->selector, kProtocolSelector, _countof(pkt->selector)) != 0)
+            return false;
+        // Validate version
+        if (pkt->version != kProtocolVersion)
+            return false;
+        // Validate hostName and verb are not empty
+        if (pkt->hostName[0] == 0 || pkt->verb[0] == 0)
+            return false;
+		// Force null-termination of hostName and verb
+		pkt->hostName[_countof(pkt->hostName) - 1] = 0;
+		pkt->verb[_countof(pkt->verb) - 1] = 0;
+        hostName = pkt->hostName;
+        verb = pkt->verb;
+
+        // Convert queryID and nonce to hex wstring
+        std::wostringstream ossQueryID, ossNonce;
+        for (int i = 0; i < 32; ++i) {
+            ossQueryID << std::hex << std::setw(2) << std::setfill(L'0') << (int)pkt->queryID[i];
+            ossNonce   << std::hex << std::setw(2) << std::setfill(L'0') << (int)pkt->nonce[i];
+        }
+        queryID = ossQueryID.str();
+        nonce = ossNonce.str();
+        return true;
+    }
+
+    bool SendDiscoveryPacket(SOCKET sock, const sockaddr_in& targetAddr, const std::wstring& hostName) {
+        mdns_packet pkt = BuildDiscoveryPacket(hostName);
+        int sent = sendto(sock, (char*)&pkt, sizeof(pkt), 0,
+            reinterpret_cast<const sockaddr*>(&targetAddr), sizeof(targetAddr));
+        return sent == sizeof(pkt);
+    }
+
 } // namespace
 
 static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback) {
@@ -85,9 +136,14 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
         return;
     }
 
-    const int port = Settings::mdnsPort();
-    const std::string multicastIp = Settings::multicastIp();
-    const std::string localHostName = GetLocalHostName();
+	in_addr multicastAddrn = {};
+    if (1 != inet_pton(AF_INET, Settings::multicastIp().c_str(), &multicastAddrn)) {
+        WSACleanup();
+        initPromise.set_value(false);
+		return;
+    }
+
+    const std::wstring localHostName = GetLocalHostName();
 
     SOCKET sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sock == INVALID_SOCKET) {
@@ -101,7 +157,7 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
 
     sockaddr_in bindAddr{};
     bindAddr.sin_family = AF_INET;
-    bindAddr.sin_port = htons(static_cast<u_short>(port));
+    bindAddr.sin_port = htons(static_cast<u_short>(Settings::mdnsPort()));
     bindAddr.sin_addr.s_addr = htonl(INADDR_ANY);
     if (bind(sock, reinterpret_cast<const sockaddr*>(&bindAddr), sizeof(bindAddr)) == SOCKET_ERROR) {
         closesocket(sock);
@@ -111,14 +167,14 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
     }
 
     ip_mreq group{};
-    group.imr_multiaddr.s_addr = inet_addr(multicastIp.c_str());
+    group.imr_multiaddr.s_addr = multicastAddrn.S_un.S_addr;
     group.imr_interface.s_addr = htonl(INADDR_ANY);
     setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, reinterpret_cast<const char*>(&group), sizeof(group));
 
     sockaddr_in multicastAddr{};
     multicastAddr.sin_family = AF_INET;
-    multicastAddr.sin_port = htons(static_cast<u_short>(port));
-    multicastAddr.sin_addr.s_addr = inet_addr(multicastIp.c_str());
+    multicastAddr.sin_port = htons(static_cast<u_short>(Settings::mdnsPort()));
+    multicastAddr.sin_addr.s_addr = multicastAddrn.S_un.S_addr;
 
     g_mdnsSock = sock;
     g_mdnsRunning = true;
@@ -154,9 +210,13 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
             if (bytesRead <= 0)
                 continue;
 
-            std::string discoveredHost;
-            if (ParseDiscoveryPacket(recvBuffer.data(), bytesRead, discoveredHost) && g_mdnsCallback)
-                g_mdnsCallback(discoveredHost.c_str());
+            std::wstring discoveredHost, verb, discoveredQueryID, discoveredNonce;
+            if (ParseDiscoveryPacket(recvBuffer.data(), bytesRead, discoveredHost, verb, discoveredQueryID, discoveredNonce) && g_mdnsCallback) {
+                char senderIp[INET_ADDRSTRLEN] = {0};
+                inet_ntop(AF_INET, &fromAddr.sin_addr, senderIp, sizeof(senderIp));
+				std::wstring senderIpW(senderIp, senderIp + strlen(senderIp));
+                g_mdnsCallback(discoveredHost.c_str(), senderIpW.c_str(), discoveredQueryID.c_str(), discoveredNonce.c_str());
+            }
         }
     }
 
