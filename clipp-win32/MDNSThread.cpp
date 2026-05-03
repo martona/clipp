@@ -6,6 +6,8 @@
 #include <mdns.h>
 #include <iostream>
 
+#pragma comment(lib, "ws2_32.lib")
+
 static std::thread g_mdnsThread;
 static MDNSCallback g_mdnsCallback = nullptr;
 static int g_mdnsSock = -1;
