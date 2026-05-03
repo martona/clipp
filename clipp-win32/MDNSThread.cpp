@@ -14,6 +14,7 @@
 #include <iomanip>
 
 #pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "Crypt32.lib")
 
 static std::thread g_mdnsThread;
 static MDNSCallback g_mdnsCallback = nullptr;
