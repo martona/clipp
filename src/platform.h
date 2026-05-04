@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstring>
+#include <algorithm>
+
 #ifdef _WIN32
     #define WIN32_LEAN_AND_MEAN 
     #define NOMINMAX
@@ -7,8 +10,6 @@
 #elif defined(__APPLE__)
     #include <TargetConditionals.h>
     #include <cstddef>
-    #include <cstring>
-    #include <algorithm>
     #if TARGET_OS_MAC
         // macOS-specific headers will go here eventually
         // e.g., #include <ApplicationServices/ApplicationServices.h>
@@ -43,17 +44,16 @@
         //TODO
         return 0;
     }
-
-    static inline void strncpys(char* dst, const char* src, size_t maxlen) {
-        if (!dst || !src || maxlen == 0) return;
-	size_t copyLen = std::min(std::strlen(src), maxlen - 1);
-        std::memcpy(dst, src, copyLen);
-        dst[copyLen] = '\0';
-    }
-
-    template <size_t N>
-    static inline void strncpys(char (&dst)[N], const char* src) {
-        strncpys(dst, src, N);
-    }
-
 #endif
+
+static inline void strncpys(char* dst, const char* src, size_t maxlen) {
+    if (!dst || !src || maxlen == 0) return;
+    size_t copyLen = (std::min)(std::strlen(src), maxlen - 1);
+    std::memcpy(dst, src, copyLen);
+    dst[copyLen] = '\0';
+}
+
+template <size_t N>
+static inline void strncpys(char(&dst)[N], const char* src) {
+    strncpys(dst, src, N);
+}

@@ -2,7 +2,11 @@
 #include <cstring>
 #include <sodium.h>
 #include "Settings.h"
+#ifdef _WIN32
 #include "platform_win32_Settings.h"
+#else
+#include "platform_posix_Settings.h"
+#endif
 
 namespace {
     constexpr wchar_t kMulticastIpName[] = L"MulticastIp";
