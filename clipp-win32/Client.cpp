@@ -1,6 +1,8 @@
 #include "Logger.h"
 #include "Client.h"
 
+#include "platform.h"
+
 #include <iostream>
 #include <cwchar>
 #include <chrono>
@@ -90,10 +92,10 @@ void Client::ThreadProc() {
         {
             std::lock_guard<std::mutex> lock(remoteInfoMutex_);
             remoteHostID_ = remoteHostId;
-            int remoteHostNameWLen = MultiByteToWideChar(CP_UTF8, 0, remoteHostNameUtf8.c_str(), -1, nullptr, 0);
+            size_t remoteHostNameWLen = utf8_to_utf16(remoteHostNameUtf8.c_str(), remoteHostNameUtf8.size(), nullptr, 0);
             std::wstring remoteHostName(remoteHostNameWLen > 0 ? remoteHostNameWLen - 1 : 0, L'\0');
             if (remoteHostNameWLen > 1) {
-                MultiByteToWideChar(CP_UTF8, 0, remoteHostNameUtf8.c_str(), -1, remoteHostName.data(), remoteHostNameWLen);
+                utf8_to_utf16(remoteHostNameUtf8.c_str(), remoteHostNameUtf8.size(), remoteHostName.data(), remoteHostNameWLen);
             }
             remoteHostName_ = remoteHostName;
         }

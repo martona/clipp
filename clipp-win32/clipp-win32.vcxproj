@@ -130,13 +130,12 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="ClipboardNotificationThread.cpp" />
     <ClCompile Include="Listener.cpp" />
     <ClCompile Include="ClientManager.cpp" />
     <ClCompile Include="Client.cpp" />
     <ClCompile Include="CryptoChannel.cpp" />
-    <ClCompile Include="ClipboardNotificationWindow.cpp" />
-    <ClCompile Include="clipp-win32.cpp" />
+    <ClCompile Include="platform_win32_Clipboard.cpp" />
+    <ClCompile Include="clipp.cpp" />
     <ClCompile Include="MDNSThread.cpp" />
     <ClCompile Include="KeyManager.cpp" />
     <ClCompile Include="Logger.cpp" />
@@ -146,19 +145,20 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="BlockingQueue.h" />
-    <ClInclude Include="ClipboardNotificationThread.h" />
     <ClInclude Include="ClipboardData.h" />
     <ClInclude Include="Listener.h" />
     <ClInclude Include="ClientManager.h" />
     <ClInclude Include="Client.h" />
     <ClInclude Include="CryptoChannel.h" />
-    <ClInclude Include="ClipboardNotificationWindow.h" />
+    <ClInclude Include="platform.h" />
+    <ClInclude Include="platform_win32_Clipboard.h" />
     <ClInclude Include="MDNSThread.h" />
     <ClInclude Include="KeyManager.h" />
     <ClInclude Include="Logger.h" />
     <ClInclude Include="NetworkDefs.h" />
     <ClInclude Include="Peer.h" />
     <ClInclude Include="PeerManager.h" />
+    <ClInclude Include="platform_win32_Settings.h" />
     <ClInclude Include="Settings.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

@@ -1,4 +1,4 @@
-// clipp-win32.cpp : This file contains the 'main' function. Program execution begins and ends there.
+// clipp.cpp : This file contains the 'main' function. Program execution begins and ends there.
 //
 
 #include <conio.h>
@@ -7,10 +7,10 @@
 #include <sodium.h>
 #include <mdns.h>
 
-#include <windows.h>
+#include "platform.h"
 
 #include "Logger.h"
-#include "ClipboardNotificationThread.h"
+#include "platform_win32_Clipboard.h"
 #include "KeyManager.h"
 #include "MDNSThread.h"
 #include "Listener.h"
@@ -41,7 +41,7 @@ static std::string ReadHiddenLine(const std::string& prompt) {
     return input;
 }
 
-void OnClipboardNotification(HWND hwnd) {
+void OnClipboardNotification(PlatformWindowHandle hwnd) {
     g_logger.log(__FUNCTION__, Logger::Level::Info, "Clipboard notification received");
     auto clipboardData = ReadClipboardData(hwnd);
     if (clipboardData.formatId == 0) {
@@ -74,10 +74,10 @@ void OnMDNSNotification(const char* hostNameUtf8,
         hostNameUtf8, hostID, senderIp, port, verb, queryID, nonce);
 
     if (std::string(verb) == "response" && rawHostID != nullptr) {
-        int hostNameWLen = MultiByteToWideChar(CP_UTF8, 0, hostNameUtf8, -1, nullptr, 0);
+        size_t hostNameWLen = utf8_to_utf16(hostNameUtf8, strlen(hostNameUtf8), nullptr, 0);
         std::wstring hostNameW(hostNameWLen > 0 ? hostNameWLen - 1 : 0, L'\0');
         if (hostNameWLen > 1) {
-            MultiByteToWideChar(CP_UTF8, 0, hostNameUtf8, -1, hostNameW.data(), hostNameWLen);
+            utf8_to_utf16(hostNameUtf8, strlen(hostNameUtf8), hostNameW.data(), hostNameWLen);
         }
         g_peerManager.AddPeer(hostNameW.c_str(), rawHostID, senderIp, port);
     }

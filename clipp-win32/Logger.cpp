@@ -1,6 +1,6 @@
 #include "Logger.h"
 
-#include <Windows.h>
+#include "platform.h"
 
 #include <chrono>
 #include <cstdarg>
@@ -93,16 +93,12 @@ const wchar_t* Logger::LevelToString(Level level) {
 }
 
 std::wstring Logger::Utf8ToWide(const std::string& value) {
-    if (value.empty()) {
-        return L"";
-    }
+    if (value.empty()) return L"";
 
-    int size = MultiByteToWideChar(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), nullptr, 0);
-    if (size <= 0) {
-        return L"";
-    }
+	size_t size = utf8_to_utf16(value.c_str(), value.size(), nullptr, 0);
+    if (size == 0) return L"";
 
     std::wstring wide(static_cast<size_t>(size), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), wide.data(), size);
+	utf8_to_utf16(value.c_str(), value.size(), wide.data(), size);
     return wide;
 }

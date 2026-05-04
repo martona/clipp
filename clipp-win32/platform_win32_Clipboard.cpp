@@ -1,5 +1,5 @@
-#include "ClipboardNotificationThread.h"
-#include "ClipboardNotificationWindow.h"
+#include "platform_win32_clipboard.h"
+#include <windows.h>
 #include <thread>
 #include <future>
 #include <cstring>
@@ -10,6 +10,53 @@ static std::thread g_clipboardThread;
 static HWND g_hwnd = nullptr;
 static std::mutex g_hashMutex;
 static XXH128_hash_t g_lastClipboardHash{ 0, 0 };
+
+#define CLIPBOARD_DEBOUNCE_TIMER_ID 1
+#define CLIPBOARD_DEBOUNCE_INTERVAL_MS 250
+
+static ClipboardCallback g_clipboardCallback = nullptr;
+
+LRESULT CALLBACK ClipboardWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+    case WM_CREATE:
+        // Register for clipboard update notifications
+        AddClipboardFormatListener(hwnd);
+        return 0;
+    case WM_DESTROY:
+        RemoveClipboardFormatListener(hwnd);
+        PostQuitMessage(0);
+        return 0;
+    case WM_CLIPBOARDUPDATE:
+        // Debounce: set (or reset) a one-shot timer for clipboard processing
+        SetTimer(hwnd, CLIPBOARD_DEBOUNCE_TIMER_ID, CLIPBOARD_DEBOUNCE_INTERVAL_MS, NULL);
+        return 0;
+    case WM_TIMER:
+        if (wParam == CLIPBOARD_DEBOUNCE_TIMER_ID) {
+            KillTimer(hwnd, CLIPBOARD_DEBOUNCE_TIMER_ID);
+            if (g_clipboardCallback) g_clipboardCallback(hwnd);
+        }
+        return 0;
+    default:
+        return DefWindowProc(hwnd, msg, wParam, lParam);
+    }
+}
+
+HWND CreateClipboardNotificationWindow(ClipboardCallback cb) {
+    g_clipboardCallback = cb;
+    const wchar_t CLASS_NAME[] = L"ClipboardNotificationWindow";
+    WNDCLASS wc = {};
+    wc.lpfnWndProc = ClipboardWndProc;
+    wc.hInstance = GetModuleHandle(NULL);
+    wc.lpszClassName = CLASS_NAME;
+    RegisterClass(&wc);
+    HWND hwnd = CreateWindowEx(
+        0, CLASS_NAME, L"", WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+        NULL, NULL, GetModuleHandle(NULL), NULL);
+    // Hide the window
+    ShowWindow(hwnd, SW_HIDE);
+    return hwnd;
+}
 
 static void ClipboardThreadProc(std::promise<bool> initPromise, ClipboardCallback callback) {
     g_hwnd = CreateClipboardNotificationWindow(callback);
@@ -84,9 +131,10 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
                         GlobalUnlock(hData);
                     }
                 }
-            } else {
+            }
+            else {
                 g_logger.log(__FUNCTION__, Logger::Level::Info, L"No supported clipboard format available");
-			}
+            }
             CloseClipboard();
             break;
         }
@@ -105,7 +153,7 @@ void SetClipboardData(const ClipboardPayload& payload) {
             g_logger.log(__FUNCTION__, Logger::Level::Info, L"Clipboard hash match, not setting clipboard data");
             return;
         }
-	}
+    }
     for (int i = 0; i < 5; ++i) {
         if (OpenClipboard(g_hwnd)) {
             if (!EmptyClipboard()) {
@@ -128,20 +176,24 @@ void SetClipboardData(const ClipboardPayload& payload) {
                                 GlobalUnlock(hMem);
                                 if (!::SetClipboardData(CF_UNICODETEXT, hMem)) {
                                     GlobalFree(hMem);
-                                } else {
+                                }
+                                else {
                                     std::lock_guard<std::mutex> lock(g_hashMutex);
                                     g_lastClipboardHash = newHash;
                                 }
-                            } else {
+                            }
+                            else {
                                 GlobalUnlock(hMem);
                                 GlobalFree(hMem);
                             }
-                        } else {
+                        }
+                        else {
                             GlobalFree(hMem);
                         }
                     }
                 }
-            } else if (payload.formatId == CF_DIB) {
+            }
+            else if (payload.formatId == CF_DIB) {
                 const size_t bytes = payload.rawData.size();
                 HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, bytes);
                 if (hMem) {
@@ -151,11 +203,13 @@ void SetClipboardData(const ClipboardPayload& payload) {
                         GlobalUnlock(hMem);
                         if (!::SetClipboardData(CF_DIB, hMem)) {
                             GlobalFree(hMem);
-                        } else {
-                            std::lock_guard<std::mutex> lock(g_hashMutex);
-							g_lastClipboardHash = newHash;
                         }
-                    } else {
+                        else {
+                            std::lock_guard<std::mutex> lock(g_hashMutex);
+                            g_lastClipboardHash = newHash;
+                        }
+                    }
+                    else {
                         GlobalFree(hMem);
                     }
                 }

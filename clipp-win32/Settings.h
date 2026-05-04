@@ -31,9 +31,9 @@ public:
 private:
     bool LoadCache();
     static bool ReadStringValue(const wchar_t* valueName, std::string& outValue);
-    static bool ReadDwordValue(const wchar_t* valueName, int& outValue);
+    static bool ReadUint32Value(const wchar_t* valueName, int& outValue);
     static bool WriteStringValue(const wchar_t* valueName, const std::string& value);
-    static bool WriteDwordValue(const wchar_t* valueName, int value);
+    static bool WriteUint32Value(const wchar_t* valueName, int value);
     static bool WriteBinaryValue(const wchar_t* valueName, const unsigned char* data, size_t len);
     static bool ReadBinaryValue(const wchar_t* valueName, std::vector<unsigned char>& outValue);
 
