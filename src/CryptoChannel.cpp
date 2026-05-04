@@ -3,6 +3,7 @@
 #include <vector>
 #include <cstring>
 
+#include "platform.h"
 #include "Settings.h"
 #include "KeyManager.h"
 
@@ -67,7 +68,7 @@ bool CryptoChannel::ClientHandshake(SOCKET socket,
     HandshakePlaintext plain{};
     std::memcpy(plain.ephemeralPk, clientPk, crypto_kx_PUBLICKEYBYTES);
     std::memcpy(plain.hostId, localHostId.data(), HostIdSize);
-    strncpy_s(plain.hostNameUTF8, localHostNameUtf8.c_str(), _TRUNCATE);
+    strncpys(plain.hostNameUTF8, localHostNameUtf8.c_str());
 
     HandshakeFrame tx{}; randombytes_buf(tx.nonce, sizeof(tx.nonce));
     crypto_secretbox_easy(tx.ciphertext, reinterpret_cast<const unsigned char*>(&plain), sizeof(plain), tx.nonce, networkKey.data());
@@ -122,7 +123,7 @@ bool CryptoChannel::ServerHandshake(SOCKET socket,
     HandshakePlaintext plain{};
     std::memcpy(plain.ephemeralPk, serverPk, crypto_kx_PUBLICKEYBYTES);
     std::memcpy(plain.hostId, localHostId.data(), HostIdSize);
-    strncpy_s(plain.hostNameUTF8, localHostNameUtf8, _TRUNCATE);
+    strncpys(plain.hostNameUTF8, localHostNameUtf8);
     HandshakeFrame tx{}; randombytes_buf(tx.nonce, sizeof(tx.nonce));
     crypto_secretbox_easy(tx.ciphertext, reinterpret_cast<const unsigned char*>(&plain), sizeof(plain), tx.nonce, networkKey.data());
     if (!SendAll(socket, reinterpret_cast<const char*>(&tx), sizeof(tx))) return false;

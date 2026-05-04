@@ -3,9 +3,23 @@
 #include <array>
 #include <cstdint>
 #include <string>
-#include <winsock2.h>
 #include <sodium.h>
 #include <vector>
+#ifdef _WIN32
+    #define WIN32_LEAN_AND_MEAN
+    #include <winsock2.h>
+#else
+    #include <sys/socket.h>
+    #include <arpa/inet.h>
+    #include <netinet/in.h>
+    #include <netdb.h>
+    #include <unistd.h>
+    #include <cerrno>
+    using SOCKET=int;
+    const int INVALID_SOCKET = -1;
+    const int SOCKET_ERROR = -1;
+    static inline void closesocket(SOCKET s) { close(s); }
+#endif
 
 class CryptoChannel {
 public:
