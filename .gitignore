@@ -82,3 +82,14 @@ ipch/
 
 # vcpkg local cache and installed binaries
 vcpkg_installed/
+
+# Xcode specific files
+DerivedData/
+.build/
+*.xcworkspace/
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+# macOS Finder metadata
+.DS_Store
