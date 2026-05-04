@@ -93,3 +93,13 @@ xcuserdata/
 
 # macOS Finder metadata
 .DS_Store
+
+# CMake / Out-of-source builds
+build/
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
