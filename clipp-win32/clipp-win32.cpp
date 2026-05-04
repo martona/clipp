@@ -20,8 +20,9 @@
 Settings g_settings;
 PeerManager g_peerManager;
 
+KeyManager g_keyManager(g_settings);
+
 namespace {
-    KeyManager g_keyManager(g_settings);
     Listener g_listener;
 }
 

@@ -25,16 +25,6 @@ static std::array<unsigned char, 32> g_lastSentQueryID{};
 static std::array<unsigned char, 32> g_hostID{};
 static KeyManager g_keyManager(g_settings);
 
-// TODO
-
-// for tcp communication:
-//   authenticated ephemeral diffie-hellman handshake to establish a shared secret
-//   they swap their ephemeral public keys
-//     wrap the public keys in crypto_secretbox using the PSK
-//     then they communicate using crypto_kx_client_session_keys and crypto_kx_server_session_keys 
-//       (or rather rx and tx keys derived from those but this is in the weeds)
-//     intialize crypto_secretstream using the tx and rx keys
-
 struct mdns_packet {
     mdns_packet() {
 		ZeroMemory(this, sizeof(*this));

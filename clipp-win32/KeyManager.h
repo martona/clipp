@@ -20,3 +20,5 @@ private:
     bool cacheValid_ = false;
     std::array<unsigned char, NetworkKeySize> cachedNetworkKey_{};
 };
+
+extern KeyManager g_keyManager;

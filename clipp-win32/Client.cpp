@@ -7,6 +7,8 @@
 #include <cstring>
 #include <ws2tcpip.h>
 
+#include "CryptoChannel.h"
+
 namespace {
 #pragma pack(push, 1)
 struct ClientHello {
@@ -89,34 +91,28 @@ bool Client::SendAll(SOCKET sock, const char* buffer, int length) {
 }
 
 void Client::ThreadProc() {
-    ClientHello hello{};
-    if (!RecvAll(socket_, reinterpret_cast<char*>(&hello), sizeof(hello))) {
-        g_logger.log(__FUNCTION__, Logger::Level::Error, L"Client handshake read failed.");
-    } else if (std::wcsncmp(hello.selector, kSelector, std::wcslen(kSelector)) != 0 || ntohs(hello.version) != kVersion) {
-        g_logger.log(__FUNCTION__, Logger::Level::Error, L"Client handshake validation failed.");
+    CryptoChannel channel;
+    std::array<unsigned char, 32> remoteHostId{};
+    std::wstring remoteHostName;
+    if (!channel.ServerHandshake(socket_, remoteHostId, remoteHostName)) {
+        g_logger.log(__FUNCTION__, Logger::Level::Error, L"Client secure handshake failed.");
     } else {
         {
             std::lock_guard<std::mutex> lock(remoteInfoMutex_);
-            std::memcpy(remoteHostID_.data(), hello.hostID, sizeof(hello.hostID));
-            hello.hostName[_countof(hello.hostName) - 1] = L'\0';
-            remoteHostName_ = hello.hostName;
+            remoteHostID_ = remoteHostId;
+            remoteHostName_ = remoteHostName;
         }
-        std::wstring remoteHostNameCopy;
-        {
-            std::lock_guard<std::mutex> lock(remoteInfoMutex_);
-            remoteHostNameCopy = remoteHostName_;
-        }
-        g_logger.log(__FUNCTION__, Logger::Level::Info, L"Client connected: %ls", remoteHostNameCopy.c_str());
+        g_logger.log(__FUNCTION__, Logger::Level::Info, L"Client connected: %ls", remoteHostName.c_str());
 
         char packet[4] = {};
         while (!stopRequested_.load()) {
-            if (!RecvAll(socket_, packet, sizeof(packet))) {
+            if (!channel.RecvTaggedMessage(socket_, packet)) {
                 break;
             }
 
             if (std::memcmp(packet, "PING", 4) == 0) {
                 g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Client: PING");
-                if (!SendAll(socket_, "PONG", 4)) {
+                if (!channel.SendTaggedMessage(socket_, "PONG")) {
                     break;
                 }
             }
@@ -124,4 +120,5 @@ void Client::ThreadProc() {
     }
 
     running_.store(false);
+
 }

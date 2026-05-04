@@ -9,6 +9,7 @@
 #include <ws2tcpip.h>
 
 #include "Settings.h"
+#include "CryptoChannel.h"
 
 namespace {
 #pragma pack(push, 1)
@@ -149,31 +150,9 @@ bool Peer::ConnectSocket() {
 }
 
 bool Peer::SendHello() {
-	ClientHello hello{};
-	wcsncpy_s(hello.selector, _countof(hello.selector), kSelector, _TRUNCATE);
-	hello.version = htons(kVersion);
-
-	std::array<unsigned char, 32> localHostId{};
-	if (!g_settings.getHostID(localHostId)) {
-		g_logger.log(__FUNCTION__, Logger::Level::Error, L"Peer: failed to read local host ID.");
-		return false;
-	}
-	std::memcpy(hello.hostID, localHostId.data(), localHostId.size());
-
-	char localHostName[256] = {};
-	if (gethostname(localHostName, sizeof(localHostName)) != 0) {
-		g_logger.log(__FUNCTION__, Logger::Level::Error, L"Peer: gethostname failed.");
-		return false;
-	}
-	wchar_t localHostNameW[256] = {};
-	mbstowcs_s(nullptr, localHostNameW, _countof(localHostNameW), localHostName, _TRUNCATE);
-	wcsncpy_s(hello.hostName, _countof(hello.hostName), localHostNameW, _TRUNCATE);
-
-	if (socket_ == INVALID_SOCKET) {
-		return false;
-	}
-	return SendAll(socket_, reinterpret_cast<const char*>(&hello), sizeof(hello));
+	return false;
 }
+
 
 void Peer::ThreadProc() {
 	while (!stopRequested_.load()) {
@@ -182,8 +161,17 @@ void Peer::ThreadProc() {
 			if (!stopRequested_.load()) InterruptibleSleep(std::chrono::milliseconds(5000));
 			continue;
 		}
-		if (!SendHello()) {
-			g_logger.log(__FUNCTION__, Logger::Level::Error, L"Peer: failed sending login handshake.");
+		CryptoChannel channel;
+		std::array<unsigned char, 32> remoteHostId{};
+		std::wstring remoteHostName;
+		std::array<unsigned char, 32> localHostId{};
+		if (!g_settings.getHostID(localHostId)) { CloseSocket(); continue; }
+		char localHostNameA[256] = {};
+		if (gethostname(localHostNameA, sizeof(localHostNameA)) != 0) { CloseSocket(); continue; }
+		wchar_t localHostNameW[256] = {};
+		mbstowcs_s(nullptr, localHostNameW, _countof(localHostNameW), localHostNameA, _TRUNCATE);
+		if (!channel.ClientHandshake(socket_, localHostId, localHostNameW, remoteHostId, remoteHostName)) {
+			g_logger.log(__FUNCTION__, Logger::Level::Error, L"Peer: secure handshake failed.");
 			CloseSocket();
 			if (!stopRequested_.load()) InterruptibleSleep(std::chrono::milliseconds(5000));
 			continue;
@@ -191,19 +179,15 @@ void Peer::ThreadProc() {
 
 		g_logger.log(__FUNCTION__, Logger::Level::Info, L"%p Peer connected and authenticated.", this);
 		while (!stopRequested_.load()) {
-			{
-				if (socket_ == INVALID_SOCKET || !SendAll(socket_, "PING", 4)) {
-					g_logger.log(__FUNCTION__, Logger::Level::Warning, L"%p Peer failed SendAll", this);
-					break;
-				}
+			if (socket_ == INVALID_SOCKET || !channel.SendTaggedMessage(socket_, "PING")) {
+				g_logger.log(__FUNCTION__, Logger::Level::Warning, L"%p Peer failed secure send", this);
+				break;
 			}
 
 			char packet[4] = {};
-			{
-				if (socket_ == INVALID_SOCKET || !RecvAll(socket_, packet, 4)) {
-					g_logger.log(__FUNCTION__, Logger::Level::Warning, L"%p Peer failed RecvAll", this);
-					break;
-				}
+			if (socket_ == INVALID_SOCKET || !channel.RecvTaggedMessage(socket_, packet)) {
+				g_logger.log(__FUNCTION__, Logger::Level::Warning, L"%p Peer failed secure recv", this);
+				break;
 			}
 
 			if (std::memcmp(packet, "PONG", 4) != 0) {

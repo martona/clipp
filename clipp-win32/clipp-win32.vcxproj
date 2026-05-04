@@ -134,6 +134,7 @@
     <ClCompile Include="Listener.cpp" />
     <ClCompile Include="ClientManager.cpp" />
     <ClCompile Include="Client.cpp" />
+    <ClCompile Include="CryptoChannel.cpp" />
     <ClCompile Include="ClipboardNotificationWindow.cpp" />
     <ClCompile Include="clipp-win32.cpp" />
     <ClCompile Include="MDNSThread.cpp" />
@@ -148,6 +149,7 @@
     <ClInclude Include="Listener.h" />
     <ClInclude Include="ClientManager.h" />
     <ClInclude Include="Client.h" />
+    <ClInclude Include="CryptoChannel.h" />
     <ClInclude Include="ClipboardNotificationWindow.h" />
     <ClInclude Include="MDNSThread.h" />
     <ClInclude Include="KeyManager.h" />
