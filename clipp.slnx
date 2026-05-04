@@ -3,5 +3,5 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="clipp-win32/clipp-win32.vcxproj" Id="94411478-addc-4bcc-a902-67c844dcfa4c" />
+  <Project Path="src/clipp-win32.vcxproj" Id="94411478-addc-4bcc-a902-67c844dcfa4c" />
 </Solution>
