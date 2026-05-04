@@ -25,6 +25,8 @@ public:
 
     bool setEncryptedNetworkKey(const std::vector<unsigned char>& value);
     bool getEncryptedNetworkKey(std::vector<unsigned char>& value) const;
+    bool ensureHostID(std::array<unsigned char, 32>& value);
+    bool getHostID(std::array<unsigned char, 32>& value) const;
 
 private:
     bool LoadCache();

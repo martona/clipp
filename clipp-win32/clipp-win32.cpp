@@ -41,10 +41,9 @@ void OnClipboardNotification() {
     std::cout << "Clipboard debounced and processed!" << std::endl;
 }
 
-void OnMDNSNotification(const wchar_t* hostName, const wchar_t* senderIp, const wchar_t* queryID, const wchar_t* nonce, const wchar_t* verb, u_short port) {
-    std::wcout << L"mDNS notification received for host: " << hostName
-               << L" from IP: " << senderIp
-		       << L" on port: " << port
+void OnMDNSNotification(const wchar_t* hostName, const wchar_t* hostID, const wchar_t* senderIp, const wchar_t* queryID, const wchar_t* nonce, const wchar_t* verb, u_short port) {
+	std::wcout << L"mDNS notification received for host: " << hostName << L" / " << hostID
+		<< L"\n  from: " << senderIp << L":" << port
                << L"\n  verb:    " << verb
                << L"\n  queryID: " << queryID
                << L"\n  nonce:   " << nonce << std::endl;
@@ -76,6 +75,12 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     std::cout << "libsodium initialized successfully." << std::endl;
+
+    std::array<unsigned char, 32> hostID{};
+    if (!g_settings.ensureHostID(hostID)) {
+        std::cerr << "Fatal: failed to initialize host ID." << std::endl;
+        return 1;
+    }
 
     std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
     std::string keyErrorMessage;

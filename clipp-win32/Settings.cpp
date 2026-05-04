@@ -1,4 +1,6 @@
 #include <windows.h>
+#include <cstring>
+#include <sodium.h>
 #include "Settings.h"
 
 namespace {
@@ -8,6 +10,7 @@ namespace {
     constexpr wchar_t kMdnsPortName[] = L"MdnsPort";
     constexpr wchar_t kTcpPortName[] = L"TcpPort";
     constexpr wchar_t kEncryptedNetworkKeyName[] = L"EncryptedNetworkKey";
+    constexpr wchar_t kHostIDName[] = L"HostID";
 }
 
 Settings::Settings()
@@ -61,6 +64,28 @@ bool Settings::setEncryptedNetworkKey(const std::vector<unsigned char>& value) {
 
 bool Settings::getEncryptedNetworkKey(std::vector<unsigned char>& value) const {
     return ReadBinaryValue(kEncryptedNetworkKeyName, value);
+}
+
+bool Settings::ensureHostID(std::array<unsigned char, 32>& value) {
+    std::vector<unsigned char> existingValue;
+    if (ReadBinaryValue(kHostIDName, existingValue) && existingValue.size() == value.size()) {
+        std::memcpy(value.data(), existingValue.data(), value.size());
+        return true;
+    }
+
+    randombytes_buf(value.data(), value.size());
+
+    return WriteBinaryValue(kHostIDName, value.data(), value.size());
+}
+
+bool Settings::getHostID(std::array<unsigned char, 32>& value) const {
+    std::vector<unsigned char> hostID;
+    if (!ReadBinaryValue(kHostIDName, hostID) || hostID.size() != value.size()) {
+        return false;
+    }
+
+    std::memcpy(value.data(), hostID.data(), value.size());
+    return true;
 }
 
 bool Settings::LoadCache() {
