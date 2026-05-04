@@ -57,8 +57,9 @@ void OnClipboardNotification(HWND hwnd) {
 	g_logger.log(__FUNCTION__, Logger::Level::Info, "Broadcasted clipboard data to peers (format ID: %u, size: %zu bytes)", clipboardData.formatId, clipboardData.rawData.size());
 }
 
-void OnPeerClipboardReceived(const wchar_t* hostName, const unsigned char* hostID, std::shared_ptr<const ClipboardPayload> payload) {
-    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Received clipboard data from peer %s (format ID: %u, size: %zu bytes)", hostName, payload->formatId, payload->rawData.size());
+void OnClientClipboardReceived(const wchar_t* hostName, const unsigned char* hostID, ClipboardPayload& payload) {
+    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Received clipboard data from client %s (format ID: %u, size: %zu bytes)", hostName, payload.formatId, payload.rawData.size());
+	SetClipboardData(payload);
 }
 
 void OnMDNSNotification(const char* hostNameUtf8, 

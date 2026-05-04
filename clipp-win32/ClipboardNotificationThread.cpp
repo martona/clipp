@@ -89,3 +89,7 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
 
     return payload;
 }
+
+void SetClipboardData(const ClipboardPayload& payload) {
+    // TODO
+}
