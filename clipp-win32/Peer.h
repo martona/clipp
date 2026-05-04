@@ -6,7 +6,12 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector> 
+#include <memory> 
+#include <variant>
 #include <winsock2.h>
+#include "BlockingQueue.h"
+#include "ClipboardData.h"
 
 class Peer {
 public:
@@ -23,6 +28,7 @@ public:
 	unsigned short port() const;
 	std::chrono::steady_clock::time_point lastPingReceivedAt() const;
 	std::chrono::steady_clock::time_point createdAt() const;
+	void PushMessage(std::shared_ptr<const ClipboardPayload> payload) { messageQueue_.Push(std::move(payload)); }
 
 private:
 	void ThreadProc();
@@ -45,5 +51,8 @@ private:
 	std::atomic<bool> stopRequested_{ false };
 	std::mutex stopMutex_;
 	std::condition_variable stopCV_;
+	
+	BlockingQueue<std::shared_ptr<const ClipboardPayload>> messageQueue_;
+
 	SOCKET socket_{ INVALID_SOCKET };
 };

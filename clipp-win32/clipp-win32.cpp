@@ -45,8 +45,20 @@ static std::string ReadHiddenLine(const std::string& prompt) {
     return input;
 }
 
-void OnClipboardNotification() {
-    g_logger.log(__FUNCTION__, Logger::Level::Info, "Clipboard debounced and processed!");
+void OnClipboardNotification(HWND hwnd) {
+    g_logger.log(__FUNCTION__, Logger::Level::Info, "Clipboard notification received");
+    auto clipboardData = ReadClipboardData(hwnd);
+    if (clipboardData.formatId == 0) {
+        g_logger.log(__FUNCTION__, Logger::Level::Info, "Clipboard is empty or contains unsupported format");
+        return;
+	}
+	auto payload = std::make_shared<const ClipboardPayload>(clipboardData);
+	g_peerManager.BroadcastClipboard(payload);
+	g_logger.log(__FUNCTION__, Logger::Level::Info, "Broadcasted clipboard data to peers (format ID: %u, size: %zu bytes)", clipboardData.formatId, clipboardData.rawData.size());
+}
+
+void OnPeerClipboardReceived(const wchar_t* hostName, const unsigned char* hostID, std::shared_ptr<const ClipboardPayload> payload) {
+    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Received clipboard data from peer %s (format ID: %u, size: %zu bytes)", hostName, payload->formatId, payload->rawData.size());
 }
 
 void OnMDNSNotification(const char* hostNameUtf8, 
@@ -120,6 +132,7 @@ int main(int argc, char* argv[]) {
             if (g_listener.Start()) {
                 g_logger.log(__FUNCTION__, Logger::Level::Info, "Press Enter to exit...");
                 std::cin.get();
+                g_peerManager.ClearPeers();
                 g_listener.Stop();
 				g_logger.log(__FUNCTION__, Logger::Level::Info, "Listener stopped.");
             } else {

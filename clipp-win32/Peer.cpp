@@ -44,6 +44,7 @@ void Peer::Stop() {
 	g_logger.log(__FUNCTION__, Logger::Level::Debug, L"%p Stopping Peer.", this);
 	stopRequested_.store(true);
 	stopCV_.notify_all();
+	messageQueue_.WakeAll();
 	CloseSocket();
 	if (thread_.joinable()) {
 		thread_.join();
@@ -199,7 +200,18 @@ void Peer::ThreadProc() {
 				g_logger.log(__FUNCTION__, Logger::Level::Debug, L"%p Peer: PONG", this);
 			}
 
-			InterruptibleSleep(std::chrono::milliseconds(5000));
+			auto msg = messageQueue_.WaitFor(std::chrono::milliseconds(5000), stopRequested_);
+
+			if (!msg.has_value()) {
+				// TIMEOUT or explicit wake: just roll over
+				g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Received empty message.");
+			} else {
+				// A message was pulled from the queue
+				std::shared_ptr<const ClipboardPayload> payload = msg.value();
+				g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Received clipboard payload.");
+				//SendClipboardData(clipMsg->payload);
+			}
+
 		}
 		CloseSocket();
 		if (!stopRequested_.load()) InterruptibleSleep(std::chrono::milliseconds(5000));

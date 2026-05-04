@@ -23,7 +23,7 @@ LRESULT CALLBACK ClipboardWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
     case WM_TIMER:
         if (wParam == CLIPBOARD_DEBOUNCE_TIMER_ID) {
             KillTimer(hwnd, CLIPBOARD_DEBOUNCE_TIMER_ID);
-            if (g_clipboardCallback) g_clipboardCallback();
+            if (g_clipboardCallback) g_clipboardCallback(hwnd);
         }
         return 0;
     default:

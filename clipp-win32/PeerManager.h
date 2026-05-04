@@ -14,6 +14,7 @@ public:
 	void RemovePeer(const unsigned char* hostID);
 	void CullPeers();
 	void ClearPeers();
+	void BroadcastClipboard(std::shared_ptr<const ClipboardPayload> payload);
 private:
 	mutable std::mutex peersMutex_;
 	std::vector<std::unique_ptr<Peer>> peers_;

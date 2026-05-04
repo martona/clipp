@@ -65,3 +65,10 @@ void PeerManager::ClearPeers() {
 	}
 	peers_.clear();
 }
+
+void PeerManager::BroadcastClipboard(std::shared_ptr<const ClipboardPayload> payload) {
+	std::lock_guard<std::mutex> lock(peersMutex_);
+	for (const auto& peer : peers_) {
+		peer->PushMessage(payload);
+	}
+}
