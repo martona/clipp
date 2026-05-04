@@ -125,27 +125,30 @@ void Client::ThreadProc() {
                 continue;
             }
 
-            if (std::memcmp(packet, "CLIP", 4) == 0) {
-                std::vector<unsigned char> message;
-                if (!channel.RecvMessage(socket_, message) || message.size() < 8) {
-                    break;
-                }
+			if (std::memcmp(packet, "CLIP", 4) == 0) {
+				std::vector<unsigned char> message;
+				if (!channel.RecvMessage(socket_, message) || message.size() < 9) {
+					break;
+				}
 
-                uint32_t networkFormat = 0;
-                uint32_t networkSize = 0;
-                std::memcpy(&networkFormat, message.data(), sizeof(networkFormat));
-                std::memcpy(&networkSize, message.data() + sizeof(networkFormat), sizeof(networkSize));
-                ClipboardPayload payload{};
-                payload.formatId = ntohl(networkFormat);
-                const uint32_t payloadSize = ntohl(networkSize);
-                if (message.size() != (8 + payloadSize)) {
-                    break;
-                }
-                if (payloadSize > 0) {
-                    payload.rawData.assign(message.begin() + 8, message.end());
-                }
-
-                if (clipboardReceivedCallback_) {
+				uint32_t networkFormat = 0;
+				uint32_t networkSize = 0;
+				std::memcpy(&networkFormat, message.data(), sizeof(networkFormat));
+				const bool isCompressed = message[sizeof(networkFormat)] != 0;
+				std::memcpy(&networkSize, message.data() + sizeof(networkFormat) + 1, sizeof(networkSize));
+				ClipboardPayload payload{};
+				payload.formatId = ntohl(networkFormat);
+				payload.isCompressed = isCompressed;
+				const uint32_t payloadSize = ntohl(networkSize);
+				if (payload.isCompressed) {
+					if (message.size() < 9) {
+						break;
+					}
+				} else if (message.size() != (9 + payloadSize)) {
+					break;
+				}
+				payload.rawData.assign(message.begin() + 9, message.end());
+				if (clipboardReceivedCallback_) {
                     std::array<unsigned char, 32> remoteHostId;
                     std::wstring remoteHostName;
                     {

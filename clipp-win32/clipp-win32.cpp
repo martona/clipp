@@ -22,14 +22,6 @@ PeerManager g_peerManager;
 
 KeyManager g_keyManager(g_settings);
 
-void OnClientClipboardReceived(const wchar_t* hostName, const unsigned char* hostID, ClipboardPayload& payload);
-
-namespace {
-    Listener g_listener([](const std::wstring& hostName, const std::array<unsigned char, 32>& hostID, ClipboardPayload& payload) {
-        OnClientClipboardReceived(hostName.c_str(), hostID.data(), payload);
-    });
-}
-
 static std::string ReadHiddenLine(const std::string& prompt) {
     g_logger.log(__FUNCTION__, Logger::Level::Info, "%s", prompt.c_str());
     std::string input;
@@ -56,15 +48,17 @@ void OnClipboardNotification(HWND hwnd) {
         g_logger.log(__FUNCTION__, Logger::Level::Info, "Clipboard is empty or contains unsupported format");
         return;
 	}
+	clipboardData.ZstdCompress();
 	auto payload = std::make_shared<const ClipboardPayload>(clipboardData);
-	g_peerManager.BroadcastClipboard(payload);
+    g_peerManager.BroadcastClipboard(payload);
 	g_logger.log(__FUNCTION__, Logger::Level::Info, "Broadcasted clipboard data to peers (format ID: %u, size: %zu bytes)", clipboardData.formatId, clipboardData.rawData.size());
 }
 
-void OnClientClipboardReceived(const wchar_t* hostName, const unsigned char* hostID, ClipboardPayload& payload) {
-    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Received clipboard data from client %s (format ID: %u, size: %zu bytes)", hostName, payload.formatId, payload.rawData.size());
-	SetClipboardData(payload);
-}
+Listener g_listener([](const std::wstring& hostName, const std::array<unsigned char, 32>& hostID, ClipboardPayload& payload) {
+    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Received clipboard data from client %s (format ID: %u, size: %zu bytes)", hostName.c_str(), payload.formatId, payload.rawData.size());
+    if (!payload.ZstdDecompress()) return;
+    SetClipboardData(payload);
+});
 
 void OnMDNSNotification(const char* hostNameUtf8, 
                         const char* hostID, 

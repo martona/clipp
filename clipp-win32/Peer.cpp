@@ -157,15 +157,17 @@ bool Peer::SendHello() {
 
 
 bool Peer::SendClipboardData(CryptoChannel& channel, const ClipboardPayload& payload) {
-	if (payload.rawData.size() > ((64u * 1024u * 1024u) - 8u - crypto_secretstream_xchacha20poly1305_ABYTES)) return false;
-	const uint32_t rawSize = static_cast<uint32_t>(payload.rawData.size());
-	std::vector<unsigned char> message(8 + payload.rawData.size());
-	const uint32_t networkFormat = htonl(payload.formatId);
-	const uint32_t networkSize = htonl(rawSize);
+	ClipboardPayload payloadToSend = payload;
+	if (payloadToSend.rawData.size() > ((64u * 1024u * 1024u) - 9u - crypto_secretstream_xchacha20poly1305_ABYTES)) return false;
+	const uint32_t decompressedSize = static_cast<uint32_t>(payload.rawData.size());
+	std::vector<unsigned char> message(9 + payloadToSend.rawData.size());
+	const uint32_t networkFormat = htonl(payloadToSend.formatId);
+	const uint32_t networkSize = htonl(decompressedSize);
 	std::memcpy(message.data(), &networkFormat, sizeof(networkFormat));
-	std::memcpy(message.data() + sizeof(networkFormat), &networkSize, sizeof(networkSize));
-	if (rawSize > 0) {
-		std::memcpy(message.data() + 8, payload.rawData.data(), payload.rawData.size());
+	message[sizeof(networkFormat)] = payloadToSend.isCompressed ? 1 : 0;
+	std::memcpy(message.data() + sizeof(networkFormat) + 1, &networkSize, sizeof(networkSize));
+	if (!payloadToSend.rawData.empty()) {
+		std::memcpy(message.data() + 9, payloadToSend.rawData.data(), payloadToSend.rawData.size());
 	}
 	if (!channel.SendTaggedMessage(socket_, "CLIP")) return false;
 	return channel.SendMessage(socket_, message.data(), static_cast<uint32_t>(message.size()));
