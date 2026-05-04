@@ -3,6 +3,12 @@
 # Exit immediately if a command exits with a non-zero status
 set -e
 
+# Parse command line arguments
+if [[ "$1" == "--clean" ]]; then
+    echo "[*] Clean flag detected. Nuking build directory..."
+    rm -rf build/
+fi
+
 echo "[*] Checking local dependencies..."
 
 # 1. Ensure Homebrew is installed
@@ -41,7 +47,7 @@ fi
 echo "[*] Generating Xcode project..."
 
 # Run CMake to generate
-cmake -B build -G Xcode -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE"
+cmake -B build -G Xcode -DVCPKG_MANIFEST_DIR="$(pwd)/src" -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE"
 
 echo "[*] Build environment ready."
 echo "[*] Launching Xcode..."

@@ -15,12 +15,12 @@ endif()
 
 add_executable(clipp ${SOURCES})
 
-find_package(libsodium CONFIG REQUIRED)
+find_package(unofficial-sodium CONFIG REQUIRED)
 find_package(xxHash CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 
 target_link_libraries(clipp PRIVATE 
-    $<TARGET_NAME:libsodium::libsodium>
-    $<TARGET_NAME:xxHash::xxhash>
-    $<TARGET_NAME:zstd::libzstd_shared>
+    unofficial-sodium::sodium
+    xxHash::xxhash
+    zstd::libzstd
 )
