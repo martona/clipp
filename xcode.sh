@@ -1,4 +1,6 @@
 #!/bin/bash
+
+# Exit immediately if a command exits with a non-zero status
 set -e
 
 echo "[*] Checking local dependencies..."
@@ -15,15 +17,21 @@ if ! command -v cmake &> /dev/null; then
     brew install cmake
 fi
 
-# 3. Ensure vcpkg is installed
-if ! command -v vcpkg &> /dev/null; then
-    echo "[*] vcpkg not found. Installing via Homebrew..."
-    brew install vcpkg
+# 3. Setup vcpkg via the official Git method instead
+VCPKG_ROOT="$HOME/vcpkg"
+
+if [ ! -d "$VCPKG_ROOT" ]; then
+    echo "[*] vcpkg repository not found at $VCPKG_ROOT. Cloning..."
+    git clone https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+    
+    echo "[*] Bootstrapping vcpkg..."
+    "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+else
+    echo "[*] vcpkg repository found at $VCPKG_ROOT."
 fi
 
-# 4. Locate the vcpkg toolchain file
-VCPKG_PREFIX=$(brew --prefix vcpkg)
-TOOLCHAIN_FILE="$VCPKG_PREFIX/libexec/scripts/buildsystems/vcpkg.cmake"
+# 4. Locate the toolchain file inside the cloned repo
+TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
 
 if [ ! -f "$TOOLCHAIN_FILE" ]; then
     echo "[!] Fatal: Could not locate vcpkg.cmake at expected path: $TOOLCHAIN_FILE"
@@ -32,11 +40,11 @@ fi
 
 echo "[*] Generating Xcode project..."
 
-# Run CMake. 
-cmake -B build -G Xcode -DVCPKG_MANIFEST_DIR="src" -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE"
+# Run CMake to generate
+cmake -B build -G Xcode -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE"
 
 echo "[*] Build environment ready."
 echo "[*] Launching Xcode..."
 
-# Open the generated project in Xcode
+# Open Xcode
 open build/clipp.xcodeproj
