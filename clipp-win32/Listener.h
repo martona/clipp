@@ -17,8 +17,11 @@ public:
 
 private:
     void ThreadProc();
+	void InterruptibleSleep(std::chrono::milliseconds duration);
 
     std::atomic<bool> running_{ false };
+    std::mutex stopMutex_;
+    std::condition_variable stopCV_;
     std::thread thread_;
     ClientManager clientManager_;
     SOCKET listenSocket_{ INVALID_SOCKET };

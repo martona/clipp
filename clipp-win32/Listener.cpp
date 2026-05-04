@@ -45,6 +45,11 @@ void Listener::Stop() {
     g_logger.log(__FUNCTION__, Logger::Level::Info, L"Listener stopped.");
 }
 
+void Listener::InterruptibleSleep(std::chrono::milliseconds duration) {
+    std::unique_lock<std::mutex> lock(stopMutex_);
+    stopCV_.wait_for(lock, duration, [this]() { return !running_.load(); });
+}
+
 void Listener::ThreadProc() {
     WSADATA wsaData{};
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
@@ -57,7 +62,7 @@ void Listener::ThreadProc() {
         SOCKET listenSock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (listenSock == INVALID_SOCKET) {
             g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Listener: socket creation failed; retrying.");
-            std::this_thread::sleep_for(std::chrono::seconds(5));
+			InterruptibleSleep(std::chrono::seconds(5));
             continue;
         }
         {
@@ -77,7 +82,7 @@ void Listener::ThreadProc() {
                     listenSocket_ = INVALID_SOCKET;
                 }
             }
-            std::this_thread::sleep_for(std::chrono::seconds(5));
+            InterruptibleSleep(std::chrono::seconds(5));
             continue;
         }
 
@@ -90,7 +95,7 @@ void Listener::ThreadProc() {
                     listenSocket_ = INVALID_SOCKET;
                 }
             }
-            std::this_thread::sleep_for(std::chrono::seconds(5));
+            InterruptibleSleep(std::chrono::seconds(5));
             continue;
         }
 
@@ -103,7 +108,7 @@ void Listener::ThreadProc() {
                     listenSocket_ = INVALID_SOCKET;
                 }
             }
-            std::this_thread::sleep_for(std::chrono::seconds(5));
+            InterruptibleSleep(std::chrono::seconds(5));
             continue;
         }
 

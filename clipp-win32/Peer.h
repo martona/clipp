@@ -31,6 +31,7 @@ private:
 	static bool RecvAll(SOCKET sock, char* buffer, int length);
 	static bool SendAll(SOCKET sock, const char* buffer, int length);
 	bool SendHello();
+	void InterruptibleSleep(std::chrono::milliseconds duration);
 
 	mutable std::mutex dataMutex_;
 	std::wstring hostName_;
@@ -42,5 +43,7 @@ private:
 
 	std::thread thread_;
 	std::atomic<bool> stopRequested_{ false };
+	std::mutex stopMutex_;
+	std::condition_variable stopCV_;
 	SOCKET socket_{ INVALID_SOCKET };
 };

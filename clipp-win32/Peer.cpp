@@ -40,11 +40,18 @@ void Peer::Start() {
 }
 
 void Peer::Stop() {
+	g_logger.log(__FUNCTION__, Logger::Level::Debug, L"%p Stopping Peer.", this);
 	stopRequested_.store(true);
+	stopCV_.notify_all();
 	CloseSocket();
 	if (thread_.joinable()) {
 		thread_.join();
 	}
+}
+
+void Peer::InterruptibleSleep(std::chrono::milliseconds duration) {
+	std::unique_lock<std::mutex> lock(stopMutex_);
+	stopCV_.wait_for(lock, duration, [this]() { return stopRequested_.load(); });
 }
 
 std::wstring Peer::hostName() const {
@@ -172,21 +179,21 @@ void Peer::ThreadProc() {
 	while (!stopRequested_.load()) {
 		if (!ConnectSocket()) {
 			g_logger.log(__FUNCTION__, Logger::Level::Error, L"Peer: failed to connect.");
-			if (!stopRequested_.load()) std::this_thread::sleep_for(std::chrono::seconds(5));
+			if (!stopRequested_.load()) InterruptibleSleep(std::chrono::milliseconds(5000));
 			continue;
 		}
 		if (!SendHello()) {
 			g_logger.log(__FUNCTION__, Logger::Level::Error, L"Peer: failed sending login handshake.");
 			CloseSocket();
-			if (!stopRequested_.load()) std::this_thread::sleep_for(std::chrono::seconds(5));
+			if (!stopRequested_.load()) InterruptibleSleep(std::chrono::milliseconds(5000));
 			continue;
 		}
 
-		g_logger.log(__FUNCTION__, Logger::Level::Info, L"Peer connected and authenticated.");
+		g_logger.log(__FUNCTION__, Logger::Level::Info, L"%p Peer connected and authenticated.", this);
 		while (!stopRequested_.load()) {
 			{
 				if (socket_ == INVALID_SOCKET || !SendAll(socket_, "PING", 4)) {
-					g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Peer failed SendAll");
+					g_logger.log(__FUNCTION__, Logger::Level::Warning, L"%p Peer failed SendAll", this);
 					break;
 				}
 			}
@@ -194,34 +201,26 @@ void Peer::ThreadProc() {
 			char packet[4] = {};
 			{
 				if (socket_ == INVALID_SOCKET || !RecvAll(socket_, packet, 4)) {
-					g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Peer failed RecvAll");
+					g_logger.log(__FUNCTION__, Logger::Level::Warning, L"%p Peer failed RecvAll", this);
 					break;
 				}
 			}
 
 			if (std::memcmp(packet, "PONG", 4) != 0) {
-				g_logger.log(__FUNCTION__, Logger::Level::Error, L"Peer: unexpected packet received.");
+				g_logger.log(__FUNCTION__, Logger::Level::Error, L"%p Peer: unexpected packet received.", this);
 				break;
 			}
 
 			{
 				std::lock_guard<std::mutex> lock(dataMutex_);
 				lastPingReceivedAt_ = std::chrono::steady_clock::now();
-				g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Peer: PONG");
+				g_logger.log(__FUNCTION__, Logger::Level::Debug, L"%p Peer: PONG", this);
 			}
 
-			fd_set readSet;
-			FD_ZERO(&readSet);
-			FD_SET(socket_, &readSet);
-			timeval timeout{};
-			timeout.tv_sec = 10;
-			int selresult = select(0, &readSet, nullptr, nullptr, &timeout);
-			g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Looping (inner)");
+			InterruptibleSleep(std::chrono::milliseconds(5000));
 		}
-		g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Closing socket");
 		CloseSocket();
-		if (!stopRequested_.load()) std::this_thread::sleep_for(std::chrono::seconds(5));
-		g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Looping (outer)");
+		if (!stopRequested_.load()) InterruptibleSleep(std::chrono::milliseconds(5000));
 	}
-	g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Peer thread exiting.");
+	g_logger.log(__FUNCTION__, Logger::Level::Debug, L"%p Peer thread exiting.", this);
 }
