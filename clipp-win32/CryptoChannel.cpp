@@ -138,21 +138,27 @@ bool CryptoChannel::ServerHandshake(SOCKET socket,
     return true;
 }
 
-bool CryptoChannel::SendMessage(SOCKET socket, const unsigned char* data, unsigned short dataSize) {
+namespace {
+    constexpr uint32_t kMaxCiphertextMessageBytes = 64u * 1024u * 1024u; // 64 MiB
+}
+
+bool CryptoChannel::SendMessage(SOCKET socket, const unsigned char* data, uint32_t dataSize) {
+    if (dataSize > (kMaxCiphertextMessageBytes - crypto_secretstream_xchacha20poly1305_ABYTES)) return false;
     unsigned long long clen = 0; unsigned char tag = 0;
     std::vector<unsigned char> c(dataSize + crypto_secretstream_xchacha20poly1305_ABYTES);
     if (crypto_secretstream_xchacha20poly1305_push(&txState_, c.data(), &clen, data, dataSize, nullptr, 0, tag) != 0) return false;
-    unsigned short n = htons(static_cast<unsigned short>(clen));
+    if (clen > kMaxCiphertextMessageBytes) return false;
+    const uint32_t n = htonl(static_cast<uint32_t>(clen));
     return SendAll(socket, reinterpret_cast<const char*>(&n), sizeof(n)) && SendAll(socket, reinterpret_cast<const char*>(c.data()), static_cast<int>(clen));
 }
 
 bool CryptoChannel::RecvMessage(SOCKET socket, std::vector<unsigned char>& outData) {
-    unsigned short n = 0;
+    uint32_t n = 0;
     if (!RecvAll(socket, reinterpret_cast<char*>(&n), sizeof(n))) return false;
-    int clen = ntohs(n);
-    if (clen <= crypto_secretstream_xchacha20poly1305_ABYTES || clen > 65535) return false;
+    const uint32_t clen = ntohl(n);
+    if (clen <= crypto_secretstream_xchacha20poly1305_ABYTES || clen > kMaxCiphertextMessageBytes) return false;
     std::vector<unsigned char> c(clen);
-    if (!RecvAll(socket, reinterpret_cast<char*>(c.data()), clen)) return false;
+    if (!RecvAll(socket, reinterpret_cast<char*>(c.data()), static_cast<int>(clen))) return false;
     unsigned long long mlen = 0; unsigned char tag = 0;
     outData.assign(static_cast<size_t>(clen), 0);
     if (crypto_secretstream_xchacha20poly1305_pull(&rxState_, outData.data(), &mlen, &tag, c.data(), c.size(), nullptr, 0) != 0) return false;

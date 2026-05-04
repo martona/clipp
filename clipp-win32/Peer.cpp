@@ -157,7 +157,7 @@ bool Peer::SendHello() {
 
 
 bool Peer::SendClipboardData(CryptoChannel& channel, const ClipboardPayload& payload) {
-	if (payload.rawData.size() > (65535u - 8u)) return false;
+	if (payload.rawData.size() > ((64u * 1024u * 1024u) - 8u - crypto_secretstream_xchacha20poly1305_ABYTES)) return false;
 	const uint32_t rawSize = static_cast<uint32_t>(payload.rawData.size());
 	std::vector<unsigned char> message(8 + payload.rawData.size());
 	const uint32_t networkFormat = htonl(payload.formatId);
@@ -168,7 +168,7 @@ bool Peer::SendClipboardData(CryptoChannel& channel, const ClipboardPayload& pay
 		std::memcpy(message.data() + 8, payload.rawData.data(), payload.rawData.size());
 	}
 	if (!channel.SendTaggedMessage(socket_, "CLIP")) return false;
-	return channel.SendMessage(socket_, message.data(), static_cast<unsigned short>(message.size()));
+	return channel.SendMessage(socket_, message.data(), static_cast<uint32_t>(message.size()));
 }
 
 void Peer::ThreadProc() {

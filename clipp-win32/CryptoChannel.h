@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <string>
 #include <winsock2.h>
 #include <sodium.h>
@@ -28,7 +29,7 @@ public:
     bool SendTaggedMessage(SOCKET socket, const char* tag4);
     bool RecvTaggedMessage(SOCKET socket, char* outTag4);
 
-    bool SendMessage(SOCKET socket, const unsigned char* data, unsigned short dataSize);
+    bool SendMessage(SOCKET socket, const unsigned char* data, uint32_t dataSize);
     bool RecvMessage(SOCKET socket, std::vector<unsigned char>& outData);
 
 private:
