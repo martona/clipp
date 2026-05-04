@@ -9,20 +9,8 @@
 #include <vector>
 
 #include "CryptoChannel.h"
+#include "NetworkDefs.h"
 
-namespace {
-#pragma pack(push, 1)
-struct ClientHello {
-    wchar_t selector[8];
-    unsigned short version;
-    unsigned char hostID[32];
-    wchar_t hostName[256];
-};
-#pragma pack(pop)
-
-constexpr const wchar_t* kSelector = L"clipp";
-constexpr unsigned short kVersion = 1;
-}
 
 Client::Client(SOCKET socket, ClipboardReceivedCallback clipboardReceivedCallback)
     : clipboardReceivedCallback_(std::move(clipboardReceivedCallback)) {
@@ -127,27 +115,20 @@ void Client::ThreadProc() {
 
 			if (std::memcmp(packet, "CLIP", 4) == 0) {
 				std::vector<unsigned char> message;
-				if (!channel.RecvMessage(socket_, message) || message.size() < 9) {
+				if (!channel.RecvMessage(socket_, message) || message.size() < sizeof(NetworkDefs::ClipboardMessage)) {
 					break;
 				}
 
-				uint32_t networkFormat = 0;
-				uint32_t networkSize = 0;
-				std::memcpy(&networkFormat, message.data(), sizeof(networkFormat));
-				const bool isCompressed = message[sizeof(networkFormat)] != 0;
-				std::memcpy(&networkSize, message.data() + sizeof(networkFormat) + 1, sizeof(networkSize));
+				auto* clipMessage = reinterpret_cast<NetworkDefs::ClipboardMessage*>(message.data());
+				clipMessage->formatId = ntohl(clipMessage->formatId);
+				clipMessage->rawDataSize = ntohl(clipMessage->rawDataSize);
 				ClipboardPayload payload{};
-				payload.formatId = ntohl(networkFormat);
-				payload.isCompressed = isCompressed;
-				const uint32_t payloadSize = ntohl(networkSize);
-				if (payload.isCompressed) {
-					if (message.size() < 9) {
-						break;
-					}
-				} else if (message.size() != (9 + payloadSize)) {
+				payload.formatId = clipMessage->formatId;
+				payload.isCompressed = clipMessage->isCompressed != 0;
+				if (!payload.isCompressed && message.size() != (sizeof(NetworkDefs::ClipboardMessage) + clipMessage->rawDataSize)) {
 					break;
 				}
-				payload.rawData.assign(message.begin() + 9, message.end());
+				payload.rawData.assign(message.begin() + sizeof(NetworkDefs::ClipboardMessage), message.end());
 				if (clipboardReceivedCallback_) {
                     std::array<unsigned char, 32> remoteHostId;
                     std::wstring remoteHostName;

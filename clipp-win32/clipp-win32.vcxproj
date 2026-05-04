@@ -156,6 +156,7 @@
     <ClInclude Include="MDNSThread.h" />
     <ClInclude Include="KeyManager.h" />
     <ClInclude Include="Logger.h" />
+    <ClInclude Include="NetworkDefs.h" />
     <ClInclude Include="Peer.h" />
     <ClInclude Include="PeerManager.h" />
     <ClInclude Include="Settings.h" />

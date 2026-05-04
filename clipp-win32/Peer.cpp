@@ -10,20 +10,8 @@
 
 #include "Settings.h"
 #include "CryptoChannel.h"
+#include "NetworkDefs.h"
 
-namespace {
-#pragma pack(push, 1)
-struct ClientHello {
-	wchar_t selector[8];
-	unsigned short version;
-	unsigned char hostID[32];
-	wchar_t hostName[256];
-};
-#pragma pack(pop)
-
-constexpr const wchar_t* kSelector = L"clipp";
-constexpr unsigned short kVersion = 1;
-}
 
 Peer::Peer(const wchar_t* hostName, const unsigned char* hostID, const char* ip, u_short port)
 	: hostName_(hostName), ip_(ip), port_(port),
@@ -160,14 +148,13 @@ bool Peer::SendClipboardData(CryptoChannel& channel, const ClipboardPayload& pay
 	ClipboardPayload payloadToSend = payload;
 	if (payloadToSend.rawData.size() > ((64u * 1024u * 1024u) - 9u - crypto_secretstream_xchacha20poly1305_ABYTES)) return false;
 	const uint32_t decompressedSize = static_cast<uint32_t>(payload.rawData.size());
-	std::vector<unsigned char> message(9 + payloadToSend.rawData.size());
-	const uint32_t networkFormat = htonl(payloadToSend.formatId);
-	const uint32_t networkSize = htonl(decompressedSize);
-	std::memcpy(message.data(), &networkFormat, sizeof(networkFormat));
-	message[sizeof(networkFormat)] = payloadToSend.isCompressed ? 1 : 0;
-	std::memcpy(message.data() + sizeof(networkFormat) + 1, &networkSize, sizeof(networkSize));
+	std::vector<unsigned char> message(sizeof(NetworkDefs::ClipboardMessage) + payloadToSend.rawData.size());
+	auto* clipMessage = reinterpret_cast<NetworkDefs::ClipboardMessage*>(message.data());
+	clipMessage->formatId = htonl(payloadToSend.formatId);
+	clipMessage->isCompressed = payloadToSend.isCompressed ? 1 : 0;
+	clipMessage->rawDataSize = htonl(decompressedSize);
 	if (!payloadToSend.rawData.empty()) {
-		std::memcpy(message.data() + 9, payloadToSend.rawData.data(), payloadToSend.rawData.size());
+		std::memcpy(message.data() + sizeof(NetworkDefs::ClipboardMessage), payloadToSend.rawData.data(), payloadToSend.rawData.size());
 	}
 	if (!channel.SendTaggedMessage(socket_, "CLIP")) return false;
 	return channel.SendMessage(socket_, message.data(), static_cast<uint32_t>(message.size()));

@@ -68,5 +68,8 @@
     <ClInclude Include="KeyManager.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="NetworkDefs.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
