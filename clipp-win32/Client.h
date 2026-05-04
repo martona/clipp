@@ -7,10 +7,15 @@
 #include <string>
 #include <thread>
 #include <winsock2.h>
+#include <functional>
+
+#include "ClipboardData.h"
 
 class Client {
 public:
-    explicit Client(SOCKET socket);
+    using ClipboardReceivedCallback = std::function<void(const std::wstring&, const std::array<unsigned char, 32>&, ClipboardPayload&)>;
+
+    explicit Client(SOCKET socket, ClipboardReceivedCallback clipboardReceivedCallback);
     ~Client();
 
     void Start();
@@ -24,6 +29,7 @@ private:
     static bool RecvAll(SOCKET sock, char* buffer, int length);
     static bool SendAll(SOCKET sock, const char* buffer, int length);
 
+    ClipboardReceivedCallback clipboardReceivedCallback_;
     SOCKET socket_;
     std::thread thread_;
     std::atomic<bool> stopRequested_{ false };

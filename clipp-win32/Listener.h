@@ -7,9 +7,13 @@
 
 #include "ClientManager.h"
 
+#include "Client.h"
+
 class Listener {
 public:
-    Listener();
+    using ClipboardReceivedCallback = Client::ClipboardReceivedCallback;
+
+    explicit Listener(ClipboardReceivedCallback clipboardReceivedCallback = nullptr);
     ~Listener();
 
     bool Start();

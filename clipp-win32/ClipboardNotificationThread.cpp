@@ -2,9 +2,14 @@
 #include "ClipboardNotificationWindow.h"
 #include <thread>
 #include <future>
+#include <cstring>
+
+#include <xxhash.h>
 
 static std::thread g_clipboardThread;
 static HWND g_hwnd = nullptr;
+static std::mutex g_hashMutex;
+static XXH128_hash_t g_lastClipboardHash{ 0, 0 };
 
 static void ClipboardThreadProc(std::promise<bool> initPromise, ClipboardCallback callback) {
     g_hwnd = CreateClipboardNotificationWindow(callback);
@@ -91,5 +96,72 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
 }
 
 void SetClipboardData(const ClipboardPayload& payload) {
-    // TODO
+    XXH128_hash_t newHash = XXH3_128bits(payload.rawData.data(), payload.rawData.size());
+    {
+        std::lock_guard<std::mutex> lock(g_hashMutex);
+        if (newHash.high64 == g_lastClipboardHash.high64 && newHash.low64 == g_lastClipboardHash.low64) {
+            // Data is the same as last time, skip setting clipboard
+            return;
+        }
+	}
+    for (int i = 0; i < 5; ++i) {
+        if (OpenClipboard(g_hwnd)) {
+            if (!EmptyClipboard()) {
+                CloseClipboard();
+                Sleep(10 + (i * 10));
+                continue;
+            }
+
+            if (payload.formatId == CF_UNICODETEXT) {
+                const char* utf8Data = reinterpret_cast<const char*>(payload.rawData.data());
+                const int utf8Bytes = static_cast<int>(payload.rawData.size());
+                const int wideChars = MultiByteToWideChar(CP_UTF8, 0, utf8Data, utf8Bytes, nullptr, 0);
+                if (wideChars > 0) {
+                    const SIZE_T wideBytes = static_cast<SIZE_T>(wideChars) * sizeof(wchar_t);
+                    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, wideBytes);
+                    if (hMem) {
+                        wchar_t* dst = static_cast<wchar_t*>(GlobalLock(hMem));
+                        if (dst) {
+                            if (MultiByteToWideChar(CP_UTF8, 0, utf8Data, utf8Bytes, dst, wideChars) > 0) {
+                                GlobalUnlock(hMem);
+                                if (!::SetClipboardData(CF_UNICODETEXT, hMem)) {
+                                    GlobalFree(hMem);
+                                } else {
+                                    std::lock_guard<std::mutex> lock(g_hashMutex);
+                                    g_lastClipboardHash = newHash;
+                                }
+                            } else {
+                                GlobalUnlock(hMem);
+                                GlobalFree(hMem);
+                            }
+                        } else {
+                            GlobalFree(hMem);
+                        }
+                    }
+                }
+            } else if (payload.formatId == CF_DIB) {
+                const size_t bytes = payload.rawData.size();
+                HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, bytes);
+                if (hMem) {
+                    void* dst = GlobalLock(hMem);
+                    if (dst) {
+                        std::memcpy(dst, payload.rawData.data(), bytes);
+                        GlobalUnlock(hMem);
+                        if (!::SetClipboardData(CF_DIB, hMem)) {
+                            GlobalFree(hMem);
+                        } else {
+                            std::lock_guard<std::mutex> lock(g_hashMutex);
+							g_lastClipboardHash = newHash;
+                        }
+                    } else {
+                        GlobalFree(hMem);
+                    }
+                }
+            }
+
+            CloseClipboard();
+            break;
+        }
+        Sleep(10 + (i * 10));
+    }
 }

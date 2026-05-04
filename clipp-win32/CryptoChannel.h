@@ -4,6 +4,7 @@
 #include <string>
 #include <winsock2.h>
 #include <sodium.h>
+#include <vector>
 
 class CryptoChannel {
 public:
@@ -26,6 +27,9 @@ public:
 
     bool SendTaggedMessage(SOCKET socket, const char* tag4);
     bool RecvTaggedMessage(SOCKET socket, char* outTag4);
+
+    bool SendMessage(SOCKET socket, const unsigned char* data, unsigned short dataSize);
+    bool RecvMessage(SOCKET socket, std::vector<unsigned char>& outData);
 
 private:
     bool LoadNetworkKey(std::array<unsigned char, crypto_secretbox_KEYBYTES>& networkKey);

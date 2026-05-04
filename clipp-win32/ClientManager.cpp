@@ -6,10 +6,8 @@
 
 #include "Client.h"
 
-void ClientManager::AddClient(std::unique_ptr<Client> client) {
-    if (!client) {
-        return;
-    }
+void ClientManager::AddClient(SOCKET socket) {
+    auto client = std::make_unique<Client>(socket, clipboardReceivedCallback_);
     client->Start();
     std::lock_guard<std::mutex> lock(mutex_);
     clients_.push_back(std::move(client));

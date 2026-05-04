@@ -12,6 +12,7 @@
 #include <winsock2.h>
 #include "BlockingQueue.h"
 #include "ClipboardData.h"
+class CryptoChannel;
 
 class Peer {
 public:
@@ -37,6 +38,7 @@ private:
 	static bool RecvAll(SOCKET sock, char* buffer, int length);
 	static bool SendAll(SOCKET sock, const char* buffer, int length);
 	bool SendHello();
+	bool SendClipboardData(CryptoChannel& channel, const ClipboardPayload& payload);
 	void InterruptibleSleep(std::chrono::milliseconds duration);
 
 	mutable std::mutex dataMutex_;

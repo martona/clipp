@@ -22,8 +22,12 @@ PeerManager g_peerManager;
 
 KeyManager g_keyManager(g_settings);
 
+void OnClientClipboardReceived(const wchar_t* hostName, const unsigned char* hostID, ClipboardPayload& payload);
+
 namespace {
-    Listener g_listener;
+    Listener g_listener([](const std::wstring& hostName, const std::array<unsigned char, 32>& hostID, ClipboardPayload& payload) {
+        OnClientClipboardReceived(hostName.c_str(), hostID.data(), payload);
+    });
 }
 
 static std::string ReadHiddenLine(const std::string& prompt) {

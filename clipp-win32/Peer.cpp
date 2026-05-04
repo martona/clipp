@@ -155,6 +155,22 @@ bool Peer::SendHello() {
 }
 
 
+
+bool Peer::SendClipboardData(CryptoChannel& channel, const ClipboardPayload& payload) {
+	if (payload.rawData.size() > (65535u - 8u)) return false;
+	const uint32_t rawSize = static_cast<uint32_t>(payload.rawData.size());
+	std::vector<unsigned char> message(8 + payload.rawData.size());
+	const uint32_t networkFormat = htonl(payload.formatId);
+	const uint32_t networkSize = htonl(rawSize);
+	std::memcpy(message.data(), &networkFormat, sizeof(networkFormat));
+	std::memcpy(message.data() + sizeof(networkFormat), &networkSize, sizeof(networkSize));
+	if (rawSize > 0) {
+		std::memcpy(message.data() + 8, payload.rawData.data(), payload.rawData.size());
+	}
+	if (!channel.SendTaggedMessage(socket_, "CLIP")) return false;
+	return channel.SendMessage(socket_, message.data(), static_cast<unsigned short>(message.size()));
+}
+
 void Peer::ThreadProc() {
 	while (!stopRequested_.load()) {
 		if (!ConnectSocket()) {
@@ -209,7 +225,10 @@ void Peer::ThreadProc() {
 				// A message was pulled from the queue
 				std::shared_ptr<const ClipboardPayload> payload = msg.value();
 				g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Received clipboard payload.");
-				//SendClipboardData(clipMsg->payload);
+				if (!SendClipboardData(channel, *payload)) {
+					g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Peer failed to send clipboard payload.");
+					break;
+				}
 			}
 
 		}

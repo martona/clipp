@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstring>
 #include <ws2tcpip.h>
+#include <vector>
 
 #include "CryptoChannel.h"
 
@@ -23,7 +24,8 @@ constexpr const wchar_t* kSelector = L"clipp";
 constexpr unsigned short kVersion = 1;
 }
 
-Client::Client(SOCKET socket) {
+Client::Client(SOCKET socket, ClipboardReceivedCallback clipboardReceivedCallback)
+    : clipboardReceivedCallback_(std::move(clipboardReceivedCallback)) {
 	socket_ = socket;
 }
 
@@ -119,6 +121,39 @@ void Client::ThreadProc() {
                 g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Client: PING");
                 if (!channel.SendTaggedMessage(socket_, "PONG")) {
                     break;
+                }
+                continue;
+            }
+
+            if (std::memcmp(packet, "CLIP", 4) == 0) {
+                std::vector<unsigned char> message;
+                if (!channel.RecvMessage(socket_, message) || message.size() < 8) {
+                    break;
+                }
+
+                uint32_t networkFormat = 0;
+                uint32_t networkSize = 0;
+                std::memcpy(&networkFormat, message.data(), sizeof(networkFormat));
+                std::memcpy(&networkSize, message.data() + sizeof(networkFormat), sizeof(networkSize));
+                ClipboardPayload payload{};
+                payload.formatId = ntohl(networkFormat);
+                const uint32_t payloadSize = ntohl(networkSize);
+                if (message.size() != (8 + payloadSize)) {
+                    break;
+                }
+                if (payloadSize > 0) {
+                    payload.rawData.assign(message.begin() + 8, message.end());
+                }
+
+                if (clipboardReceivedCallback_) {
+                    std::array<unsigned char, 32> remoteHostId;
+                    std::wstring remoteHostName;
+                    {
+                        std::lock_guard<std::mutex> lock(remoteInfoMutex_);
+                        remoteHostId = remoteHostID_;
+                        remoteHostName = remoteHostName_;
+                    }
+                    clipboardReceivedCallback_(remoteHostName, remoteHostId, payload);
                 }
             }
         }

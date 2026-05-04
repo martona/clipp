@@ -138,24 +138,35 @@ bool CryptoChannel::ServerHandshake(SOCKET socket,
     return true;
 }
 
-bool CryptoChannel::SendTaggedMessage(SOCKET socket, const char* tag4) {
+bool CryptoChannel::SendMessage(SOCKET socket, const unsigned char* data, unsigned short dataSize) {
     unsigned long long clen = 0; unsigned char tag = 0;
-    unsigned char c[4 + crypto_secretstream_xchacha20poly1305_ABYTES]{};
-    if (crypto_secretstream_xchacha20poly1305_push(&txState_, c, &clen, reinterpret_cast<const unsigned char*>(tag4), 4, nullptr, 0, tag) != 0) return false;
+    std::vector<unsigned char> c(dataSize + crypto_secretstream_xchacha20poly1305_ABYTES);
+    if (crypto_secretstream_xchacha20poly1305_push(&txState_, c.data(), &clen, data, dataSize, nullptr, 0, tag) != 0) return false;
     unsigned short n = htons(static_cast<unsigned short>(clen));
-    return SendAll(socket, reinterpret_cast<const char*>(&n), sizeof(n)) && SendAll(socket, reinterpret_cast<const char*>(c), static_cast<int>(clen));
+    return SendAll(socket, reinterpret_cast<const char*>(&n), sizeof(n)) && SendAll(socket, reinterpret_cast<const char*>(c.data()), static_cast<int>(clen));
 }
 
-bool CryptoChannel::RecvTaggedMessage(SOCKET socket, char* outTag4) {
+bool CryptoChannel::RecvMessage(SOCKET socket, std::vector<unsigned char>& outData) {
     unsigned short n = 0;
     if (!RecvAll(socket, reinterpret_cast<char*>(&n), sizeof(n))) return false;
     int clen = ntohs(n);
-    if (clen <= crypto_secretstream_xchacha20poly1305_ABYTES || clen > 256) return false;
+    if (clen <= crypto_secretstream_xchacha20poly1305_ABYTES || clen > 65535) return false;
     std::vector<unsigned char> c(clen);
     if (!RecvAll(socket, reinterpret_cast<char*>(c.data()), clen)) return false;
-    unsigned long long mlen = 0; unsigned char tag = 0; unsigned char m[8]{};
-    if (crypto_secretstream_xchacha20poly1305_pull(&rxState_, m, &mlen, &tag, c.data(), c.size(), nullptr, 0) != 0) return false;
-    if (mlen != 4) return false;
-    std::memcpy(outTag4, m, 4);
+    unsigned long long mlen = 0; unsigned char tag = 0;
+    outData.assign(static_cast<size_t>(clen), 0);
+    if (crypto_secretstream_xchacha20poly1305_pull(&rxState_, outData.data(), &mlen, &tag, c.data(), c.size(), nullptr, 0) != 0) return false;
+    outData.resize(static_cast<size_t>(mlen));
+    return true;
+}
+
+bool CryptoChannel::SendTaggedMessage(SOCKET socket, const char* tag4) {
+    return SendMessage(socket, reinterpret_cast<const unsigned char*>(tag4), 4);
+}
+
+bool CryptoChannel::RecvTaggedMessage(SOCKET socket, char* outTag4) {
+    std::vector<unsigned char> message;
+    if (!RecvMessage(socket, message) || message.size() != 4) return false;
+    std::memcpy(outTag4, message.data(), 4);
     return true;
 }

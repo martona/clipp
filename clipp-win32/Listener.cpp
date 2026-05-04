@@ -13,7 +13,8 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
-Listener::Listener() {}
+Listener::Listener(ClipboardReceivedCallback clipboardReceivedCallback)
+    : clientManager_(clipboardReceivedCallback) {}
 Listener::~Listener() { Stop(); }
 
 bool Listener::Start() {
@@ -141,7 +142,7 @@ void Listener::ThreadProc() {
                 continue;
             }
 
-            clientManager_.AddClient(std::make_unique<Client>(clientSock));
+            clientManager_.AddClient(clientSock);
             g_logger.log(__FUNCTION__, Logger::Level::Info, L"Accepted incoming TCP client.");
         }
 
