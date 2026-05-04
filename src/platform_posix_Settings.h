@@ -10,15 +10,15 @@ bool Settings::ReadUint32Value(const wchar_t* valueName, int& outValue) {
 }
 bool Settings::WriteStringValue(const wchar_t* valueName, const std::string& value) {
 	//TODO
-	return false;
+	return true;
 }
 bool Settings::WriteUint32Value(const wchar_t* valueName, int value) {
 	//TODO
-	return false;
+	return true;
 }
 bool Settings::WriteBinaryValue(const wchar_t* valueName, const unsigned char* data, size_t len) {
 	//TODO
-	return false;
+	return true;
 }
 bool Settings::ReadBinaryValue(const wchar_t* valueName, std::vector<unsigned char>& outValue) {
 	//TODO

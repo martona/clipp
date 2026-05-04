@@ -14,6 +14,8 @@
 #elif defined(__APPLE__)
     #include <TargetConditionals.h>
     #include <cstddef>
+    #include <codecvt>
+    #include <locale>
     #include <sys/socket.h>
     #include <arpa/inet.h>
     #include <netinet/in.h>
@@ -63,13 +65,43 @@
 #elif defined(__APPLE__)
     using PlatformWindowHandle = void*;
     static size_t utf8_to_utf16(const char* utf8, size_t n_utf8, wchar_t* utf16, size_t n_utf16) {
-        //TODO
-        return 0;
+        if (!utf8) return 0;
+
+        std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+        std::wstring wide;
+        try {
+            wide = converter.from_bytes(utf8, utf8 + n_utf8);
+        } catch (...) {
+            return 0;
+        }
+
+        if (utf16 == nullptr || n_utf16 == 0) {
+            return wide.size();
+        }
+
+        const size_t copyLen = (std::min)(wide.size(), n_utf16);
+        std::memcpy(utf16, wide.data(), copyLen * sizeof(wchar_t));
+        return copyLen;
     }
 
     static size_t utf16_to_utf8(const wchar_t* utf16, size_t n_utf16, char* utf8, size_t n_utf8) {
-        //TODO
-        return 0;
+        if (!utf16) return 0;
+
+        std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+        std::string narrow;
+        try {
+            narrow = converter.to_bytes(utf16, utf16 + n_utf16);
+        } catch (...) {
+            return 0;
+        }
+
+        if (utf8 == nullptr || n_utf8 == 0) {
+            return narrow.size();
+        }
+
+        const size_t copyLen = (std::min)(narrow.size(), n_utf8);
+        std::memcpy(utf8, narrow.data(), copyLen);
+        return copyLen;
     }
 
     static inline int vsnprintf_truncate(char* buffer, size_t size, const char* format, va_list args) {
