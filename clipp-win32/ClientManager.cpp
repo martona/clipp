@@ -1,3 +1,4 @@
+#include "Logger.h"
 #include "ClientManager.h"
 
 #include <algorithm>
@@ -22,7 +23,7 @@ void ClientManager::Cleanup() {
     }), clients_.end());
 
     if (clients_.size() != before) {
-        std::wcout << L"Client cleanup removed " << (before - clients_.size()) << L" client(s)." << std::endl;
+        g_logger.log(__FUNCTION__, Logger::Level::Info, L"Client cleanup removed %zu client(s).", (before - clients_.size()));
     }
 }
 

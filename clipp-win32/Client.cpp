@@ -1,3 +1,4 @@
+#include "Logger.h"
 #include "Client.h"
 
 #include <iostream>
@@ -90,9 +91,9 @@ bool Client::SendAll(SOCKET sock, const char* buffer, int length) {
 void Client::ThreadProc() {
     ClientHello hello{};
     if (!RecvAll(socket_, reinterpret_cast<char*>(&hello), sizeof(hello))) {
-        std::wcerr << L"Client handshake read failed." << std::endl;
+        g_logger.log(__FUNCTION__, Logger::Level::Error, L"Client handshake read failed.");
     } else if (std::wcsncmp(hello.selector, kSelector, std::wcslen(kSelector)) != 0 || ntohs(hello.version) != kVersion) {
-        std::wcerr << L"Client handshake validation failed." << std::endl;
+        g_logger.log(__FUNCTION__, Logger::Level::Error, L"Client handshake validation failed.");
     } else {
         {
             std::lock_guard<std::mutex> lock(remoteInfoMutex_);
@@ -105,7 +106,7 @@ void Client::ThreadProc() {
             std::lock_guard<std::mutex> lock(remoteInfoMutex_);
             remoteHostNameCopy = remoteHostName_;
         }
-        std::wcout << L"Client connected: " << remoteHostNameCopy << std::endl;
+        g_logger.log(__FUNCTION__, Logger::Level::Info, L"Client connected: %ls", remoteHostNameCopy.c_str());
 
         char packet[4] = {};
         while (!stopRequested_.load()) {
@@ -114,7 +115,7 @@ void Client::ThreadProc() {
             }
 
             if (std::memcmp(packet, "PING", 4) == 0) {
-                std::wcout << L"Client: PING" << std::endl;
+                g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Client: PING");
                 if (!SendAll(socket_, "PONG", 4)) {
                     break;
                 }

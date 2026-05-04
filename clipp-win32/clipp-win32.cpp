@@ -9,6 +9,7 @@
 
 #include <windows.h>
 
+#include "Logger.h"
 #include "ClipboardNotificationThread.h"
 #include "KeyManager.h"
 #include "MDNSThread.h"
@@ -25,7 +26,7 @@ namespace {
 }
 
 static std::string ReadHiddenLine(const std::string& prompt) {
-    std::cout << prompt;
+    g_logger.log(__FUNCTION__, Logger::Level::Info, "%s", prompt.c_str());
     std::string input;
     // Get the standard input handle
     HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
@@ -39,20 +40,16 @@ static std::string ReadHiddenLine(const std::string& prompt) {
     // Restore the original console mode
     SetConsoleMode(hStdin, mode);
     // Print a newline since the user's 'Enter' key press was also suppressed
-    std::cout << std::endl;
+    
     return input;
 }
 
 void OnClipboardNotification() {
-    std::cout << "Clipboard debounced and processed!" << std::endl;
+    g_logger.log(__FUNCTION__, Logger::Level::Info, "Clipboard debounced and processed!");
 }
 
 void OnMDNSNotification(const wchar_t* hostName, const wchar_t* hostID, const wchar_t* senderIp, const wchar_t* queryID, const wchar_t* nonce, const wchar_t* verb, u_short port, const unsigned char* rawHostID) {
-	std::wcout << L"mDNS notification received for host: " << hostName << L" / " << hostID
-		<< L"\n  from: " << senderIp << L":" << port
-               << L"\n  verb:    " << verb
-               << L"\n  queryID: " << queryID
-               << L"\n  nonce:   " << nonce << std::endl;
+	g_logger.log(__FUNCTION__, Logger::Level::Info, L"mDNS notification received for host: %ls / %ls\n  from: %ls:%hu\n  verb:    %ls\n  queryID: %ls\n  nonce:   %ls", hostName, hostID, senderIp, port, verb, queryID, nonce);
 
     if (std::wstring(verb) == L"response" && rawHostID != nullptr) {
         std::wstring senderIpW(senderIp);
@@ -74,37 +71,37 @@ int main(int argc, char* argv[]) {
         const std::string keyInput = ReadHiddenLine("Enter 64-character network key hex: ");
 
         if (!g_keyManager.ParseHexNetworkKey(keyInput, networkKey)) {
-            std::cerr << "Invalid input. Expected exactly 64 hexadecimal characters." << std::endl;
+            g_logger.log(__FUNCTION__, Logger::Level::Error, "Invalid input. Expected exactly 64 hexadecimal characters.");
             return 1;
         }
 
         std::string errorMessage;
         if (!g_keyManager.SetNetworkKey(networkKey, &errorMessage)) {
-            std::cerr << "Failed to store network key: " << errorMessage << std::endl;
+            g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to store network key: %s", errorMessage.c_str());
             return 1;
         }
 
-        std::cout << "Network key saved successfully." << std::endl;
+        g_logger.log(__FUNCTION__, Logger::Level::Info, "Network key saved successfully.");
         return 0;
     }
 
     // libsodium requires initialization before calling any other functions
     if (sodium_init() < 0) {
-        std::cerr << "Fatal: libsodium failed to initialize!" << std::endl;
+        g_logger.log(__FUNCTION__, Logger::Level::Error, "Fatal: libsodium failed to initialize!");
         return 1;
     }
-    std::cout << "libsodium initialized successfully." << std::endl;
+    g_logger.log(__FUNCTION__, Logger::Level::Info, "libsodium initialized successfully.");
 
     std::array<unsigned char, 32> hostID{};
     if (!g_settings.ensureHostID(hostID)) {
-        std::cerr << "Fatal: failed to initialize host ID." << std::endl;
+        g_logger.log(__FUNCTION__, Logger::Level::Error, "Fatal: failed to initialize host ID.");
         return 1;
     }
 
     std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
     std::string keyErrorMessage;
     if (!g_keyManager.GetNetworkKey(networkKey, &keyErrorMessage)) {
-        std::cerr << "Fatal: failed to load network key before starting threads: " << keyErrorMessage << std::endl;
+        g_logger.log(__FUNCTION__, Logger::Level::Error, "Fatal: failed to load network key before starting threads: %s", keyErrorMessage.c_str());
         return 1;
     }
 
@@ -112,26 +109,26 @@ int main(int argc, char* argv[]) {
     if (StartClipboardNotification(OnClipboardNotification)) {
         if (StartMDNS(OnMDNSNotification)) {
             if (g_listener.Start()) {
-                std::cout << "Press Enter to exit..." << std::endl;
+                g_logger.log(__FUNCTION__, Logger::Level::Info, "Press Enter to exit...");
                 std::cin.get();
                 g_listener.Stop();
-				std::cout << "Listener stopped." << std::endl;
+				g_logger.log(__FUNCTION__, Logger::Level::Info, "Listener stopped.");
             } else {
-                std::cerr << "Failed to start TCP listener thread!" << std::endl;
+                g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to start TCP listener thread!");
             }
             StopMDNS();
-			std::cout << "mDNS stopped." << std::endl;
+			g_logger.log(__FUNCTION__, Logger::Level::Info, "mDNS stopped.");
         } else {
-            std::cerr << "Failed to start mDNS thread!" << std::endl;
+            g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to start mDNS thread!");
         }
         StopClipboardNotification();
-		std::cout << "Clipboard notification stopped." << std::endl;
+		g_logger.log(__FUNCTION__, Logger::Level::Info, "Clipboard notification stopped.");
     } else {
-        std::cerr << "Failed to start clipboard notification thread!" << std::endl;
+        g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to start clipboard notification thread!");
     }
 
     g_peerManager.ClearPeers();
-	std::cout << "Peer manager cleared." << std::endl;
+	g_logger.log(__FUNCTION__, Logger::Level::Info, "Peer manager cleared.");
 
     return 0;
 }

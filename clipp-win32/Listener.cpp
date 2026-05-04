@@ -1,3 +1,4 @@
+#include "Logger.h"
 #include "Listener.h"
 
 #include <chrono>
@@ -41,13 +42,13 @@ void Listener::Stop() {
     }
 
     clientManager_.Terminate();
-    std::wcout << L"Listener stopped." << std::endl;
+    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Listener stopped.");
 }
 
 void Listener::ThreadProc() {
     WSADATA wsaData{};
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        std::wcerr << L"Listener: WSAStartup failed." << std::endl;
+        g_logger.log(__FUNCTION__, Logger::Level::Error, L"Listener: WSAStartup failed.");
         running_.store(false);
         return;
     }
@@ -55,7 +56,7 @@ void Listener::ThreadProc() {
     while (running_.load()) {
         SOCKET listenSock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (listenSock == INVALID_SOCKET) {
-            std::wcerr << L"Listener: socket creation failed; retrying." << std::endl;
+            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Listener: socket creation failed; retrying.");
             std::this_thread::sleep_for(std::chrono::seconds(5));
             continue;
         }
@@ -68,7 +69,7 @@ void Listener::ThreadProc() {
         bindAddr.sin_family = AF_INET;
         bindAddr.sin_port = htons(static_cast<u_short>(g_settings.tcpPort()));
         if (inet_pton(AF_INET, g_settings.listenerIp().c_str(), &bindAddr.sin_addr) != 1) {
-            std::wcerr << L"Listener: invalid listener IP; retrying." << std::endl;
+            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Listener: invalid listener IP; retrying.");
             closesocket(listenSock);
             {
                 std::lock_guard<std::mutex> lock(listenSocketMutex_);
@@ -81,7 +82,7 @@ void Listener::ThreadProc() {
         }
 
         if (bind(listenSock, reinterpret_cast<sockaddr*>(&bindAddr), sizeof(bindAddr)) == SOCKET_ERROR) {
-            std::wcerr << L"Listener: bind failed; retrying." << std::endl;
+            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Listener: bind failed; retrying.");
             closesocket(listenSock);
             {
                 std::lock_guard<std::mutex> lock(listenSocketMutex_);
@@ -94,7 +95,7 @@ void Listener::ThreadProc() {
         }
 
         if (listen(listenSock, SOMAXCONN) == SOCKET_ERROR) {
-            std::wcerr << L"Listener: listen failed; retrying." << std::endl;
+            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Listener: listen failed; retrying.");
             closesocket(listenSock);
             {
                 std::lock_guard<std::mutex> lock(listenSocketMutex_);
@@ -106,7 +107,7 @@ void Listener::ThreadProc() {
             continue;
         }
 
-        std::wcout << L"Listener running on " << g_settings.listenerIp().c_str() << L":" << g_settings.tcpPort() << std::endl;
+        g_logger.log(__FUNCTION__, Logger::Level::Info, L"Listener running on %hs:%hu", g_settings.listenerIp().c_str(), g_settings.tcpPort());
 
         while (running_.load()) {
             fd_set readSet;
@@ -122,7 +123,7 @@ void Listener::ThreadProc() {
             }
 
             if (ready == SOCKET_ERROR) {
-                std::wcerr << L"Listener: select failed; recreating listener socket." << std::endl;
+                g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Listener: select failed; recreating listener socket.");
                 break;
             }
             if (ready == 0) {
@@ -131,12 +132,12 @@ void Listener::ThreadProc() {
 
             SOCKET clientSock = accept(listenSock, nullptr, nullptr);
             if (clientSock == INVALID_SOCKET) {
-                std::wcerr << L"Listener: accept failed." << std::endl;
+                g_logger.log(__FUNCTION__, Logger::Level::Error, L"Listener: accept failed.");
                 continue;
             }
 
             clientManager_.AddClient(std::make_unique<Client>(clientSock));
-            std::wcout << L"Accepted incoming TCP client." << std::endl;
+            g_logger.log(__FUNCTION__, Logger::Level::Info, L"Accepted incoming TCP client.");
         }
 
         closesocket(listenSock);

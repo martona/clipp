@@ -1,3 +1,4 @@
+#include "Logger.h"
 #include "Peer.h"
 
 #include <array>
@@ -116,7 +117,7 @@ void Peer::CloseSocket() {
 bool Peer::ConnectSocket() {
 	SOCKET socketHandle = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (socketHandle == INVALID_SOCKET) {
-		std::wcerr << L"Peer: failed to create socket." << std::endl;
+		g_logger.log(__FUNCTION__, Logger::Level::Error, L"Peer: failed to create socket.");
 		return false;
 	}
 
@@ -125,13 +126,13 @@ bool Peer::ConnectSocket() {
 	address.sin_port = htons(port());
 	std::string peerIp = ip();
 	if (inet_pton(AF_INET, peerIp.c_str(), &address.sin_addr) != 1) {
-		std::wcerr << L"Peer: invalid remote IP address." << std::endl;
+		g_logger.log(__FUNCTION__, Logger::Level::Error, L"Peer: invalid remote IP address.");
 		closesocket(socketHandle);
 		return false;
 	}
 
 	if (connect(socketHandle, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == SOCKET_ERROR) {
-		std::wcerr << L"Peer: TCP connect failed; retrying." << std::endl;
+		g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Peer: TCP connect failed; retrying.");
 		closesocket(socketHandle);
 		return false;
 	}
@@ -147,14 +148,14 @@ bool Peer::SendHello() {
 
 	std::array<unsigned char, 32> localHostId{};
 	if (!g_settings.getHostID(localHostId)) {
-		std::wcerr << L"Peer: failed to read local host ID." << std::endl;
+		g_logger.log(__FUNCTION__, Logger::Level::Error, L"Peer: failed to read local host ID.");
 		return false;
 	}
 	std::memcpy(hello.hostID, localHostId.data(), localHostId.size());
 
 	char localHostName[256] = {};
 	if (gethostname(localHostName, sizeof(localHostName)) != 0) {
-		std::wcerr << L"Peer: gethostname failed." << std::endl;
+		g_logger.log(__FUNCTION__, Logger::Level::Error, L"Peer: gethostname failed.");
 		return false;
 	}
 	wchar_t localHostNameW[256] = {};
@@ -170,22 +171,22 @@ bool Peer::SendHello() {
 void Peer::ThreadProc() {
 	while (!stopRequested_.load()) {
 		if (!ConnectSocket()) {
-			std::wcerr << L"Peer: failed to connect." << std::endl;
+			g_logger.log(__FUNCTION__, Logger::Level::Error, L"Peer: failed to connect.");
 			if (!stopRequested_.load()) std::this_thread::sleep_for(std::chrono::seconds(5));
 			continue;
 		}
 		if (!SendHello()) {
-			std::wcerr << L"Peer: failed sending login handshake." << std::endl;
+			g_logger.log(__FUNCTION__, Logger::Level::Error, L"Peer: failed sending login handshake.");
 			CloseSocket();
 			if (!stopRequested_.load()) std::this_thread::sleep_for(std::chrono::seconds(5));
 			continue;
 		}
 
-		std::wcout << L"Peer connected and authenticated." << std::endl;
+		g_logger.log(__FUNCTION__, Logger::Level::Info, L"Peer connected and authenticated.");
 		while (!stopRequested_.load()) {
 			{
 				if (socket_ == INVALID_SOCKET || !SendAll(socket_, "PING", 4)) {
-					std::wcout << L"Peer failed SendAll" << std::endl;
+					g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Peer failed SendAll");
 					break;
 				}
 			}
@@ -193,20 +194,20 @@ void Peer::ThreadProc() {
 			char packet[4] = {};
 			{
 				if (socket_ == INVALID_SOCKET || !RecvAll(socket_, packet, 4)) {
-					std::wcout << L"Peer failed RecvAll" << std::endl;
+					g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Peer failed RecvAll");
 					break;
 				}
 			}
 
 			if (std::memcmp(packet, "PONG", 4) != 0) {
-				std::wcerr << L"Peer: unexpected packet received." << std::endl;
+				g_logger.log(__FUNCTION__, Logger::Level::Error, L"Peer: unexpected packet received.");
 				break;
 			}
 
 			{
 				std::lock_guard<std::mutex> lock(dataMutex_);
 				lastPingReceivedAt_ = std::chrono::steady_clock::now();
-				std::wcout << L"Peer: PONG" << std::endl;
+				g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Peer: PONG");
 			}
 
 			fd_set readSet;
@@ -215,9 +216,12 @@ void Peer::ThreadProc() {
 			timeval timeout{};
 			timeout.tv_sec = 10;
 			int selresult = select(0, &readSet, nullptr, nullptr, &timeout);
+			g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Looping (inner)");
 		}
+		g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Closing socket");
 		CloseSocket();
 		if (!stopRequested_.load()) std::this_thread::sleep_for(std::chrono::seconds(5));
+		g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Looping (outer)");
 	}
-	std::wcerr << L"Peer thread exiting." << std::endl;
+	g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Peer thread exiting.");
 }
