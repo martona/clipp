@@ -7,13 +7,17 @@
 #include <sodium.h>
 #include <mdns.h>
 
+#include <windows.h>
+
 #include "ClipboardNotificationThread.h"
 #include "KeyManager.h"
 #include "MDNSThread.h"
 #include "Listener.h"
-#include <windows.h>
+#include "Peer.h"
+#include "PeerManager.h"
 
 Settings g_settings;
+PeerManager g_peerManager;
 
 namespace {
     KeyManager g_keyManager(g_settings);
