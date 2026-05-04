@@ -1,12 +1,12 @@
 #pragma once
-#include <windows.h>
+#include "platform.h"
 #include "ClipboardData.h"
 
 // Creates an invisible window for clipboard notifications
-using ClipboardCallback = void(*)(HWND);
+using ClipboardCallback = void(*)(PlatformWindowHandle);
 
 // Creates an invisible window for clipboard notifications, with callback
-HWND CreateClipboardNotificationWindow(ClipboardCallback cb);
+PlatformWindowHandle CreateClipboardNotificationWindow(ClipboardCallback cb);
 
 // Starts the clipboard notification thread. Returns true on success.
 bool StartClipboardNotification(ClipboardCallback callback);
@@ -15,8 +15,5 @@ bool StartClipboardNotification(ClipboardCallback callback);
 void StopClipboardNotification();
 
 // Reads the clipboard data and returns it as packet
-ClipboardPayload ReadClipboardData(HWND hwnd);
+ClipboardPayload ReadClipboardData(PlatformWindowHandle hwnd);
 void SetClipboardData(const ClipboardPayload& payload);
-
-using ClipboardCallback = void(*)(HWND);
-

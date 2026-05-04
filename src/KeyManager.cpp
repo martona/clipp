@@ -9,6 +9,8 @@
 #include <sstream>
 #include <vector>
 
+KeyManager g_keyManager(g_settings);
+
 KeyManager::KeyManager(Settings& settings)
     : settings_(settings) {
 }

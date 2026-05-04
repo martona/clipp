@@ -2,12 +2,14 @@
 
 #include <cstring>
 #include <algorithm>
+#include <ctime>
 
 #ifdef _WIN32
     #define WIN32_LEAN_AND_MEAN 
     #define NOMINMAX
     #include <windows.h>
     #include <WinSock2.h>
+    #include <ws2tcpip.h>
     #include <conio.h>
 #elif defined(__APPLE__)
     #include <TargetConditionals.h>
@@ -41,6 +43,23 @@
     static size_t utf16_to_utf8(const wchar_t* utf16, size_t n_utf16, char* utf8, size_t n_utf8) {
 	    return WideCharToMultiByte(CP_UTF8, 0, utf16, (int)n_utf16, utf8, (int)n_utf8, nullptr, nullptr);
     }
+
+    static inline int vsnprintf_truncate(char* buffer, size_t size, const char* format, va_list args) {
+        return _vsnprintf_s(buffer, size, _TRUNCATE, format, args);
+    }
+
+    static inline int vsnwprintf_truncate(wchar_t* buffer, size_t size, const wchar_t* format, va_list args) {
+        return _vsnwprintf_s(buffer, size, _TRUNCATE, format, args);
+    }
+
+    static inline int localtime_safe(struct tm* tmDest, const time_t* sourceTime) {
+        if (!tmDest || !sourceTime) return -1;
+        // Windows: Returns errno_t (0 on success)
+        return localtime_s(tmDest, sourceTime) == 0 ? 0 : -1;
+    }
+
+    typedef int socklen_t;
+
 #elif defined(__APPLE__)
     using PlatformWindowHandle = void*;
     static size_t utf8_to_utf16(const char* utf8, size_t n_utf8, wchar_t* utf16, size_t n_utf16) {
@@ -53,11 +72,27 @@
         return 0;
     }
 
+    static inline int vsnprintf_truncate(char* buffer, size_t size, const char* format, va_list args) {
+        return std::vsnprintf(buffer, size, format, args);
+    }
+
+    static inline int vsnwprintf_truncate(wchar_t* buffer, size_t size, const wchar_t* format, va_list args) {
+        return std::vswprintf(buffer, size, format, args);
+    }
+
+    static inline int localtime_safe(struct tm* tmDest, const time_t* sourceTime) {
+        if (!tmDest || !sourceTime) return -1;
+        // macOS / POSIX: Returns pointer to tm (nullptr on failure)
+        return localtime_r(sourceTime, tmDest) != nullptr ? 0 : -1;
+    }
+
     typedef int SOCKET;
     const int INVALID_SOCKET = -1;
     const int SOCKET_ERROR = -1;
+    #define SD_RECEIVE SHUT_RD
+    #define SD_SEND    SHUT_WR
+    #define SD_BOTH    SHUT_RDWR
     static inline void closesocket(SOCKET s) { close(s); }
-
 #endif
 
 static inline void strncpys(char* dst, const char* src, size_t maxlen) {
@@ -71,3 +106,5 @@ template <size_t N>
 static inline void strncpys(char(&dst)[N], const char* src) {
     strncpys(dst, src, N);
 }
+
+#define cntof(arr) (sizeof(arr) / sizeof(arr[0]))

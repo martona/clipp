@@ -38,7 +38,7 @@ void Logger::log(const wchar_t* function, Level level, const char* message, ...)
     va_start(args, message);
     constexpr size_t kBufferSize = 4096;
     char buffer[kBufferSize]{};
-    _vsnprintf_s(buffer, kBufferSize, _TRUNCATE, message != nullptr ? message : "", args);
+    vsnprintf_truncate(buffer, kBufferSize, message != nullptr ? message : "", args);
     va_end(args);
 
     const std::wstring messageW = Utf8ToWide(buffer);
@@ -48,7 +48,7 @@ void Logger::log(const wchar_t* function, Level level, const char* message, ...)
 void Logger::logV(const char* function, Level level, const char* message, va_list args) {
     constexpr size_t kBufferSize = 4096;
     char buffer[kBufferSize]{};
-    _vsnprintf_s(buffer, kBufferSize, _TRUNCATE, message != nullptr ? message : "", args);
+    vsnprintf_truncate(buffer, kBufferSize, message != nullptr ? message : "", args);
 
     const std::wstring functionW = Utf8ToWide(function != nullptr ? function : "");
     const std::wstring messageW = Utf8ToWide(buffer);
@@ -58,7 +58,7 @@ void Logger::logV(const char* function, Level level, const char* message, va_lis
 void Logger::logV(const wchar_t* function, Level level, const wchar_t* message, va_list args) {
     constexpr size_t kBufferSize = 4096;
     wchar_t buffer[kBufferSize]{};
-    _vsnwprintf_s(buffer, kBufferSize, _TRUNCATE, message != nullptr ? message : L"", args);
+    vsnwprintf_truncate(buffer, kBufferSize, message != nullptr ? message : L"", args);
     writeLine(function, level, buffer);
 }
 
@@ -68,7 +68,7 @@ void Logger::writeLine(const wchar_t* function, Level level, const wchar_t* mess
     std::time_t nowTime = std::chrono::system_clock::to_time_t(now);
 
     std::tm tmNow{};
-    localtime_s(&tmNow, &nowTime);
+    localtime_safe(&tmNow, &nowTime);
 
     std::wostringstream timestamp;
     timestamp << std::put_time(&tmNow, L"%Y-%m-%d %H:%M:%S") << L'.' << std::setfill(L'0') << std::setw(3) << millis.count();

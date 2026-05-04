@@ -6,7 +6,7 @@
 #include <cstring>
 #include <iostream>
 #include <thread>
-#include <ws2tcpip.h>
+//#include <ws2tcpip.h>
 
 #include "Settings.h"
 #include "CryptoChannel.h"
@@ -80,10 +80,10 @@ std::chrono::steady_clock::time_point Peer::createdAt() const {
 }
 
 bool Peer::RecvAll(SOCKET sock, char* buffer, int length) {
-	int total = 0;
+	size_t total = 0;
 	while (total < length) {
-		const int received = recv(sock, buffer + total, length - total, 0);
-		if (received <= 0) {
+		size_t received = recv(sock, buffer + total, length - total, 0);
+		if (received == 0) {
 			return false;
 		}
 		total += received;
@@ -92,10 +92,10 @@ bool Peer::RecvAll(SOCKET sock, char* buffer, int length) {
 }
 
 bool Peer::SendAll(SOCKET sock, const char* buffer, int length) {
-	int total = 0;
+	size_t total = 0;
 	while (total < length) {
-		const int sent = send(sock, buffer + total, length - total, 0);
-		if (sent <= 0) {
+		size_t sent = send(sock, buffer + total, length - total, 0);
+		if (sent == 0) {
 			return false;
 		}
 		total += sent;

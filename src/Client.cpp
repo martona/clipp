@@ -7,7 +7,6 @@
 #include <cwchar>
 #include <chrono>
 #include <cstring>
-#include <ws2tcpip.h>
 #include <vector>
 
 #include "CryptoChannel.h"
@@ -59,10 +58,10 @@ std::wstring Client::remoteHostName() const {
 }
 
 bool Client::RecvAll(SOCKET sock, char* buffer, int length) {
-    int total = 0;
+    size_t total = 0;
     while (total < length) {
-        const int received = recv(sock, buffer + total, length - total, 0);
-        if (received <= 0) {
+        size_t received = recv(sock, buffer + total, length - total, 0);
+        if (received == 0) {
             return false;
         }
         total += received;
@@ -71,10 +70,10 @@ bool Client::RecvAll(SOCKET sock, char* buffer, int length) {
 }
 
 bool Client::SendAll(SOCKET sock, const char* buffer, int length) {
-    int total = 0;
+    size_t total = 0;
     while (total < length) {
-        const int sent = send(sock, buffer + total, length - total, 0);
-        if (sent <= 0) {
+        size_t sent = send(sock, buffer + total, length - total, 0);
+        if (sent == 0) {
             return false;
         }
         total += sent;

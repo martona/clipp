@@ -1,3 +1,4 @@
+#include "platform.h"
 #include "MDNSThread.h"
 #include "Settings.h"
 #include "KeyManager.h"
@@ -9,8 +10,6 @@
 #include <string>
 #include <array>
 #include <atomic>
-#include <winsock2.h>
-#include <ws2tcpip.h>
 #include <sstream>
 #include <iomanip>
 
@@ -23,11 +22,10 @@ static std::atomic<bool> g_mdnsRunning{ false };
 static SOCKET g_mdnsSock = INVALID_SOCKET;
 static std::array<unsigned char, 32> g_lastSentQueryID{};
 static std::array<unsigned char, 32> g_hostID{};
-static KeyManager g_keyManager(g_settings);
 
 struct mdns_packet {
     mdns_packet() {
-		ZeroMemory(this, sizeof(*this));
+		memset(this, 0, sizeof(*this));
     }
 	char selector[16];
 	u_short version;
@@ -69,7 +67,7 @@ static bool EncryptPacket(const mdns_packet& packet, encrypted_mdns_packet& encr
         networkKey.data()) == 0;
 }
 
-static bool DecryptPacket(const char* packet, int packetLen, mdns_packet& decryptedPacket) {
+static bool DecryptPacket(const char* packet, size_t packetLen, mdns_packet& decryptedPacket) {
     if (!packet || packetLen != sizeof(encrypted_mdns_packet))
         return false;
 
@@ -99,9 +97,9 @@ static mdns_packet BuildDiscoveryPacket(const std::string& hostName) {
 	packet.version = htons(kProtocolVersion);
 	randombytes_buf(packet.queryID, sizeof(packet.queryID));
 	randombytes_buf(packet.nonce, sizeof(packet.nonce));
-	strncpy_s(packet.selector, _countof(packet.selector), kProtocolSelector, _TRUNCATE);
-	strncpy_s(packet.hostName, _countof(packet.hostName), hostName.c_str(), _TRUNCATE);
-	strncpy_s(packet.verb, _countof(packet.verb), "query", _TRUNCATE);
+	strncpys(packet.selector, kProtocolSelector, cntof(packet.selector));
+	strncpys(packet.hostName, hostName.c_str(), cntof(packet.hostName));
+	strncpys(packet.verb, "query", cntof(packet.verb));
     std::memcpy(packet.hostID, g_hostID.data(), sizeof(packet.hostID));
 	std::memcpy(g_lastSentQueryID.data(), packet.queryID, sizeof(packet.queryID));
     return packet;
@@ -111,9 +109,9 @@ static mdns_packet BuildResponsePacket(const std::string& hostName, const unsign
     mdns_packet packet;
     packet.version = htons(kProtocolVersion);
     randombytes_buf(packet.nonce, sizeof(packet.nonce));
-    strncpy_s(packet.selector, _countof(packet.selector), kProtocolSelector, _TRUNCATE);
-    strncpy_s(packet.hostName, _countof(packet.hostName), hostName.c_str(), _TRUNCATE);
-    strncpy_s(packet.verb, _countof(packet.verb), "response", _TRUNCATE);
+    strncpys(packet.selector, kProtocolSelector, cntof(packet.selector));
+    strncpys(packet.hostName, hostName.c_str(), cntof(packet.hostName));
+    strncpys(packet.verb, "response", cntof(packet.verb));
 	packet.port = htons(static_cast<u_short>(g_settings.tcpPort()));
     std::memcpy(packet.hostID, g_hostID.data(), sizeof(packet.hostID));
     std::memcpy(packet.queryID, queryID, sizeof(packet.queryID));
@@ -131,7 +129,7 @@ static bool ParseDiscoveryPacket(mdns_packet& pkt,
                                 const unsigned char** rawHostID) 
 {
     // Validate selector
-    if (strncmp(pkt.selector, kProtocolSelector, _countof(pkt.selector)) != 0)
+    if (strncmp(pkt.selector, kProtocolSelector, cntof(pkt.selector)) != 0)
         return false;
     // Validate version
     if (pkt.version != htons(kProtocolVersion))
@@ -140,8 +138,8 @@ static bool ParseDiscoveryPacket(mdns_packet& pkt,
     if (pkt.hostName[0] == 0 || pkt.verb[0] == 0)
         return false;
 	// Force null-termination of hostName and verb
-	pkt.hostName[_countof(pkt.hostName) - 1] = 0;
-	pkt.verb[_countof(pkt.verb) - 1] = 0;
+	pkt.hostName[cntof(pkt.hostName) - 1] = 0;
+	pkt.verb[cntof(pkt.verb) - 1] = 0;
     hostName = pkt.hostName;
     verb = pkt.verb;
     if (rawQueryID)
@@ -173,7 +171,7 @@ static bool SendDiscoveryPacket(SOCKET sock, const sockaddr_in& targetAddr, cons
     if (!EncryptPacket(pkt, encryptedPacket))
         return false;
 
-    int sent = sendto(sock, reinterpret_cast<const char*>(&encryptedPacket), sizeof(encryptedPacket), 0,
+    size_t sent = sendto(sock, reinterpret_cast<const char*>(&encryptedPacket), sizeof(encryptedPacket), 0,
         reinterpret_cast<const sockaddr*>(&targetAddr), sizeof(targetAddr));
     return sent == sizeof(encryptedPacket);
 }
@@ -181,21 +179,13 @@ static bool SendDiscoveryPacket(SOCKET sock, const sockaddr_in& targetAddr, cons
 static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback) {
     g_mdnsCallback = callback;
 
-    WSADATA wsaData;
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        initPromise.set_value(false);
-        return;
-    }
-
 	in_addr multicastAddrn = {};
     if (1 != inet_pton(AF_INET, g_settings.multicastIp().c_str(), &multicastAddrn)) {
-        WSACleanup();
         initPromise.set_value(false);
 		return;
     }
 	in_addr listenerAddrn = {};
     if (1 != inet_pton(AF_INET, g_settings.listenerIp().c_str(), &listenerAddrn)) {
-        WSACleanup();
         initPromise.set_value(false);
         return;
     }
@@ -204,40 +194,37 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
 
     SOCKET sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sock == INVALID_SOCKET) {
-        WSACleanup();
         initPromise.set_value(false);
         return;
     }
     if (!g_settings.getHostID(g_hostID)) {
         closesocket(sock);
-        WSACleanup();
         initPromise.set_value(false);
         return;
     }
 
-    BOOL reuseAddr = TRUE;
+    int reuseAddr = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuseAddr), sizeof(reuseAddr));
 
     sockaddr_in bindAddr{};
     bindAddr.sin_family = AF_INET;
     bindAddr.sin_port = htons(static_cast<u_short>(g_settings.mdnsPort()));
-    bindAddr.sin_addr.s_addr = listenerAddrn.S_un.S_addr;
+    bindAddr.sin_addr.s_addr = listenerAddrn.s_addr;
     if (bind(sock, reinterpret_cast<const sockaddr*>(&bindAddr), sizeof(bindAddr)) == SOCKET_ERROR) {
         closesocket(sock);
-        WSACleanup();
         initPromise.set_value(false);
         return;
     }
 
     ip_mreq group{};
-    group.imr_multiaddr.s_addr = multicastAddrn.S_un.S_addr;
-    group.imr_interface.s_addr = listenerAddrn.S_un.S_addr;
+    group.imr_multiaddr.s_addr = multicastAddrn.s_addr;
+    group.imr_interface.s_addr = listenerAddrn.s_addr;
     setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, reinterpret_cast<const char*>(&group), sizeof(group));
 
     sockaddr_in multicastAddr{};
     multicastAddr.sin_family = AF_INET;
     multicastAddr.sin_port = htons(static_cast<u_short>(g_settings.mdnsPort()));
-    multicastAddr.sin_addr.s_addr = multicastAddrn.S_un.S_addr;
+    multicastAddr.sin_addr.s_addr = multicastAddrn.s_addr;
 
     g_mdnsSock = sock;
     g_mdnsRunning = true;
@@ -267,10 +254,10 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
 
         if (ready > 0 && FD_ISSET(sock, &readfds)) {
             sockaddr_in fromAddr{};
-            int fromLen = sizeof(fromAddr);
-            const int bytesRead = recvfrom(sock, recvBuffer.data(), static_cast<int>(recvBuffer.size()), 0,
+            socklen_t fromLen = sizeof(fromAddr);
+            const size_t bytesRead = recvfrom(sock, recvBuffer.data(), static_cast<int>(recvBuffer.size()), 0,
                 reinterpret_cast<sockaddr*>(&fromAddr), &fromLen);
-            if (bytesRead <= 0)
+            if (bytesRead == 0)
                 continue;
 
             mdns_packet decryptedPacket;
@@ -329,7 +316,6 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
 
     g_mdnsSock = INVALID_SOCKET;
     g_mdnsRunning = false;
-    WSACleanup();
 }
 
 bool StartMDNS(MDNSCallback callback) {

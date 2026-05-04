@@ -5,8 +5,7 @@
 #include <iostream>
 #include <memory>
 
-#include <winsock2.h>
-#include <ws2tcpip.h>
+//#include <ws2tcpip.h>
 
 #include "Client.h"
 #include "Settings.h"
@@ -52,13 +51,6 @@ void Listener::InterruptibleSleep(std::chrono::milliseconds duration) {
 }
 
 void Listener::ThreadProc() {
-    WSADATA wsaData{};
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        g_logger.log(__FUNCTION__, Logger::Level::Error, L"Listener: WSAStartup failed.");
-        running_.store(false);
-        return;
-    }
-
     while (running_.load()) {
         SOCKET listenSock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (listenSock == INVALID_SOCKET) {
@@ -154,6 +146,4 @@ void Listener::ThreadProc() {
             }
         }
     }
-
-    WSACleanup();
 }

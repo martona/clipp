@@ -3,10 +3,9 @@
 #include <atomic>
 #include <mutex>
 #include <thread>
-#include <winsock2.h>
+#include "platform.h"
 
 #include "ClientManager.h"
-
 #include "Client.h"
 
 class Listener {

@@ -4,39 +4,56 @@
 #include <cstdlib>
 #include <iostream>
 #include <sodium.h>
+#include <string>
 #include <mdns.h>
 
 #include "platform.h"
 
 #include "Logger.h"
-#include "platform_win32_Clipboard.h"
 #include "KeyManager.h"
 #include "MDNSThread.h"
 #include "Listener.h"
 #include "Peer.h"
 #include "PeerManager.h"
+#include "Clipboard.h"
+
+#ifndef _WIN32
+    #include <termios.h>
+    #include <unistd.h>
+#endif
 
 Settings g_settings;
 PeerManager g_peerManager;
 
 KeyManager g_keyManager(g_settings);
 
-static std::string ReadHiddenLine(const std::string& prompt) {
-    g_logger.log(__FUNCTION__, Logger::Level::Info, "%s", prompt.c_str());
+static std::string ReadHiddenLine(const std::string & prompt) {
+    std::cout << prompt.c_str();
     std::string input;
-    // Get the standard input handle
-    HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
-    DWORD mode = 0;
-    // Save the current console mode
-    GetConsoleMode(hStdin, &mode);
-    // Disable the echo input flag
-    SetConsoleMode(hStdin, mode & (~ENABLE_ECHO_INPUT));
-    // Read the input normally (backspaces are handled by the OS automatically)
-    std::getline(std::cin, input);
-    // Restore the original console mode
-    SetConsoleMode(hStdin, mode);
-    // Print a newline since the user's 'Enter' key press was also suppressed
-    
+
+    #ifdef _WIN32
+        HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
+        DWORD mode = 0;
+        GetConsoleMode(hStdin, &mode);
+        SetConsoleMode(hStdin, mode & (~ENABLE_ECHO_INPUT));
+
+        std::getline(std::cin, input);
+
+        SetConsoleMode(hStdin, mode);
+    #else
+        termios oldt;
+        tcgetattr(STDIN_FILENO, &oldt);
+
+        termios newt = oldt;
+        newt.c_lflag &= ~ECHO;
+        tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+
+        std::getline(std::cin, input);
+
+        tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+    #endif
+
+    std::cout << std::endl;
     return input;
 }
 
@@ -104,6 +121,13 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
+    #ifdef _WIN32
+        WSADATA wsaData;
+        if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+            return -1;
+        }
+    #endif
+
     // libsodium requires initialization before calling any other functions
     if (sodium_init() < 0) {
         g_logger.log(__FUNCTION__, Logger::Level::Error, "Fatal: libsodium failed to initialize!");
@@ -149,6 +173,10 @@ int main(int argc, char* argv[]) {
 
     g_peerManager.ClearPeers();
 	g_logger.log(__FUNCTION__, Logger::Level::Info, "Peer manager cleared.");
+
+    #ifdef _WIN32
+        WSACleanup();
+    #endif
 
     return 0;
 }

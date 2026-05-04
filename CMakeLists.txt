@@ -20,6 +20,10 @@ find_package(unofficial-sodium CONFIG REQUIRED)
 find_package(xxHash CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 
+#find_package(unofficial-sodium CONFIG REQUIRED)
+## Force CMake to print the absolute path where it found the configuration, then crash
+#message(FATAL_ERROR ">>> GHOST CACHE LOCATED AT: ${unofficial-sodium_DIR} <<<")
+
 target_link_libraries(clipp PRIVATE 
     unofficial-sodium::sodium
     xxHash::xxhash
