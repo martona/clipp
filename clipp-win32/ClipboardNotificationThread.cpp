@@ -3,8 +3,8 @@
 #include <thread>
 #include <future>
 #include <cstring>
-
 #include <xxhash.h>
+#include "Logger.h"
 
 static std::thread g_clipboardThread;
 static HWND g_hwnd = nullptr;
@@ -84,7 +84,9 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
                         GlobalUnlock(hData);
                     }
                 }
-            }
+            } else {
+                g_logger.log(__FUNCTION__, Logger::Level::Info, L"No supported clipboard format available");
+			}
             CloseClipboard();
             break;
         }
@@ -100,7 +102,7 @@ void SetClipboardData(const ClipboardPayload& payload) {
     {
         std::lock_guard<std::mutex> lock(g_hashMutex);
         if (newHash.high64 == g_lastClipboardHash.high64 && newHash.low64 == g_lastClipboardHash.low64) {
-            // Data is the same as last time, skip setting clipboard
+            g_logger.log(__FUNCTION__, Logger::Level::Info, L"Clipboard hash match, not setting clipboard data");
             return;
         }
 	}
