@@ -6,8 +6,9 @@
 #include <mutex>
 #include <string>
 #include <thread>
-#include <winsock2.h>
 #include <functional>
+
+#include "platform.h"
 
 #include "ClipboardData.h"
 

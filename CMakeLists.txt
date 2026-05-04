@@ -3,7 +3,8 @@ project(clipp)
 
 set(CMAKE_CXX_STANDARD 20)
 
-file(GLOB_RECURSE SOURCES "src/*.cpp" "src/*.h")
+file(GLOB SOURCES "src/*.cpp" "src/*.h")
+list(FILTER SOURCES EXCLUDE REGEX "vcpkg_installed")
 
 if (APPLE)
     list(FILTER SOURCES EXCLUDE REGEX "platform_win32_*")

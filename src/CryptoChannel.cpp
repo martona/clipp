@@ -32,21 +32,21 @@ bool CryptoChannel::LoadNetworkKey(std::array<unsigned char, crypto_secretbox_KE
     return true;
 }
 
-bool CryptoChannel::RecvAll(SOCKET sock, char* buffer, int length) { 
-    int total = 0; 
+bool CryptoChannel::RecvAll(SOCKET sock, char* buffer, size_t length) { 
+    size_t total = 0; 
     while (total < length) { 
-        int r = recv(sock, buffer + total, length - total, 0); 
-        if (r <= 0) return false; 
+        size_t r = recv(sock, buffer + total, (int)(length - total), 0); 
+        if (r == 0) return false; 
         total += r; 
     } 
     return true; 
 }
 
-bool CryptoChannel::SendAll(SOCKET sock, const char* buffer, int length) { 
-    int total = 0; 
+bool CryptoChannel::SendAll(SOCKET sock, const char* buffer, size_t length) { 
+    size_t total = 0; 
     while (total < length) { 
-        int s = send(sock, buffer + total, length - total, 0); 
-        if (s <= 0) return false; 
+        size_t s = send(sock, buffer + total, (int)(length - total), 0); 
+        if (s == 0) return false; 
         total += s; 
     } 
     return true; 

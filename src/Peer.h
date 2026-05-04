@@ -9,7 +9,7 @@
 #include <vector> 
 #include <memory> 
 #include <variant>
-#include <winsock2.h>
+#include "platform.h"
 #include "BlockingQueue.h"
 #include "ClipboardData.h"
 class CryptoChannel;

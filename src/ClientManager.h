@@ -1,9 +1,9 @@
 #pragma once
 
+#include "platform.h"
 #include <memory>
 #include <mutex>
 #include <vector>
-#include <winsock2.h>
 #include <functional>
 #include <array>
 #include <string>

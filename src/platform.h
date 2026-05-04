@@ -7,10 +7,18 @@
     #define WIN32_LEAN_AND_MEAN 
     #define NOMINMAX
     #include <windows.h>
+    #include <WinSock2.h>
+    #include <conio.h>
 #elif defined(__APPLE__)
     #include <TargetConditionals.h>
     #include <cstddef>
-    #if TARGET_OS_MAC
+    #include <sys/socket.h>
+    #include <arpa/inet.h>
+    #include <netinet/in.h>
+    #include <netdb.h>
+    #include <unistd.h>
+    #include <cerrno>
+#if TARGET_OS_MAC
         // macOS-specific headers will go here eventually
         // e.g., #include <ApplicationServices/ApplicationServices.h>
     #else
@@ -44,6 +52,12 @@
         //TODO
         return 0;
     }
+
+    typedef int SOCKET;
+    const int INVALID_SOCKET = -1;
+    const int SOCKET_ERROR = -1;
+    static inline void closesocket(SOCKET s) { close(s); }
+
 #endif
 
 static inline void strncpys(char* dst, const char* src, size_t maxlen) {

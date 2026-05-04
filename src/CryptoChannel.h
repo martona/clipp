@@ -5,21 +5,7 @@
 #include <string>
 #include <sodium.h>
 #include <vector>
-#ifdef _WIN32
-    #define WIN32_LEAN_AND_MEAN
-    #include <winsock2.h>
-#else
-    #include <sys/socket.h>
-    #include <arpa/inet.h>
-    #include <netinet/in.h>
-    #include <netdb.h>
-    #include <unistd.h>
-    #include <cerrno>
-    using SOCKET=int;
-    const int INVALID_SOCKET = -1;
-    const int SOCKET_ERROR = -1;
-    static inline void closesocket(SOCKET s) { close(s); }
-#endif
+#include "platform.h"
 
 class CryptoChannel {
 public:
@@ -48,8 +34,8 @@ public:
 
 private:
     bool LoadNetworkKey(std::array<unsigned char, crypto_secretbox_KEYBYTES>& networkKey);
-    static bool RecvAll(SOCKET sock, char* buffer, int length);
-    static bool SendAll(SOCKET sock, const char* buffer, int length);
+    static bool RecvAll(SOCKET sock, char* buffer, size_t length);
+    static bool SendAll(SOCKET sock, const char* buffer, size_t length);
 
     crypto_secretstream_xchacha20poly1305_state txState_{};
     crypto_secretstream_xchacha20poly1305_state rxState_{};

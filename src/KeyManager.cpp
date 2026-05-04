@@ -1,22 +1,20 @@
 #include "KeyManager.h"
 
-#include <windows.h>
-#include <wincrypt.h>
+#ifdef _WIN32
+    #define WIN32_LEAN_AND_MEAN 
+    #include <windows.h>
+    #include <wincrypt.h>
+#endif
 
 #include <sstream>
 #include <vector>
-
-static std::string MakeWin32ErrorMessage(const char* prefix, DWORD errorCode) {
-    std::ostringstream out;
-    out << prefix << " (Win32 error " << errorCode << ")";
-    return out.str();
-}
 
 KeyManager::KeyManager(Settings& settings)
     : settings_(settings) {
 }
 
 bool KeyManager::SetNetworkKey(const std::array<unsigned char, NetworkKeySize>& networkKey, std::string* errorMessage) {
+#ifdef _WIN32
     DATA_BLOB plainData{};
     plainData.pbData = const_cast<BYTE*>(networkKey.data());
     plainData.cbData = static_cast<DWORD>(networkKey.size());
@@ -31,13 +29,17 @@ bool KeyManager::SetNetworkKey(const std::array<unsigned char, NetworkKeySize>& 
             CRYPTPROTECT_UI_FORBIDDEN,
             &encryptedData)) {
         if (errorMessage != nullptr) {
-            *errorMessage = MakeWin32ErrorMessage("CryptProtectData failed", GetLastError());
+            //TODO
         }
         return false;
     }
 
     std::vector<unsigned char> encryptedBuffer(encryptedData.pbData, encryptedData.pbData + encryptedData.cbData);
     LocalFree(encryptedData.pbData);
+#else
+    //TODO
+    std::vector<unsigned char> encryptedBuffer;
+#endif
 
     if (!settings_.setEncryptedNetworkKey(encryptedBuffer)) {
         if (errorMessage != nullptr) {
@@ -65,6 +67,7 @@ bool KeyManager::GetNetworkKey(std::array<unsigned char, NetworkKeySize>& networ
         return false;
     }
 
+#ifdef _WIN32
     DATA_BLOB encryptedData{};
     encryptedData.pbData = encryptedBuffer.data();
     encryptedData.cbData = static_cast<DWORD>(encryptedBuffer.size());
@@ -79,7 +82,7 @@ bool KeyManager::GetNetworkKey(std::array<unsigned char, NetworkKeySize>& networ
             CRYPTPROTECT_UI_FORBIDDEN,
             &plainData)) {
         if (errorMessage != nullptr) {
-            *errorMessage = MakeWin32ErrorMessage("CryptUnprotectData failed", GetLastError());
+            //TODO
         }
         return false;
     }
@@ -94,7 +97,9 @@ bool KeyManager::GetNetworkKey(std::array<unsigned char, NetworkKeySize>& networ
 
     std::copy(plainData.pbData, plainData.pbData + NetworkKeySize, networkKey.begin());
     LocalFree(plainData.pbData);
-
+#else
+    //TODO
+#endif
     cachedNetworkKey_ = networkKey;
     cacheValid_ = true;
     return true;
