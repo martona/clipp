@@ -27,13 +27,6 @@ static KeyManager g_keyManager(g_settings);
 
 // TODO
 
-// build a host_registry object that tracks hostName, hostID, lastSeen, and IP
-
-// host-to-host communication: upon discovery, the host with the lexicographically smaller hostID
-// performs a tcp connect
-
-// implement crypto_secretbox for UDP communication using PSK
-
 // for tcp communication:
 //   authenticated ephemeral diffie-hellman handshake to establish a shared secret
 //   they swap their ephemeral public keys
