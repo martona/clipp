@@ -10,12 +10,14 @@
 #include "ClipboardNotificationThread.h"
 #include "KeyManager.h"
 #include "MDNSThread.h"
+#include "Listener.h"
 #include <windows.h>
 
 Settings g_settings;
 
 namespace {
     KeyManager g_keyManager(g_settings);
+    Listener g_listener;
 }
 
 static std::string ReadHiddenLine(const std::string& prompt) {
@@ -41,7 +43,7 @@ void OnClipboardNotification() {
     std::cout << "Clipboard debounced and processed!" << std::endl;
 }
 
-void OnMDNSNotification(const wchar_t* hostName, const wchar_t* hostID, const wchar_t* senderIp, const wchar_t* queryID, const wchar_t* nonce, const wchar_t* verb, u_short port) {
+void OnMDNSNotification(const wchar_t* hostName, const wchar_t* hostID, const wchar_t* senderIp, const wchar_t* queryID, const wchar_t* nonce, const wchar_t* verb, u_short port, const unsigned char* rawHostID) {
 	std::wcout << L"mDNS notification received for host: " << hostName << L" / " << hostID
 		<< L"\n  from: " << senderIp << L":" << port
                << L"\n  verb:    " << verb
@@ -92,8 +94,13 @@ int main(int argc, char* argv[]) {
     // Start worker threads
     if (StartClipboardNotification(OnClipboardNotification)) {
         if (StartMDNS(OnMDNSNotification)) {
-            std::cout << "Press Enter to exit..." << std::endl;
-            std::cin.get();
+            if (g_listener.Start()) {
+                std::cout << "Press Enter to exit..." << std::endl;
+                std::cin.get();
+                g_listener.Stop();
+            } else {
+                std::cerr << "Failed to start TCP listener thread!" << std::endl;
+            }
             StopMDNS();
         } else {
             std::cerr << "Failed to start mDNS thread!" << std::endl;

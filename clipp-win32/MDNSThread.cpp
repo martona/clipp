@@ -139,7 +139,7 @@ static mdns_packet BuildResponsePacket(const std::wstring& hostName, const unsig
     return packet;
 }
 
-static bool ParseDiscoveryPacket(mdns_packet& pkt, std::wstring& hostName, std::wstring& hostID, std::wstring& verb, std::wstring& queryID, std::wstring& nonce, unsigned short& hostPort, const unsigned char** rawQueryID) {
+static bool ParseDiscoveryPacket(mdns_packet& pkt, std::wstring& hostName, std::wstring& hostID, std::wstring& verb, std::wstring& queryID, std::wstring& nonce, unsigned short& hostPort, const unsigned char** rawQueryID, const unsigned char** rawHostID) {
     // Validate selector
     if (wcsncmp(pkt.selector, kProtocolSelector, _countof(pkt.selector)) != 0)
         return false;
@@ -156,6 +156,8 @@ static bool ParseDiscoveryPacket(mdns_packet& pkt, std::wstring& hostName, std::
     verb = pkt.verb;
     if (rawQueryID)
         *rawQueryID = pkt.queryID;
+    if (rawHostID)
+		*rawHostID = pkt.hostID;
 
     if (verb == L"response" && std::memcmp(pkt.queryID, g_lastSentQueryID.data(), sizeof(pkt.queryID)) != 0)
         return false;
@@ -166,8 +168,8 @@ static bool ParseDiscoveryPacket(mdns_packet& pkt, std::wstring& hostName, std::
     std::wostringstream ossQueryID, ossNonce, ossHostID;
     for (int i = 0; i < 32; ++i) {
         ossQueryID << std::hex << std::setw(2) << std::setfill(L'0') << (int)pkt.queryID[i];
-        ossNonce << std::hex << std::setw(2) << std::setfill(L'0') << (int)pkt.nonce[i];
-        ossHostID << std::hex << std::setw(2) << std::setfill(L'0') << (int)pkt.hostID[i];
+        ossNonce   << std::hex << std::setw(2) << std::setfill(L'0') << (int)pkt.nonce[i];
+        ossHostID  << std::hex << std::setw(2) << std::setfill(L'0') << (int)pkt.hostID[i];
     }
     hostID = ossHostID.str();
     queryID = ossQueryID.str();
@@ -288,7 +290,8 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
             std::wstring discoveredHost, discoveredHostID, verb, discoveredQueryID, discoveredNonce;
 			unsigned short discoveredPort = 0;
             const unsigned char* rawQueryID = nullptr;
-            if (!ParseDiscoveryPacket(decryptedPacket, discoveredHost, discoveredHostID, verb, discoveredQueryID, discoveredNonce, discoveredPort, &rawQueryID))
+            const unsigned char* rawHostID = nullptr;
+            if (!ParseDiscoveryPacket(decryptedPacket, discoveredHost, discoveredHostID, verb, discoveredQueryID, discoveredNonce, discoveredPort, &rawQueryID, &rawHostID))
                 continue;
 
             if (verb == L"query" && rawQueryID != nullptr) {
@@ -304,11 +307,11 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
                 }
             }
 
-            if (g_mdnsCallback) {
+            if (g_mdnsCallback && rawHostID) {
                 char senderIp[INET_ADDRSTRLEN] = {0};
                 inet_ntop(AF_INET, &fromAddr.sin_addr, senderIp, sizeof(senderIp));
 				std::wstring senderIpW(senderIp, senderIp + strlen(senderIp));
-                g_mdnsCallback(discoveredHost.c_str(), discoveredHostID.c_str(), senderIpW.c_str(), discoveredQueryID.c_str(), discoveredNonce.c_str(), verb.c_str(), discoveredPort);
+                g_mdnsCallback(discoveredHost.c_str(), discoveredHostID.c_str(), senderIpW.c_str(), discoveredQueryID.c_str(), discoveredNonce.c_str(), verb.c_str(), discoveredPort, rawHostID);
             }
         }
     }
