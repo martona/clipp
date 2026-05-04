@@ -93,16 +93,21 @@ bool Client::SendAll(SOCKET sock, const char* buffer, int length) {
 void Client::ThreadProc() {
     CryptoChannel channel;
     std::array<unsigned char, 32> remoteHostId{};
-    std::wstring remoteHostName;
-    if (!channel.ServerHandshake(socket_, remoteHostId, remoteHostName)) {
+    std::string remoteHostNameUtf8;
+    if (!channel.ServerHandshake(socket_, remoteHostId, remoteHostNameUtf8)) {
         g_logger.log(__FUNCTION__, Logger::Level::Error, L"Client secure handshake failed.");
     } else {
         {
             std::lock_guard<std::mutex> lock(remoteInfoMutex_);
             remoteHostID_ = remoteHostId;
+            int remoteHostNameWLen = MultiByteToWideChar(CP_UTF8, 0, remoteHostNameUtf8.c_str(), -1, nullptr, 0);
+            std::wstring remoteHostName(remoteHostNameWLen > 0 ? remoteHostNameWLen - 1 : 0, L'\0');
+            if (remoteHostNameWLen > 1) {
+                MultiByteToWideChar(CP_UTF8, 0, remoteHostNameUtf8.c_str(), -1, remoteHostName.data(), remoteHostNameWLen);
+            }
             remoteHostName_ = remoteHostName;
         }
-        g_logger.log(__FUNCTION__, Logger::Level::Info, L"Client connected: %ls", remoteHostName.c_str());
+        g_logger.log(__FUNCTION__, Logger::Level::Info, "Client connected: %s", remoteHostNameUtf8.c_str());
 
         char packet[4] = {};
         while (!stopRequested_.load()) {

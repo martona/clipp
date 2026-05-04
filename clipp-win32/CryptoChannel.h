@@ -8,11 +8,21 @@
 class CryptoChannel {
 public:
     static constexpr size_t HostIdSize = 32;
+    static constexpr size_t HOSTNAME_MAX_BYTES = 256;
 
     CryptoChannel();
 
-    bool ClientHandshake(SOCKET socket, const std::array<unsigned char, HostIdSize>& localHostId, const std::wstring& localHostName, std::array<unsigned char, HostIdSize>& remoteHostId, std::wstring& remoteHostName);
-    bool ServerHandshake(SOCKET socket, std::array<unsigned char, HostIdSize>& remoteHostId, std::wstring& remoteHostName);
+    bool ClientHandshake(SOCKET socket, 
+                        const std::array<unsigned char, 
+                        HostIdSize>& localHostId, 
+                        const std::string& localHostNameUtf8, 
+                        std::array<unsigned char, 
+                        HostIdSize>& remoteHostId, 
+                        std::string& remoteHostNameUtf8);
+    bool ServerHandshake(SOCKET socket, 
+                        std::array<unsigned char, 
+                        HostIdSize>& remoteHostId, 
+                        std::string& remoteHostNameUtf8);
 
     bool SendTaggedMessage(SOCKET socket, const char* tag4);
     bool RecvTaggedMessage(SOCKET socket, char* outTag4);

@@ -1,7 +1,14 @@
 #pragma once
 
 // Callback type: receives discovered host name, sender IP, queryID, and nonce (all as strings)
-using MDNSCallback = void(*)(const wchar_t* hostName, const wchar_t* hostID, const wchar_t* senderIp, const wchar_t* queryID, const wchar_t* nonce, const wchar_t* verb, unsigned short port, const unsigned char* rawHostID);
+using MDNSCallback = void(*)(const char* hostNameUtf8, 
+							const char* hostIDHex, 
+							const char* senderIpUtf8, 
+							const char* queryIDHex, 
+							const char* nonceHex, 
+							const char* verbUtf8, 
+							unsigned short port, 
+							const unsigned char* rawHostID);
 
 // Starts the mDNS thread. Returns true on success.
 bool StartMDNS(MDNSCallback callback);

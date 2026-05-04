@@ -8,10 +8,16 @@
 
 namespace {
 #pragma pack(push, 1)
-struct HandshakeFrame {
-    unsigned char nonce[crypto_secretbox_NONCEBYTES];
-    unsigned char ciphertext[crypto_secretbox_MACBYTES + crypto_kx_PUBLICKEYBYTES + 32 + (256 * sizeof(wchar_t))];
-};
+    struct HandshakePlaintext {
+        unsigned char ephemeralPk[crypto_kx_PUBLICKEYBYTES];
+        unsigned char hostId[CryptoChannel::HostIdSize];
+        char hostNameUTF8[CryptoChannel::HOSTNAME_MAX_BYTES];
+    };
+
+    struct HandshakeFrame {
+        unsigned char nonce[crypto_secretbox_NONCEBYTES];
+        unsigned char ciphertext[crypto_secretbox_MACBYTES + sizeof(HandshakePlaintext)];
+    };
 #pragma pack(pop)
 }
 
@@ -25,35 +31,57 @@ bool CryptoChannel::LoadNetworkKey(std::array<unsigned char, crypto_secretbox_KE
     return true;
 }
 
-bool CryptoChannel::RecvAll(SOCKET sock, char* buffer, int length) { int total = 0; while (total < length) { int r = recv(sock, buffer + total, length - total, 0); if (r <= 0) return false; total += r; } return true; }
-bool CryptoChannel::SendAll(SOCKET sock, const char* buffer, int length) { int total = 0; while (total < length) { int s = send(sock, buffer + total, length - total, 0); if (s <= 0) return false; total += s; } return true; }
+bool CryptoChannel::RecvAll(SOCKET sock, char* buffer, int length) { 
+    int total = 0; 
+    while (total < length) { 
+        int r = recv(sock, buffer + total, length - total, 0); 
+        if (r <= 0) return false; 
+        total += r; 
+    } 
+    return true; 
+}
 
-bool CryptoChannel::ClientHandshake(SOCKET socket, const std::array<unsigned char, HostIdSize>& localHostId, const std::wstring& localHostName, std::array<unsigned char, HostIdSize>& remoteHostId, std::wstring& remoteHostName) {
+bool CryptoChannel::SendAll(SOCKET sock, const char* buffer, int length) { 
+    int total = 0; 
+    while (total < length) { 
+        int s = send(sock, buffer + total, length - total, 0); 
+        if (s <= 0) return false; 
+        total += s; 
+    } 
+    return true; 
+}
+
+bool CryptoChannel::ClientHandshake(SOCKET socket, 
+                                    const std::array<unsigned char, 
+                                    HostIdSize>& localHostId, 
+                                    const std::string& localHostNameUtf8, 
+                                    std::array<unsigned char, HostIdSize>& remoteHostId, 
+                                    std::string& remoteHostNameUtf8) 
+{
     std::array<unsigned char, crypto_secretbox_KEYBYTES> networkKey{};
     if (!LoadNetworkKey(networkKey)) return false;
 
     unsigned char clientPk[crypto_kx_PUBLICKEYBYTES]{}; unsigned char clientSk[crypto_kx_SECRETKEYBYTES]{};
     crypto_kx_keypair(clientPk, clientSk);
 
-    unsigned char plain[crypto_kx_PUBLICKEYBYTES + 32 + (256 * sizeof(wchar_t))]{};
-    std::memcpy(plain, clientPk, crypto_kx_PUBLICKEYBYTES);
-    std::memcpy(plain + crypto_kx_PUBLICKEYBYTES, localHostId.data(), 32);
-    std::wmemset(reinterpret_cast<wchar_t*>(plain + crypto_kx_PUBLICKEYBYTES + 32), 0, 256);
-    wcsncpy_s(reinterpret_cast<wchar_t*>(plain + crypto_kx_PUBLICKEYBYTES + 32), 256, localHostName.c_str(), _TRUNCATE);
+    HandshakePlaintext plain{};
+    std::memcpy(plain.ephemeralPk, clientPk, crypto_kx_PUBLICKEYBYTES);
+    std::memcpy(plain.hostId, localHostId.data(), HostIdSize);
+    strncpy_s(plain.hostNameUTF8, localHostNameUtf8.c_str(), _TRUNCATE);
 
     HandshakeFrame tx{}; randombytes_buf(tx.nonce, sizeof(tx.nonce));
-    crypto_secretbox_easy(tx.ciphertext, plain, sizeof(plain), tx.nonce, networkKey.data());
+    crypto_secretbox_easy(tx.ciphertext, reinterpret_cast<const unsigned char*>(&plain), sizeof(plain), tx.nonce, networkKey.data());
     if (!SendAll(socket, reinterpret_cast<const char*>(&tx), sizeof(tx))) return false;
 
     HandshakeFrame rx{};
     if (!RecvAll(socket, reinterpret_cast<char*>(&rx), sizeof(rx))) return false;
-    unsigned char remotePlain[sizeof(plain)]{};
-    if (crypto_secretbox_open_easy(remotePlain, rx.ciphertext, sizeof(rx.ciphertext), rx.nonce, networkKey.data()) != 0) return false;
+    HandshakePlaintext remotePlain{};
+    if (crypto_secretbox_open_easy(reinterpret_cast<unsigned char*>(&remotePlain), rx.ciphertext, sizeof(rx.ciphertext), rx.nonce, networkKey.data()) != 0) return false;
 
     unsigned char serverPk[crypto_kx_PUBLICKEYBYTES]{};
-    std::memcpy(serverPk, remotePlain, crypto_kx_PUBLICKEYBYTES);
-    std::memcpy(remoteHostId.data(), remotePlain + crypto_kx_PUBLICKEYBYTES, 32);
-    remoteHostName = reinterpret_cast<wchar_t*>(remotePlain + crypto_kx_PUBLICKEYBYTES + 32);
+    std::memcpy(serverPk, remotePlain.ephemeralPk, crypto_kx_PUBLICKEYBYTES);
+    std::memcpy(remoteHostId.data(), remotePlain.hostId, HostIdSize);
+    remoteHostNameUtf8 = remotePlain.hostNameUTF8;
 
     unsigned char rxKey[crypto_kx_SESSIONKEYBYTES]{}; unsigned char txKey[crypto_kx_SESSIONKEYBYTES]{};
     if (crypto_kx_client_session_keys(rxKey, txKey, clientPk, clientSk, serverPk) != 0) return false;
@@ -67,33 +95,36 @@ bool CryptoChannel::ClientHandshake(SOCKET socket, const std::array<unsigned cha
     return true;
 }
 
-bool CryptoChannel::ServerHandshake(SOCKET socket, std::array<unsigned char, HostIdSize>& remoteHostId, std::wstring& remoteHostName) {
+bool CryptoChannel::ServerHandshake(SOCKET socket, 
+                                    std::array<unsigned char, 
+                                    HostIdSize>& remoteHostId, 
+                                    std::string& remoteHostNameUtf8) 
+{
     std::array<unsigned char, crypto_secretbox_KEYBYTES> networkKey{};
     if (!LoadNetworkKey(networkKey)) return false;
 
     HandshakeFrame rx{};
     if (!RecvAll(socket, reinterpret_cast<char*>(&rx), sizeof(rx))) return false;
-    unsigned char remotePlain[crypto_kx_PUBLICKEYBYTES + 32 + (256 * sizeof(wchar_t))]{};
-    if (crypto_secretbox_open_easy(remotePlain, rx.ciphertext, sizeof(rx.ciphertext), rx.nonce, networkKey.data()) != 0) return false;
+    HandshakePlaintext remotePlain{};
+    if (crypto_secretbox_open_easy(reinterpret_cast<unsigned char*>(&remotePlain), rx.ciphertext, sizeof(rx.ciphertext), rx.nonce, networkKey.data()) != 0) return false;
 
     unsigned char clientPk[crypto_kx_PUBLICKEYBYTES]{};
-    std::memcpy(clientPk, remotePlain, crypto_kx_PUBLICKEYBYTES);
-    std::memcpy(remoteHostId.data(), remotePlain + crypto_kx_PUBLICKEYBYTES, 32);
-    remoteHostName = reinterpret_cast<wchar_t*>(remotePlain + crypto_kx_PUBLICKEYBYTES + 32);
+    std::memcpy(clientPk, remotePlain.ephemeralPk, crypto_kx_PUBLICKEYBYTES);
+    std::memcpy(remoteHostId.data(), remotePlain.hostId, HostIdSize);
+    remoteHostNameUtf8 = remotePlain.hostNameUTF8;
 
     std::array<unsigned char, 32> localHostId{}; if (!g_settings.getHostID(localHostId)) return false;
-    wchar_t localHostNameW[256] = L""; char localHostName[256] = {};
-    if (gethostname(localHostName, sizeof(localHostName)) != 0) return false;
-    mbstowcs_s(nullptr, localHostNameW, _countof(localHostNameW), localHostName, _TRUNCATE);
+    char localHostNameUtf8[HOSTNAME_MAX_BYTES] = {};
+    if (gethostname(localHostNameUtf8, sizeof(localHostNameUtf8)) != 0) return false;
 
     unsigned char serverPk[crypto_kx_PUBLICKEYBYTES]{}; unsigned char serverSk[crypto_kx_SECRETKEYBYTES]{};
     crypto_kx_keypair(serverPk, serverSk);
-    unsigned char plain[sizeof(remotePlain)]{};
-    std::memcpy(plain, serverPk, crypto_kx_PUBLICKEYBYTES);
-    std::memcpy(plain + crypto_kx_PUBLICKEYBYTES, localHostId.data(), 32);
-    wcsncpy_s(reinterpret_cast<wchar_t*>(plain + crypto_kx_PUBLICKEYBYTES + 32), 256, localHostNameW, _TRUNCATE);
+    HandshakePlaintext plain{};
+    std::memcpy(plain.ephemeralPk, serverPk, crypto_kx_PUBLICKEYBYTES);
+    std::memcpy(plain.hostId, localHostId.data(), HostIdSize);
+    strncpy_s(plain.hostNameUTF8, localHostNameUtf8, _TRUNCATE);
     HandshakeFrame tx{}; randombytes_buf(tx.nonce, sizeof(tx.nonce));
-    crypto_secretbox_easy(tx.ciphertext, plain, sizeof(plain), tx.nonce, networkKey.data());
+    crypto_secretbox_easy(tx.ciphertext, reinterpret_cast<const unsigned char*>(&plain), sizeof(plain), tx.nonce, networkKey.data());
     if (!SendAll(socket, reinterpret_cast<const char*>(&tx), sizeof(tx))) return false;
 
     unsigned char rxKey[crypto_kx_SESSIONKEYBYTES]{}; unsigned char txKey[crypto_kx_SESSIONKEYBYTES]{};

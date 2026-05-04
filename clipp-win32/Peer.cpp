@@ -163,14 +163,12 @@ void Peer::ThreadProc() {
 		}
 		CryptoChannel channel;
 		std::array<unsigned char, 32> remoteHostId{};
-		std::wstring remoteHostName;
+		std::string remoteHostNameUtf8;
 		std::array<unsigned char, 32> localHostId{};
 		if (!g_settings.getHostID(localHostId)) { CloseSocket(); continue; }
 		char localHostNameA[256] = {};
 		if (gethostname(localHostNameA, sizeof(localHostNameA)) != 0) { CloseSocket(); continue; }
-		wchar_t localHostNameW[256] = {};
-		mbstowcs_s(nullptr, localHostNameW, _countof(localHostNameW), localHostNameA, _TRUNCATE);
-		if (!channel.ClientHandshake(socket_, localHostId, localHostNameW, remoteHostId, remoteHostName)) {
+		if (!channel.ClientHandshake(socket_, localHostId, localHostNameA, remoteHostId, remoteHostNameUtf8)) {
 			g_logger.log(__FUNCTION__, Logger::Level::Error, L"Peer: secure handshake failed.");
 			CloseSocket();
 			if (!stopRequested_.load()) InterruptibleSleep(std::chrono::milliseconds(5000));

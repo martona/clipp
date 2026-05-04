@@ -49,18 +49,26 @@ void OnClipboardNotification() {
     g_logger.log(__FUNCTION__, Logger::Level::Info, "Clipboard debounced and processed!");
 }
 
-void OnMDNSNotification(const wchar_t* hostName, const wchar_t* hostID, const wchar_t* senderIp, const wchar_t* queryID, const wchar_t* nonce, const wchar_t* verb, u_short port, const unsigned char* rawHostID) {
-	g_logger.log(__FUNCTION__, Logger::Level::Info, L"mDNS notification received for host: %ls / %ls\n  from: %ls:%hu\n  verb:    %ls\n  queryID: %ls\n  nonce:   %ls", hostName, hostID, senderIp, port, verb, queryID, nonce);
+void OnMDNSNotification(const char* hostNameUtf8, 
+                        const char* hostID, 
+                        const char* senderIp, 
+                        const char* queryID, 
+                        const char* nonce, 
+                        const char* verb, 
+                        u_short port, 
+                        const unsigned char* rawHostID) 
+{
+	g_logger.log(__FUNCTION__, Logger::Level::Info, 
+        "mDNS notification received for host: %s / %s\n  from: %s:%hu\n  verb:    %s\n  queryID: %s\n  nonce:   %s", 
+        hostNameUtf8, hostID, senderIp, port, verb, queryID, nonce);
 
-    if (std::wstring(verb) == L"response" && rawHostID != nullptr) {
-        std::wstring senderIpW(senderIp);
-        std::string senderIpA;
-        if (!senderIpW.empty()) {
-            int size_needed = WideCharToMultiByte(CP_UTF8, 0, senderIpW.c_str(), (int)senderIpW.size(), nullptr, 0, nullptr, nullptr);
-            senderIpA.resize(size_needed);
-            WideCharToMultiByte(CP_UTF8, 0, senderIpW.c_str(), (int)senderIpW.size(), &senderIpA[0], size_needed, nullptr, nullptr);
+    if (std::string(verb) == "response" && rawHostID != nullptr) {
+        int hostNameWLen = MultiByteToWideChar(CP_UTF8, 0, hostNameUtf8, -1, nullptr, 0);
+        std::wstring hostNameW(hostNameWLen > 0 ? hostNameWLen - 1 : 0, L'\0');
+        if (hostNameWLen > 1) {
+            MultiByteToWideChar(CP_UTF8, 0, hostNameUtf8, -1, hostNameW.data(), hostNameWLen);
         }
-        g_peerManager.AddPeer(hostName, rawHostID, senderIpA.c_str(), port);
+        g_peerManager.AddPeer(hostNameW.c_str(), rawHostID, senderIp, port);
     }
 
     g_peerManager.CullPeers();
