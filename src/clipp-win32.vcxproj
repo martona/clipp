@@ -134,8 +134,8 @@
     <ClCompile Include="ClientManager.cpp" />
     <ClCompile Include="Client.cpp" />
     <ClCompile Include="CryptoChannel.cpp" />
+    <ClCompile Include="main.cpp" />
     <ClCompile Include="platform_win32_Clipboard.cpp" />
-    <ClCompile Include="clipp.cpp" />
     <ClCompile Include="MDNSThread.cpp" />
     <ClCompile Include="KeyManager.cpp" />
     <ClCompile Include="Logger.cpp" />

@@ -25,8 +25,6 @@
 Settings g_settings;
 PeerManager g_peerManager;
 
-KeyManager g_keyManager(g_settings);
-
 static std::string ReadHiddenLine(const std::string & prompt) {
     std::cout << prompt.c_str();
     std::string input;

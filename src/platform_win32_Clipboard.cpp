@@ -1,4 +1,4 @@
-#include "platform_win32_clipboard.h"
+#include "Clipboard.h"
 #include <windows.h>
 #include <thread>
 #include <future>

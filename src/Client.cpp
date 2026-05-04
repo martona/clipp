@@ -60,7 +60,7 @@ std::wstring Client::remoteHostName() const {
 bool Client::RecvAll(SOCKET sock, char* buffer, int length) {
     size_t total = 0;
     while (total < length) {
-        size_t received = recv(sock, buffer + total, length - total, 0);
+        size_t received = recv(sock, buffer + total, (int)(length - total), 0);
         if (received == 0) {
             return false;
         }
@@ -72,7 +72,7 @@ bool Client::RecvAll(SOCKET sock, char* buffer, int length) {
 bool Client::SendAll(SOCKET sock, const char* buffer, int length) {
     size_t total = 0;
     while (total < length) {
-        size_t sent = send(sock, buffer + total, length - total, 0);
+        size_t sent = send(sock, buffer + total, (int)(length - total), 0);
         if (sent == 0) {
             return false;
         }
