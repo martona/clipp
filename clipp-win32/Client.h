@@ -16,6 +16,8 @@ public:
     void Start();
     void Terminate();
     bool IsRunning() const;
+    std::array<unsigned char, 32> remoteHostID() const;
+    std::wstring remoteHostName() const;
 
 private:
     void ThreadProc();
@@ -27,6 +29,7 @@ private:
     std::atomic<bool> stopRequested_{ false };
 	std::atomic<bool> running_{ false };
     mutable std::mutex socketMutex_;
+    mutable std::mutex remoteInfoMutex_;
 
     std::array<unsigned char, 32> remoteHostID_{};
     std::wstring remoteHostName_;

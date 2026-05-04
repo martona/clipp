@@ -1,17 +1,46 @@
 #pragma once
 
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <winsock2.h>
+
 class Peer {
 public:
 	Peer(const wchar_t* hostName, const unsigned char* hostID, const char* ip, unsigned short port);
 	~Peer();
-	const wchar_t* hostName() const;
-	const unsigned char* hostID() const;
+
+	void Start();
+	void Stop();
+
+	std::wstring hostName() const;
+	std::array<unsigned char, 32> hostID() const;
 	std::wstring ipw() const;
 	std::string ip() const;
 	unsigned short port() const;
+	std::chrono::steady_clock::time_point lastPingReceivedAt() const;
+	std::chrono::steady_clock::time_point createdAt() const;
+
 private:
+	void ThreadProc();
+	bool ConnectSocket();
+	void CloseSocket();
+	static bool RecvAll(SOCKET sock, char* buffer, int length);
+	static bool SendAll(SOCKET sock, const char* buffer, int length);
+	bool SendHello();
+
+	mutable std::mutex dataMutex_;
 	std::wstring hostName_;
-	unsigned char hostID_[32];
+	std::array<unsigned char, 32> hostID_{};
 	std::string ip_;
-	unsigned short port_;
+	unsigned short port_{};
+	std::chrono::steady_clock::time_point createdAt_;
+	std::chrono::steady_clock::time_point lastPingReceivedAt_;
+
+	std::thread thread_;
+	std::atomic<bool> stopRequested_{ false };
+	SOCKET socket_{ INVALID_SOCKET };
 };

@@ -53,6 +53,19 @@ void OnMDNSNotification(const wchar_t* hostName, const wchar_t* hostID, const wc
                << L"\n  verb:    " << verb
                << L"\n  queryID: " << queryID
                << L"\n  nonce:   " << nonce << std::endl;
+
+    if (std::wstring(verb) == L"response" && rawHostID != nullptr) {
+        std::wstring senderIpW(senderIp);
+        std::string senderIpA;
+        if (!senderIpW.empty()) {
+            int size_needed = WideCharToMultiByte(CP_UTF8, 0, senderIpW.c_str(), (int)senderIpW.size(), nullptr, 0, nullptr, nullptr);
+            senderIpA.resize(size_needed);
+            WideCharToMultiByte(CP_UTF8, 0, senderIpW.c_str(), (int)senderIpW.size(), &senderIpA[0], size_needed, nullptr, nullptr);
+        }
+        g_peerManager.AddPeer(hostName, rawHostID, senderIpA.c_str(), port);
+    }
+
+    g_peerManager.CullPeers();
 }
 
 int main(int argc, char* argv[]) {
@@ -102,17 +115,23 @@ int main(int argc, char* argv[]) {
                 std::cout << "Press Enter to exit..." << std::endl;
                 std::cin.get();
                 g_listener.Stop();
+				std::cout << "Listener stopped." << std::endl;
             } else {
                 std::cerr << "Failed to start TCP listener thread!" << std::endl;
             }
             StopMDNS();
+			std::cout << "mDNS stopped." << std::endl;
         } else {
             std::cerr << "Failed to start mDNS thread!" << std::endl;
         }
         StopClipboardNotification();
+		std::cout << "Clipboard notification stopped." << std::endl;
     } else {
         std::cerr << "Failed to start clipboard notification thread!" << std::endl;
     }
+
+    g_peerManager.ClearPeers();
+	std::cout << "Peer manager cleared." << std::endl;
 
     return 0;
 }

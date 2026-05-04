@@ -53,6 +53,16 @@ bool Client::IsRunning() const {
 	return running_.load();
 }
 
+std::array<unsigned char, 32> Client::remoteHostID() const {
+    std::lock_guard<std::mutex> lock(remoteInfoMutex_);
+    return remoteHostID_;
+}
+
+std::wstring Client::remoteHostName() const {
+    std::lock_guard<std::mutex> lock(remoteInfoMutex_);
+    return remoteHostName_;
+}
+
 bool Client::RecvAll(SOCKET sock, char* buffer, int length) {
     int total = 0;
     while (total < length) {
@@ -84,10 +94,18 @@ void Client::ThreadProc() {
     } else if (std::wcsncmp(hello.selector, kSelector, std::wcslen(kSelector)) != 0 || ntohs(hello.version) != kVersion) {
         std::wcerr << L"Client handshake validation failed." << std::endl;
     } else {
-        std::memcpy(remoteHostID_.data(), hello.hostID, sizeof(hello.hostID));
-        hello.hostName[_countof(hello.hostName) - 1] = L'\0';
-        remoteHostName_ = hello.hostName;
-        std::wcout << L"Client connected: " << remoteHostName_ << std::endl;
+        {
+            std::lock_guard<std::mutex> lock(remoteInfoMutex_);
+            std::memcpy(remoteHostID_.data(), hello.hostID, sizeof(hello.hostID));
+            hello.hostName[_countof(hello.hostName) - 1] = L'\0';
+            remoteHostName_ = hello.hostName;
+        }
+        std::wstring remoteHostNameCopy;
+        {
+            std::lock_guard<std::mutex> lock(remoteInfoMutex_);
+            remoteHostNameCopy = remoteHostName_;
+        }
+        std::wcout << L"Client connected: " << remoteHostNameCopy << std::endl;
 
         char packet[4] = {};
         while (!stopRequested_.load()) {
@@ -96,6 +114,7 @@ void Client::ThreadProc() {
             }
 
             if (std::memcmp(packet, "PING", 4) == 0) {
+                std::wcout << L"Client: PING" << std::endl;
                 if (!SendAll(socket_, "PONG", 4)) {
                     break;
                 }
@@ -104,5 +123,4 @@ void Client::ThreadProc() {
     }
 
     running_.store(false);
-    std::wcout << L"Client thread exiting." << std::endl;
 }
