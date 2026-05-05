@@ -87,7 +87,7 @@ void OnMDNSNotification(const char* hostNameUtf8,
         "mDNS notification received for host: %s / %s\n  from: %s:%hu\n  verb:    %s\n  queryID: %s\n  nonce:   %s", 
         hostNameUtf8, hostID, senderIp, port, verb, queryID, nonce);
 
-    if (std::string(verb) == "response" && rawHostID != nullptr) {
+    if (/*std::string(verb) == "response" &&*/rawHostID != nullptr) {
         size_t hostNameWLen = utf8_to_utf16(hostNameUtf8, strlen(hostNameUtf8), nullptr, 0);
         std::wstring hostNameW(hostNameWLen > 0 ? hostNameWLen - 1 : 0, L'\0');
         if (hostNameWLen > 1) {

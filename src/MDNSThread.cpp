@@ -100,6 +100,7 @@ static mdns_packet BuildDiscoveryPacket(const std::string& hostName) {
 	strncpys(packet.selector, kProtocolSelector, cntof(packet.selector));
 	strncpys(packet.hostName, hostName.c_str(), cntof(packet.hostName));
 	strncpys(packet.verb, "query", cntof(packet.verb));
+    packet.port = htons(static_cast<u_short>(g_settings.tcpPort()));
     std::memcpy(packet.hostID, g_hostID.data(), sizeof(packet.hostID));
 	std::memcpy(g_lastSentQueryID.data(), packet.queryID, sizeof(packet.queryID));
     return packet;
