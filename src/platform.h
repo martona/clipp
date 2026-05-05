@@ -136,9 +136,22 @@
 
 static inline void strncpys(char* dst, const char* src, size_t maxlen) {
     if (!dst || !src || maxlen == 0) return;
-    size_t copyLen = (std::min)(std::strlen(src), maxlen - 1);
-    std::memcpy(dst, src, copyLen);
-    dst[copyLen] = '\0';
+	// option 1: two iterations (find length, then copy)
+    //size_t copyLen = (std::min)(std::strlen(src), maxlen - 1);
+    //std::memcpy(dst, src, copyLen);
+    //dst[copyLen] = '\0';
+    // option 2: single iteration but zeroes out the entire destination buffer
+    //std::strncpy(dst, src, maxlen - 1);
+    //dst[maxlen - 1] = '\0';
+	// option 3: least bad
+    #ifdef _MSC_VER
+        strncpy_s(dst, maxlen, src, _TRUNCATE);
+    #elif defined(__APPLE__)
+        strlcpy(dst, src, maxlen);
+    #else
+        dst[0] = '\0';
+        std::strncat(dst, src, maxlen - 1);
+    #endif
 }
 
 template <size_t N>
