@@ -47,3 +47,13 @@ if (APPLE)
     )
 endif()
 
+#75B684388ADFBC91BED0EDE18049B734D1169C8F "Apple Development: marton@anka.me (9H8YKZJP4X)"
+set(CODE_SIGN_IDENTITY "Apple Development: marton@anka.me (9H8YKZJP4X)")
+
+#add_executable(clipp main.cpp)
+
+# Add the post-build signing step
+add_custom_command(TARGET clipp POST_BUILD
+    COMMAND /usr/bin/codesign --force --sign "${CODE_SIGN_IDENTITY}" $<TARGET_FILE:clipp>
+    COMMENT "Codesigning $<TARGET_FILE:clipp>..."
+)
