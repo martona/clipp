@@ -12,6 +12,7 @@
     #include <ws2tcpip.h>
     #include <conio.h>
 #elif defined(__APPLE__)
+    #define _LIBCPP_DISABLE_DEPRECATION_WARNINGS 1
     #include <TargetConditionals.h>
     #include <cstddef>
     #include <codecvt>
@@ -64,6 +65,10 @@
 
 #elif defined(__APPLE__)
     using PlatformWindowHandle = void*;
+
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
     static size_t utf8_to_utf16(const char* utf8, size_t n_utf8, wchar_t* utf16, size_t n_utf16) {
         if (!utf8) return 0;
 
@@ -103,6 +108,8 @@
         std::memcpy(utf8, narrow.data(), copyLen);
         return copyLen;
     }
+
+    #pragma clang diagnostic pop
 
     static inline int vsnprintf_truncate(char* buffer, size_t size, const char* format, va_list args) {
         return std::vsnprintf(buffer, size, format, args);

@@ -16,6 +16,10 @@ endif()
 
 add_executable(clipp ${SOURCES})
 
+if (APPLE)
+    target_compile_options(clipp PRIVATE "-Wno-deprecated-declarations")
+endif()
+
 find_package(unofficial-sodium CONFIG REQUIRED)
 find_package(xxHash CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
