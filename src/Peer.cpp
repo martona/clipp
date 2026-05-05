@@ -209,7 +209,6 @@ void Peer::ThreadProc() {
 
 			if (!msg.has_value()) {
 				// TIMEOUT or explicit wake: just roll over
-				g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Received empty message.");
 			} else {
 				// A message was pulled from the queue
 				std::shared_ptr<const ClipboardPayload> payload = msg.value();
