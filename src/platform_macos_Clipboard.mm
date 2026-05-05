@@ -76,7 +76,7 @@ ClipboardPayload ReadClipboardData(PlatformWindowHandle hwnd) {
     @autoreleasepool {
         NSPasteboard* pb = [NSPasteboard generalPasteboard];
         
-        // 1. Try to read Text
+        // Try to read Text
         NSString* text = [pb stringForType:NSPasteboardTypeString];
         if (text) {
             NSData* data = [text dataUsingEncoding:NSUTF8StringEncoding];
@@ -89,19 +89,7 @@ ClipboardPayload ReadClipboardData(PlatformWindowHandle hwnd) {
             }
         }
 
-        // 2. Try to read Image (PNG or TIFF)
-        NSData* imgData = [pb dataForType:NSPasteboardTypePNG];
-        if (!imgData) {
-            imgData = [pb dataForType:NSPasteboardTypeTIFF];
-        }
-        
-        if (imgData) {
-            payload.formatId = CF_DIB; 
-            const unsigned char* bytes = static_cast<const unsigned char*>([imgData bytes]);
-            payload.rawData.assign(bytes, bytes + [imgData length]);
-        } else {
-            g_logger.log(__FUNCTION__, Logger::Level::Info, "No supported clipboard format available");
-        }
+        // TODO: handle image data
     }
 
     return payload;
@@ -133,8 +121,7 @@ void SetClipboardData(ClipboardPayload& payload) {
                 [pb setString:str forType:NSPasteboardTypeString];
             }
         } else if (payload.formatId == CF_DIB) {
-            NSData* data = [NSData dataWithBytes:payload.rawData.data() length:payload.rawData.size()];
-            [pb setData:data forType:NSPasteboardTypePNG];
+            // TODO
         }
 
         // Fast-forward our known changeCount so we don't trigger a recursive network broadcast of our own change
