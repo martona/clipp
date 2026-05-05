@@ -9,6 +9,11 @@
 #include <sstream>
 #include <vector>
 
+#ifdef __APPLE__
+#include <CoreFoundation/CoreFoundation.h>
+#include <Security/Security.h>
+#endif
+
 KeyManager g_keyManager(g_settings);
 
 KeyManager::KeyManager(Settings& settings)
@@ -39,17 +44,63 @@ bool KeyManager::SetNetworkKey(const std::array<unsigned char, NetworkKeySize>& 
     std::vector<unsigned char> encryptedBuffer(encryptedData.pbData, encryptedData.pbData + encryptedData.cbData);
     LocalFree(encryptedData.pbData);
 #else
-    //TODO
+    const CFStringRef service = CFSTR("net.clipp.app");
+    const CFStringRef account = CFSTR("NetworkKey");
+
+    CFDataRef plainData = CFDataCreate(kCFAllocatorDefault, networkKey.data(), networkKey.size());
+    if (plainData == nullptr) {
+        if (errorMessage != nullptr) *errorMessage = "Failed to create keychain payload";
+        return false;
+    }
+
+    CFMutableDictionaryRef addQuery = CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
+        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFDictionaryAddValue(addQuery, kSecClass, kSecClassGenericPassword);
+    CFDictionaryAddValue(addQuery, kSecAttrService, service);
+    CFDictionaryAddValue(addQuery, kSecAttrAccount, account);
+    CFDictionaryAddValue(addQuery, kSecValueData, plainData);
+    CFDictionaryAddValue(addQuery, kSecUseAuthenticationUI, kSecUseAuthenticationUIFail);
+
+    OSStatus status = SecItemAdd(addQuery, nullptr);
+    CFRelease(addQuery);
+
+    if (status == errSecDuplicateItem) {
+        CFMutableDictionaryRef matchQuery = CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
+            &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        CFDictionaryAddValue(matchQuery, kSecClass, kSecClassGenericPassword);
+        CFDictionaryAddValue(matchQuery, kSecAttrService, service);
+        CFDictionaryAddValue(matchQuery, kSecAttrAccount, account);
+
+        CFMutableDictionaryRef updateAttrs = CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
+            &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        CFDictionaryAddValue(updateAttrs, kSecValueData, plainData);
+        status = SecItemUpdate(matchQuery, updateAttrs);
+        CFRelease(updateAttrs);
+        CFRelease(matchQuery);
+    }
+
+    CFRelease(plainData);
+
+    if (status != errSecSuccess) {
+        if (errorMessage != nullptr) *errorMessage = "Failed to encrypt key into keychain";
+        return false;
+    }
+
     std::vector<unsigned char> encryptedBuffer;
 #endif
 
+#ifndef __APPLE__
     if (!settings_.setEncryptedNetworkKey(encryptedBuffer)) {
         if (errorMessage != nullptr) {
             *errorMessage = "Failed to write encrypted key to settings";
         }
         return false;
     }
+#else
+    (void)encryptedBuffer;
+#endif
 
+    
     cachedNetworkKey_ = networkKey;
     cacheValid_ = true;
     return true;
@@ -61,6 +112,7 @@ bool KeyManager::GetNetworkKey(std::array<unsigned char, NetworkKeySize>& networ
         return true;
     }
 
+#ifdef _WIN32
     std::vector<unsigned char> encryptedBuffer;
     if (!settings_.getEncryptedNetworkKey(encryptedBuffer)) {
         if (errorMessage != nullptr) {
@@ -69,7 +121,6 @@ bool KeyManager::GetNetworkKey(std::array<unsigned char, NetworkKeySize>& networ
         return false;
     }
 
-#ifdef _WIN32
     DATA_BLOB encryptedData{};
     encryptedData.pbData = encryptedBuffer.data();
     encryptedData.cbData = static_cast<DWORD>(encryptedBuffer.size());
@@ -100,7 +151,45 @@ bool KeyManager::GetNetworkKey(std::array<unsigned char, NetworkKeySize>& networ
     std::copy(plainData.pbData, plainData.pbData + NetworkKeySize, networkKey.begin());
     LocalFree(plainData.pbData);
 #else
-    //TODO
+    const CFStringRef service = CFSTR("net.clipp.app");
+    const CFStringRef account = CFSTR("NetworkKey");
+
+    CFMutableDictionaryRef query = CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
+        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    if (query == nullptr) {
+        if (errorMessage != nullptr) *errorMessage = "Failed to allocate keychain query";
+        return false;
+    }
+
+    CFDictionaryAddValue(query, kSecClass, kSecClassGenericPassword);
+    CFDictionaryAddValue(query, kSecAttrService, service);
+    CFDictionaryAddValue(query, kSecAttrAccount, account);
+    CFDictionaryAddValue(query, kSecReturnData, kCFBooleanTrue);
+    CFDictionaryAddValue(query, kSecMatchLimit, kSecMatchLimitOne);
+    CFDictionaryAddValue(query, kSecUseAuthenticationUI, kSecUseAuthenticationUIFail);
+
+    CFTypeRef outData = nullptr;
+    OSStatus status = SecItemCopyMatching(query, &outData);
+    CFRelease(query);
+
+    if (status != errSecSuccess || outData == nullptr) {
+        if (errorMessage != nullptr) *errorMessage = "Failed to decrypt key from keychain";
+        if (outData != nullptr) CFRelease(outData);
+        return false;
+    }
+
+    CFDataRef plainData = static_cast<CFDataRef>(outData);
+    const CFIndex plainLen = CFDataGetLength(plainData);
+    if (plainLen != static_cast<CFIndex>(NetworkKeySize)) {
+        CFRelease(outData);
+        if (errorMessage != nullptr) {
+            *errorMessage = "Decrypted key size was not 32 bytes";
+        }
+        return false;
+    }
+
+    std::copy(CFDataGetBytePtr(plainData), CFDataGetBytePtr(plainData) + NetworkKeySize, networkKey.begin());
+    CFRelease(outData);
 #endif
     cachedNetworkKey_ = networkKey;
     cacheValid_ = true;

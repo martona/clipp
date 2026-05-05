@@ -3,7 +3,7 @@ project(clipp)
 
 set(CMAKE_CXX_STANDARD 20)
 
-file(GLOB SOURCES "src/*.cpp" "src/*.h")
+file(GLOB SOURCES "src/*.cpp" "src/*.mm" "src/*.h")
 list(FILTER SOURCES EXCLUDE REGEX "vcpkg_installed")
 
 if (APPLE)
@@ -33,3 +33,17 @@ target_link_libraries(clipp PRIVATE
     xxHash::xxhash
     zstd::libzstd
 )
+
+
+if (APPLE)
+    find_library(COREFOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
+    find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
+    find_library(SECURITY_FRAMEWORK Security REQUIRED)
+
+    target_link_libraries(clipp PRIVATE
+        ${COREFOUNDATION_FRAMEWORK}
+        ${FOUNDATION_FRAMEWORK}
+        ${SECURITY_FRAMEWORK}
+    )
+endif()
+

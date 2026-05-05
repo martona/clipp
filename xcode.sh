@@ -53,4 +53,4 @@ echo "[*] Build environment ready."
 echo "[*] Launching Xcode..."
 
 # Open Xcode
-open build/clipp.xcodeproj
+# open build/clipp.xcodeproj
