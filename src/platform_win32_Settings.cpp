@@ -1,5 +1,6 @@
 #pragma once
 #include "platform.h"
+#include "Settings.h"
 
 namespace {
     constexpr wchar_t kRegistryPath[] = L"Software\\Clipp";

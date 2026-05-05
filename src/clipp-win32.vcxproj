@@ -141,6 +141,7 @@
     <ClCompile Include="Logger.cpp" />
     <ClCompile Include="Peer.cpp" />
     <ClCompile Include="PeerManager.cpp" />
+    <ClCompile Include="platform_win32_Settings.cpp" />
     <ClCompile Include="Settings.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -151,7 +152,6 @@
     <ClInclude Include="Client.h" />
     <ClInclude Include="CryptoChannel.h" />
     <ClInclude Include="platform.h" />
-    <ClInclude Include="platform_posix_Settings.h" />
     <ClInclude Include="platform_win32_Clipboard.h" />
     <ClInclude Include="MDNSThread.h" />
     <ClInclude Include="KeyManager.h" />
@@ -159,7 +159,6 @@
     <ClInclude Include="NetworkDefs.h" />
     <ClInclude Include="Peer.h" />
     <ClInclude Include="PeerManager.h" />
-    <ClInclude Include="platform_win32_Settings.h" />
     <ClInclude Include="Settings.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
