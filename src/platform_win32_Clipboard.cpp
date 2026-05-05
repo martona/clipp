@@ -164,7 +164,7 @@ void SetClipboardData(ClipboardPayload& payload) {
 
             if (payload.formatId == CF_UNICODETEXT) {
                 char* utf8Data = reinterpret_cast<char*>(payload.rawData.data());
-                int utf8Bytes = reinterpret_cast<int>(payload.rawData.size());
+                int utf8Bytes = static_cast<int>(payload.rawData.size());
 				if (utf8Bytes > 0) utf8Data[utf8Bytes - 1] = '\0'; 
                 int wideChars = MultiByteToWideChar(CP_UTF8, 0, utf8Data, utf8Bytes, nullptr, 0);
                 if (wideChars > 0) {
