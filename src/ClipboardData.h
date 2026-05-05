@@ -1,5 +1,7 @@
 #pragma once
+#include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <vector>
 #include <zstd.h>
 #include "ClipboardLimits.h"
@@ -8,9 +10,16 @@
 struct ClipboardPayload {
 	uint32_t formatId;
 	bool isCompressed{ false };
+	uint32_t decodedDataSize{ 0 };
 	std::vector<unsigned char> rawData;
 
 	bool ZstdCompress() {
+		if (rawData.size() > std::numeric_limits<uint32_t>::max()) {
+			g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard payload: data size %zu bytes exceeds uint32_t maximum", rawData.size());
+			return false;
+		}
+
+		decodedDataSize = static_cast<uint32_t>(rawData.size());
 		if (rawData.size() < 512) {
 			isCompressed = false;
 			return true;
@@ -37,7 +46,17 @@ struct ClipboardPayload {
 	}
 
 	bool ZstdDecompress() {
+		const uint32_t expectedDecodedSize = decodedDataSize;
+		if (expectedDecodedSize > ClipboardLimits::kMaxDecompressedClipboardBytes) {
+			g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard payload: decoded size %u bytes exceeds limit %llu bytes", expectedDecodedSize, ClipboardLimits::kMaxDecompressedClipboardBytes);
+			return false;
+		}
+
 		if (!isCompressed) {
+			if (rawData.size() != expectedDecodedSize) {
+				g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting uncompressed clipboard payload: decoded size mismatch (expected %u bytes, actual %zu bytes)", expectedDecodedSize, rawData.size());
+				return false;
+			}
 			return true;
 		}
 
@@ -52,12 +71,12 @@ struct ClipboardPayload {
 			return false;
 		}
 
-		if (decompressedSize > ClipboardLimits::kMaxDecompressedClipboardBytes) {
-			g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting compressed clipboard payload: decompressed size %llu bytes exceeds limit %llu bytes", decompressedSize, ClipboardLimits::kMaxDecompressedClipboardBytes);
+		if (decompressedSize != expectedDecodedSize) {
+			g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting compressed clipboard payload: frame decoded size mismatch (expected %u bytes, frame reports %llu bytes)", expectedDecodedSize, decompressedSize);
 			return false;
 		}
 
-		std::vector<unsigned char> decompressedData(static_cast<size_t>(decompressedSize));
+		std::vector<unsigned char> decompressedData(static_cast<size_t>(expectedDecodedSize));
 		const size_t actualSize = ZSTD_decompress(
 			decompressedData.data(),
 			decompressedData.size(),
@@ -69,8 +88,8 @@ struct ClipboardPayload {
 			return false;
 		}
 
-		if (actualSize != decompressedSize) {
-			g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting compressed clipboard payload: decompressed size mismatch (expected %llu bytes, actual %zu bytes)", decompressedSize, actualSize);
+		if (actualSize != expectedDecodedSize) {
+			g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting compressed clipboard payload: decompressed size mismatch (expected %u bytes, actual %zu bytes)", expectedDecodedSize, actualSize);
 			return false;
 		}
 

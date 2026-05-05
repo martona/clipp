@@ -115,21 +115,45 @@ void Client::ThreadProc() {
             }
 
 			if (std::memcmp(packet, "CLIP", 4) == 0) {
-				std::vector<unsigned char> message;
-				if (!channel.RecvMessage(socket_, message) || message.size() < sizeof(NetworkDefs::ClipboardMessage)) {
+                std::vector<unsigned char> headerMsg;
+                if (!channel.RecvMessage(socket_, headerMsg) || headerMsg.size() != sizeof(NetworkDefs::ClipboardMessage)) {
+                    break;
+                }
+				if (headerMsg.size() != sizeof(NetworkDefs::ClipboardMessage)) {
+                    g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard message: header size mismatch (expected %zu bytes, actual %zu bytes)", sizeof(NetworkDefs::ClipboardMessage), headerMsg.size());
+                    break;
+                }
+
+                auto* clipMessage = reinterpret_cast<NetworkDefs::ClipboardMessage*>(headerMsg.data());
+                ClipboardPayload payload{};
+                payload.formatId = ntohl(clipMessage->formatId);
+                payload.decodedDataSize = ntohl(clipMessage->decodedDataSize);
+                payload.isCompressed = clipMessage->isCompressed != 0;
+                uint32_t encodedDataSize = ntohl(clipMessage->encodedDataSize);
+
+				if (!channel.RecvMessage(socket_, payload.rawData)) {
 					break;
 				}
 
-				auto* clipMessage = reinterpret_cast<NetworkDefs::ClipboardMessage*>(message.data());
-				clipMessage->formatId = ntohl(clipMessage->formatId);
-				clipMessage->rawDataSize = ntohl(clipMessage->rawDataSize);
-				ClipboardPayload payload{};
-				payload.formatId = clipMessage->formatId;
-				payload.isCompressed = clipMessage->isCompressed != 0;
-				if (!payload.isCompressed && message.size() != (sizeof(NetworkDefs::ClipboardMessage) + clipMessage->rawDataSize)) {
+				if (payload.rawData.size() != static_cast<size_t>(encodedDataSize)) {
+					g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard message: encoded size mismatch (header: %u bytes, body: %zu bytes)", encodedDataSize, payload.rawData.size());
 					break;
 				}
-				payload.rawData.assign(message.begin() + sizeof(NetworkDefs::ClipboardMessage), message.end());
+
+				if (payload.decodedDataSize > ClipboardLimits::kMaxDecompressedClipboardBytes) {
+                    g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard message: decoded size %u bytes exceeds limit %llu bytes", payload.decodedDataSize, ClipboardLimits::kMaxDecompressedClipboardBytes);
+					break;
+				}
+
+				if (!payload.isCompressed && encodedDataSize != payload.decodedDataSize) {
+                    g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting uncompressed clipboard message: encoded size %u bytes does not equal decoded size %u bytes", encodedDataSize, payload.decodedDataSize);
+					break;
+				}
+
+				if (!payload.ZstdDecompress()) {
+					break;
+				}
+
 				if (clipboardReceivedCallback_) {
                     std::array<unsigned char, 32> remoteHostId;
                     std::wstring remoteHostName;

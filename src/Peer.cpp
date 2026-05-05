@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <thread>
 //#include <ws2tcpip.h>
 
@@ -142,22 +143,28 @@ bool Peer::SendHello() {
 	return false;
 }
 
-
-
 bool Peer::SendClipboardData(CryptoChannel& channel, const ClipboardPayload& payload) {
 	ClipboardPayload payloadToSend = payload;
-	if (payloadToSend.rawData.size() > ((64u * 1024u * 1024u) - 9u - crypto_secretstream_xchacha20poly1305_ABYTES)) return false;
-	const uint32_t decompressedSize = static_cast<uint32_t>(payload.rawData.size());
-	std::vector<unsigned char> message(sizeof(NetworkDefs::ClipboardMessage) + payloadToSend.rawData.size());
-	auto* clipMessage = reinterpret_cast<NetworkDefs::ClipboardMessage*>(message.data());
-	clipMessage->formatId = htonl(payloadToSend.formatId);
-	clipMessage->isCompressed = payloadToSend.isCompressed ? 1 : 0;
-	clipMessage->rawDataSize = htonl(decompressedSize);
-	if (!payloadToSend.rawData.empty()) {
-		std::memcpy(message.data() + sizeof(NetworkDefs::ClipboardMessage), payloadToSend.rawData.data(), payloadToSend.rawData.size());
+	const size_t maxEncodedPayloadBytes = (64u * 1024u * 1024u) - sizeof(NetworkDefs::ClipboardMessage) - crypto_secretstream_xchacha20poly1305_ABYTES;
+	if (payloadToSend.rawData.size() > maxEncodedPayloadBytes) return false;
+
+	const uint32_t encodedDataSize = static_cast<uint32_t>(payloadToSend.rawData.size());
+	uint32_t decodedDataSize = payloadToSend.decodedDataSize;
+	if (decodedDataSize == 0 && !payloadToSend.isCompressed) {
+		decodedDataSize = encodedDataSize;
 	}
+
+	NetworkDefs::ClipboardMessage msg{};
+	msg.formatId = htonl(payloadToSend.formatId);
+	msg.isCompressed = payloadToSend.isCompressed ? 1 : 0;
+	msg.decodedDataSize = htonl(payloadToSend.decodedDataSize);
+	msg.encodedDataSize = htonl(encodedDataSize);
 	if (!channel.SendTaggedMessage(socket_, "CLIP")) return false;
-	return channel.SendMessage(socket_, message.data(), static_cast<uint32_t>(message.size()));
+	if (!channel.SendMessage(socket_, reinterpret_cast<unsigned char*>(& msg), sizeof(msg))) return false;
+	if (!payloadToSend.rawData.empty())
+		if (!channel.SendMessage(socket_, payloadToSend.rawData.data(), static_cast<uint32_t>(payloadToSend.rawData.size()))) 
+			return false;
+	return true;
 }
 
 void Peer::ThreadProc() {

@@ -61,15 +61,18 @@ void OnClipboardNotification(PlatformWindowHandle hwnd) {
         g_logger.log(__FUNCTION__, Logger::Level::Info, "Clipboard is empty or contains unsupported format");
         return;
 	}
-	clipboardData.ZstdCompress();
+	const size_t decodedDataSize = clipboardData.rawData.size();
+	if (!clipboardData.ZstdCompress()) {
+		g_logger.log(__FUNCTION__, Logger::Level::Warning, "Failed to compress clipboard data; skipping broadcast");
+		return;
+	}
 	auto payload = std::make_shared<const ClipboardPayload>(clipboardData);
     g_peerManager.BroadcastClipboard(payload);
-	g_logger.log(__FUNCTION__, Logger::Level::Info, "Broadcasted clipboard data to peers (format ID: %u, size: %zu bytes)", clipboardData.formatId, clipboardData.rawData.size());
+	g_logger.log(__FUNCTION__, Logger::Level::Info, "Broadcasted clipboard data to peers (format ID: %u, encoded size: %zu bytes, decoded size: %zu bytes)", clipboardData.formatId, clipboardData.rawData.size(), decodedDataSize);
 }
 
 Listener g_listener([](const std::wstring& hostName, const std::array<unsigned char, 32>& hostID, ClipboardPayload& payload) {
     g_logger.log(__FUNCTION__, Logger::Level::Info, L"Received clipboard data from client %s (format ID: %u, size: %zu bytes)", hostName.c_str(), payload.formatId, payload.rawData.size());
-    if (!payload.ZstdDecompress()) return;
     SetClipboardData(payload);
 });
 

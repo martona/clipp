@@ -14,7 +14,8 @@ struct ClientHello {
 struct ClipboardMessage {
 	uint32_t formatId;
 	uint8_t isCompressed;
-	uint32_t rawDataSize;
+	uint32_t encodedDataSize;
+	uint32_t decodedDataSize;
 };
 #pragma pack(pop)
 
