@@ -26,6 +26,29 @@
         oss << ")";
         return oss.str();
     }
+
+    static SecAccessRef CreateAccessForCurrentApp() {
+        SecTrustedApplicationRef trustedApp = nullptr;
+        OSStatus trustedStatus = SecTrustedApplicationCreateFromPath(nullptr, &trustedApp);
+        if (trustedStatus != errSecSuccess || trustedApp == nullptr) {
+            return nullptr;
+        }
+
+        const void* values[] = { trustedApp };
+        CFArrayRef trustedApps = CFArrayCreate(kCFAllocatorDefault, values, 1, &kCFTypeArrayCallBacks);
+        CFRelease(trustedApp);
+        if (trustedApps == nullptr) {
+            return nullptr;
+        }
+
+        SecAccessRef access = nullptr;
+        OSStatus accessStatus = SecAccessCreate(CFSTR("clipp network key"), trustedApps, &access);
+        CFRelease(trustedApps);
+        if (accessStatus != errSecSuccess) {
+            return nullptr;
+        }
+        return access;
+    }
 #endif
 
 KeyManager g_keyManager(g_settings);
@@ -80,8 +103,13 @@ bool KeyManager::SetNetworkKey(const std::array<unsigned char, NetworkKeySize>& 
     CFDictionaryAddValue(addQuery, kSecAttrAccount, account);
     CFDictionaryAddValue(addQuery, kSecValueData, plainData);
     CFDictionaryAddValue(addQuery, kSecAttrAccessible, kSecAttrAccessibleAfterFirstUnlock);
+    SecAccessRef access = CreateAccessForCurrentApp();
+    if (access != nullptr) {
+        CFDictionaryAddValue(addQuery, kSecAttrAccess, access);
+    }
 
     OSStatus status = SecItemAdd(addQuery, nullptr);
+    if (access != nullptr) CFRelease(access);
     CFRelease(addQuery);
 
     if (status == errSecDuplicateItem) {
@@ -106,7 +134,12 @@ bool KeyManager::SetNetworkKey(const std::array<unsigned char, NetworkKeySize>& 
         }
         CFDictionaryAddValue(updateAttrs, kSecValueData, plainData);
         CFDictionaryAddValue(updateAttrs, kSecAttrAccessible, kSecAttrAccessibleAfterFirstUnlock);
+        SecAccessRef updateAccess = CreateAccessForCurrentApp();
+        if (updateAccess != nullptr) {
+            CFDictionaryAddValue(updateAttrs, kSecAttrAccess, updateAccess);
+        }
         status = SecItemUpdate(matchQuery, updateAttrs);
+        if (updateAccess != nullptr) CFRelease(updateAccess);
         CFRelease(updateAttrs);
         CFRelease(matchQuery);
     }
