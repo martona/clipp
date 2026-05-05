@@ -9,9 +9,6 @@
 #include <future>
 #include <xxhash.h>
 
-#define CF_UNICODETEXT 13
-#define CF_DIB 8
-
 static std::thread g_clipboardThread;
 static std::atomic<bool> g_stopClipboardThread{false};
 static NSInteger g_lastChangeCount = 0;

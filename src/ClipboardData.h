@@ -7,6 +7,11 @@
 #include "ClipboardLimits.h"
 #include "Logger.h"
 
+#ifdef __APPLE__
+	#define CF_UNICODETEXT 13
+	#define CF_DIB 8
+#endif
+
 struct ClipboardPayload {
 	uint32_t formatId;
 	bool isCompressed{ false };
