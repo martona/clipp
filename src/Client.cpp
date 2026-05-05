@@ -11,7 +11,7 @@
 
 #include "CryptoChannel.h"
 #include "NetworkDefs.h"
-
+#include "utils.h"
 
 Client::Client(SOCKET socket, ClipboardReceivedCallback clipboardReceivedCallback)
     : clipboardReceivedCallback_(std::move(clipboardReceivedCallback)) {
@@ -55,30 +55,6 @@ std::array<unsigned char, 32> Client::remoteHostID() const {
 std::wstring Client::remoteHostName() const {
     std::lock_guard<std::mutex> lock(remoteInfoMutex_);
     return remoteHostName_;
-}
-
-bool Client::RecvAll(SOCKET sock, char* buffer, int length) {
-    size_t total = 0;
-    while (total < length) {
-        size_t received = recv(sock, buffer + total, (int)(length - total), 0);
-        if (received == 0) {
-            return false;
-        }
-        total += received;
-    }
-    return true;
-}
-
-bool Client::SendAll(SOCKET sock, const char* buffer, int length) {
-    size_t total = 0;
-    while (total < length) {
-        size_t sent = send(sock, buffer + total, (int)(length - total), 0);
-        if (sent == 0) {
-            return false;
-        }
-        total += sent;
-    }
-    return true;
 }
 
 void Client::ThreadProc() {
@@ -169,5 +145,4 @@ void Client::ThreadProc() {
     }
 
     running_.store(false);
-
 }

@@ -96,9 +96,9 @@ static mdns_packet BuildMDNSPacket(const std::string& hostName, const std::strin
     mdns_packet packet;
     packet.version = htons(kProtocolVersion);
     randombytes_buf(packet.nonce, sizeof(packet.nonce));
-    strncpys(packet.selector, kProtocolSelector, cntof(packet.selector));
-    strncpys(packet.hostName, hostName.c_str(), cntof(packet.hostName));
-    strncpys(packet.verb, verb.c_str(), cntof(packet.verb));
+    strncpys(packet.selector, kProtocolSelector);
+    strncpys(packet.hostName, hostName.c_str());
+    strncpys(packet.verb, verb.c_str());
     packet.port = htons(static_cast<u_short>(g_settings.tcpPort()));
     std::memcpy(packet.hostID, g_hostID.data(), sizeof(packet.hostID));
     if (queryID) {

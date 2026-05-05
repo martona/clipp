@@ -27,8 +27,6 @@ public:
 
 private:
     void ThreadProc();
-    static bool RecvAll(SOCKET sock, char* buffer, int length);
-    static bool SendAll(SOCKET sock, const char* buffer, int length);
 
     ClipboardReceivedCallback clipboardReceivedCallback_;
     SOCKET socket_;

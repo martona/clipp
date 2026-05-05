@@ -35,8 +35,6 @@ private:
 	void ThreadProc();
 	bool ConnectSocket();
 	void CloseSocket();
-	static bool RecvAll(SOCKET sock, char* buffer, int length);
-	static bool SendAll(SOCKET sock, const char* buffer, int length);
 	bool SendHello();
 	bool SendClipboardData(CryptoChannel& channel, const ClipboardPayload& payload);
 	void InterruptibleSleep(std::chrono::milliseconds duration);

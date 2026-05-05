@@ -7,12 +7,11 @@
 #include <iostream>
 #include <limits>
 #include <thread>
-//#include <ws2tcpip.h>
 
 #include "Settings.h"
 #include "CryptoChannel.h"
 #include "NetworkDefs.h"
-
+#include "utils.h"
 
 Peer::Peer(const wchar_t* hostName, const unsigned char* hostID, const char* ip, u_short port)
 	: hostName_(hostName), ip_(ip), port_(port),
@@ -78,30 +77,6 @@ std::chrono::steady_clock::time_point Peer::lastPingReceivedAt() const {
 std::chrono::steady_clock::time_point Peer::createdAt() const {
 	std::lock_guard<std::mutex> lock(dataMutex_);
 	return createdAt_;
-}
-
-bool Peer::RecvAll(SOCKET sock, char* buffer, int length) {
-	size_t total = 0;
-	while (total < length) {
-		size_t received = recv(sock, buffer + total, (int)(length - total), 0);
-		if (received == 0) {
-			return false;
-		}
-		total += received;
-	}
-	return true;
-}
-
-bool Peer::SendAll(SOCKET sock, const char* buffer, int length) {
-	size_t total = 0;
-	while (total < length) {
-		size_t sent = send(sock, buffer + total, (int)(length - total), 0);
-		if (sent == 0) {
-			return false;
-		}
-		total += sent;
-	}
-	return true;
 }
 
 void Peer::CloseSocket() {
@@ -188,31 +163,31 @@ void Peer::ThreadProc() {
 			continue;
 		}
 
-		g_logger.log(__FUNCTION__, Logger::Level::Info, L"%p Peer connected and authenticated.", this);
+		g_logger.log(__FUNCTION__, Logger::Level::Info, L"Peer connected and authenticated.");
 		while (!stopRequested_.load()) {
 			if (socket_ == INVALID_SOCKET || !channel.SendTaggedMessage(socket_, "PING")) {
-				g_logger.log(__FUNCTION__, Logger::Level::Warning, L"%p Peer failed secure send", this);
+				g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Peer failed secure send");
 				break;
 			}
 
 			char packet[4] = {};
 			if (socket_ == INVALID_SOCKET || !channel.RecvTaggedMessage(socket_, packet)) {
-				g_logger.log(__FUNCTION__, Logger::Level::Warning, L"%p Peer failed secure recv", this);
+				g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Peer failed secure recv");
 				break;
 			}
 
 			if (std::memcmp(packet, "PONG", 4) != 0) {
-				g_logger.log(__FUNCTION__, Logger::Level::Error, L"%p Peer: unexpected packet received.", this);
+				g_logger.log(__FUNCTION__, Logger::Level::Error, L"Peer: unexpected packet received.");
 				break;
 			}
 
 			{
 				std::lock_guard<std::mutex> lock(dataMutex_);
 				lastPingReceivedAt_ = std::chrono::steady_clock::now();
-				g_logger.log(__FUNCTION__, Logger::Level::Debug, L"%p Peer: PONG", this);
+				g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Peer: PONG");
 			}
 
-			auto msg = messageQueue_.WaitFor(std::chrono::milliseconds(5000), stopRequested_);
+			auto msg = messageQueue_.WaitFor(std::chrono::seconds(60), stopRequested_);
 
 			if (!msg.has_value()) {
 				// TIMEOUT or explicit wake: just roll over
@@ -230,5 +205,5 @@ void Peer::ThreadProc() {
 		CloseSocket();
 		if (!stopRequested_.load()) InterruptibleSleep(std::chrono::milliseconds(5000));
 	}
-	g_logger.log(__FUNCTION__, Logger::Level::Debug, L"%p Peer thread exiting.", this);
+	g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Peer thread exiting.");
 }

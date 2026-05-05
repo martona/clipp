@@ -159,6 +159,7 @@
     <ClInclude Include="Peer.h" />
     <ClInclude Include="PeerManager.h" />
     <ClInclude Include="Settings.h" />
+    <ClInclude Include="utils.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
