@@ -99,6 +99,14 @@ void OnMDNSNotification(const char* hostNameUtf8,
     g_peerManager.CullPeers();
 }
 
+void PrintNetworkKeyHash(const std::array<unsigned char, KeyManager::NetworkKeySize>& networkKey) {
+    unsigned char keyHash[crypto_hash_sha256_BYTES];
+    crypto_hash_sha256(keyHash, networkKey.data(), networkKey.size());
+    char keyHashHex[crypto_hash_sha256_BYTES * 2 + 1];
+    sodium_bin2hex(keyHashHex, sizeof(keyHashHex), keyHash, sizeof(keyHash));
+    g_logger.log(__FUNCTION__, Logger::Level::Info, "Network Key SHA-256: %s", keyHashHex);
+}
+
 int main(int argc, char* argv[]) {
     if (argc > 1 && std::string(argv[1]) == "setkey") {
         std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
@@ -108,6 +116,7 @@ int main(int argc, char* argv[]) {
             g_logger.log(__FUNCTION__, Logger::Level::Error, "Invalid input. Expected exactly 64 hexadecimal characters.");
             return 1;
         }
+		PrintNetworkKeyHash(networkKey);
 
         std::string errorMessage;
         if (!g_keyManager.SetNetworkKey(networkKey, &errorMessage)) {
@@ -145,12 +154,7 @@ int main(int argc, char* argv[]) {
         g_logger.log(__FUNCTION__, Logger::Level::Error, "Fatal: failed to load network key before starting threads: %s", keyErrorMessage.c_str());
         return 1;
     }
-
-    unsigned char keyHash[crypto_hash_sha256_BYTES];
-    crypto_hash_sha256(keyHash, networkKey.data(), networkKey.size());
-    char keyHashHex[crypto_hash_sha256_BYTES * 2 + 1];
-    sodium_bin2hex(keyHashHex, sizeof(keyHashHex), keyHash, sizeof(keyHash));
-    g_logger.log(__FUNCTION__, Logger::Level::Info, "Network Key SHA-256: %s", keyHashHex);
+    PrintNetworkKeyHash(networkKey);
 
     // Start worker threads
     if (StartClipboardNotification(OnClipboardNotification)) {

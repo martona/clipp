@@ -287,15 +287,11 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
             }
 
             if (verb == "query" && rawQueryID != nullptr) {
-                SOCKET responseSock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-                if (responseSock != INVALID_SOCKET) {
-                    mdns_packet responsePacket = BuildResponsePacket(localHostName, rawQueryID);
-                    encrypted_mdns_packet encryptedResponse{};
-                    if (EncryptPacket(responsePacket, encryptedResponse)) {
-                        sendto(responseSock, reinterpret_cast<const char*>(&encryptedResponse), sizeof(encryptedResponse), 0,
-                            reinterpret_cast<const sockaddr*>(&fromAddr), sizeof(fromAddr));
-                    }
-                    closesocket(responseSock);
+                mdns_packet responsePacket = BuildResponsePacket(localHostName, rawQueryID);
+                encrypted_mdns_packet encryptedResponse{};
+                if (EncryptPacket(responsePacket, encryptedResponse)) {
+                    sendto(sock, reinterpret_cast<const char*>(&encryptedResponse), sizeof(encryptedResponse), 0,
+                        reinterpret_cast<const sockaddr*>(&fromAddr), sizeof(fromAddr));
                 }
             }
 
