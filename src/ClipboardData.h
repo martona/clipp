@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <vector>
 #include <zstd.h>
+#include "ClipboardLimits.h"
 #include "Logger.h"
 
 struct ClipboardPayload {
@@ -39,15 +40,37 @@ struct ClipboardPayload {
 		if (!isCompressed) {
 			return true;
 		}
-		uint64_t decompressedSize = ZSTD_getFrameContentSize(rawData.data(), rawData.size());
-		std::vector<unsigned char> decompressedData(decompressedSize);
+
+		const unsigned long long decompressedSize = ZSTD_getFrameContentSize(rawData.data(), rawData.size());
+		if (decompressedSize == ZSTD_CONTENTSIZE_ERROR) {
+			g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting compressed clipboard payload: invalid zstd frame (compressed size: %zu bytes)", rawData.size());
+			return false;
+		}
+
+		if (decompressedSize == ZSTD_CONTENTSIZE_UNKNOWN) {
+			g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting compressed clipboard payload: unknown decompressed size (compressed size: %zu bytes)", rawData.size());
+			return false;
+		}
+
+		if (decompressedSize > ClipboardLimits::kMaxDecompressedClipboardBytes) {
+			g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting compressed clipboard payload: decompressed size %llu bytes exceeds limit %llu bytes", decompressedSize, ClipboardLimits::kMaxDecompressedClipboardBytes);
+			return false;
+		}
+
+		std::vector<unsigned char> decompressedData(static_cast<size_t>(decompressedSize));
 		const size_t actualSize = ZSTD_decompress(
 			decompressedData.data(),
 			decompressedData.size(),
 			rawData.data(),
 			rawData.size());
 
-		if (ZSTD_isError(actualSize) != 0 || actualSize != decompressedSize) {
+		if (ZSTD_isError(actualSize) != 0) {
+			g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting compressed clipboard payload: zstd decompression failed (%hs)", ZSTD_getErrorName(actualSize));
+			return false;
+		}
+
+		if (actualSize != decompressedSize) {
+			g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting compressed clipboard payload: decompressed size mismatch (expected %llu bytes, actual %zu bytes)", decompressedSize, actualSize);
 			return false;
 		}
 
