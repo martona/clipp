@@ -10,8 +10,22 @@
 #include <vector>
 
 #ifdef __APPLE__
-#include <CoreFoundation/CoreFoundation.h>
-#include <Security/Security.h>
+    #include <CoreFoundation/CoreFoundation.h>
+    #include <Security/Security.h>
+    static std::string FormatSecurityError(const char* context, OSStatus status) {
+        std::ostringstream oss;
+        oss << context << " (OSStatus " << status;
+        CFStringRef message = SecCopyErrorMessageString(status, nullptr);
+        if (message != nullptr) {
+            char buffer[256]{};
+            if (CFStringGetCString(message, buffer, sizeof(buffer), kCFStringEncodingUTF8)) {
+                oss << ": " << buffer;
+            }
+            CFRelease(message);
+        }
+        oss << ")";
+        return oss.str();
+    }
 #endif
 
 KeyManager g_keyManager(g_settings);
@@ -55,11 +69,17 @@ bool KeyManager::SetNetworkKey(const std::array<unsigned char, NetworkKeySize>& 
 
     CFMutableDictionaryRef addQuery = CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
         &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    if (addQuery == nullptr) {
+        CFRelease(plainData);
+        if (errorMessage != nullptr) *errorMessage = "Failed to allocate keychain add query";
+        return false;
+    }
+
     CFDictionaryAddValue(addQuery, kSecClass, kSecClassGenericPassword);
     CFDictionaryAddValue(addQuery, kSecAttrService, service);
     CFDictionaryAddValue(addQuery, kSecAttrAccount, account);
     CFDictionaryAddValue(addQuery, kSecValueData, plainData);
-    CFDictionaryAddValue(addQuery, kSecUseAuthenticationUI, kSecUseAuthenticationUIFail);
+    CFDictionaryAddValue(addQuery, kSecAttrAccessible, kSecAttrAccessibleAfterFirstUnlock);
 
     OSStatus status = SecItemAdd(addQuery, nullptr);
     CFRelease(addQuery);
@@ -67,13 +87,25 @@ bool KeyManager::SetNetworkKey(const std::array<unsigned char, NetworkKeySize>& 
     if (status == errSecDuplicateItem) {
         CFMutableDictionaryRef matchQuery = CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
             &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        if (matchQuery == nullptr) {
+            CFRelease(plainData);
+            if (errorMessage != nullptr) *errorMessage = "Failed to allocate keychain match query";
+            return false;
+        }
         CFDictionaryAddValue(matchQuery, kSecClass, kSecClassGenericPassword);
         CFDictionaryAddValue(matchQuery, kSecAttrService, service);
         CFDictionaryAddValue(matchQuery, kSecAttrAccount, account);
 
         CFMutableDictionaryRef updateAttrs = CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
             &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        if (updateAttrs == nullptr) {
+            CFRelease(matchQuery);
+            CFRelease(plainData);
+            if (errorMessage != nullptr) *errorMessage = "Failed to allocate keychain update query";
+            return false;
+        }
         CFDictionaryAddValue(updateAttrs, kSecValueData, plainData);
+        CFDictionaryAddValue(updateAttrs, kSecAttrAccessible, kSecAttrAccessibleAfterFirstUnlock);
         status = SecItemUpdate(matchQuery, updateAttrs);
         CFRelease(updateAttrs);
         CFRelease(matchQuery);
@@ -82,7 +114,12 @@ bool KeyManager::SetNetworkKey(const std::array<unsigned char, NetworkKeySize>& 
     CFRelease(plainData);
 
     if (status != errSecSuccess) {
-        if (errorMessage != nullptr) *errorMessage = "Failed to encrypt key into keychain";
+        if (errorMessage != nullptr) {
+            *errorMessage = FormatSecurityError("Failed to store network key in keychain", status);
+            if (status == errSecInteractionNotAllowed) {
+                *errorMessage += ". The login keychain is locked or unavailable in this session; unlock it and retry.";
+            }
+        }
         return false;
     }
 
@@ -173,7 +210,7 @@ bool KeyManager::GetNetworkKey(std::array<unsigned char, NetworkKeySize>& networ
     CFRelease(query);
 
     if (status != errSecSuccess || outData == nullptr) {
-        if (errorMessage != nullptr) *errorMessage = "Failed to decrypt key from keychain";
+        if (errorMessage != nullptr) *errorMessage = FormatSecurityError("Failed to read network key from keychain", status);
         if (outData != nullptr) CFRelease(outData);
         return false;
     }

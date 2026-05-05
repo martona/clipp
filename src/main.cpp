@@ -146,6 +146,12 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    unsigned char keyHash[crypto_hash_sha256_BYTES];
+    crypto_hash_sha256(keyHash, networkKey.data(), networkKey.size());
+    char keyHashHex[crypto_hash_sha256_BYTES * 2 + 1];
+    sodium_bin2hex(keyHashHex, sizeof(keyHashHex), keyHash, sizeof(keyHash));
+    g_logger.log(__FUNCTION__, Logger::Level::Info, "Network Key SHA-256: %s", keyHashHex);
+
     // Start worker threads
     if (StartClipboardNotification(OnClipboardNotification)) {
         if (StartMDNS(OnMDNSNotification)) {

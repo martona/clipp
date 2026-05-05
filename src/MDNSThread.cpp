@@ -206,6 +206,11 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
     int reuseAddr = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuseAddr), sizeof(reuseAddr));
 
+    #ifdef __APPLE__
+        int reusePort = 1;
+        setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, reinterpret_cast<const char*>(&reusePort), sizeof(reusePort));
+    #endif
+
     sockaddr_in bindAddr{};
     bindAddr.sin_family = AF_INET;
     bindAddr.sin_port = htons(static_cast<u_short>(g_settings.mdnsPort()));
@@ -248,7 +253,7 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
         tv.tv_sec = 10;
         tv.tv_usec = 0;
 
-        const int ready = select(0, &readfds, nullptr, nullptr, &tv);
+        const int ready = select(static_cast<int>(sock) + 1, &readfds, nullptr, nullptr, &tv);
         if (ready == SOCKET_ERROR)
             break;
 

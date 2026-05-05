@@ -58,6 +58,10 @@ void Listener::ThreadProc() {
 			InterruptibleSleep(std::chrono::seconds(5));
             continue;
         }
+
+        int reuseAddr = 1;
+        setsockopt(listenSock, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuseAddr), sizeof(reuseAddr));
+
         {
             std::lock_guard<std::mutex> lock(listenSocketMutex_);
             listenSocket_ = listenSock;
@@ -113,7 +117,7 @@ void Listener::ThreadProc() {
             FD_SET(listenSock, &readSet);
             timeval timeout{};
             timeout.tv_sec = 2;
-            const int ready = select(0, &readSet, nullptr, nullptr, &timeout);
+            const int ready = select(static_cast<int>(listenSock) + 1, &readSet, nullptr, nullptr, &timeout);
             clientManager_.Cleanup();
 
             if (!running_.load()) {
