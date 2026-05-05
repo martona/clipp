@@ -92,30 +92,22 @@ static std::string GetLocalHostName() {
     return "unknown";
 }
 
-static mdns_packet BuildDiscoveryPacket(const std::string& hostName) {
-	mdns_packet packet;
-	packet.version = htons(kProtocolVersion);
-	randombytes_buf(packet.queryID, sizeof(packet.queryID));
-	randombytes_buf(packet.nonce, sizeof(packet.nonce));
-	strncpys(packet.selector, kProtocolSelector, cntof(packet.selector));
-	strncpys(packet.hostName, hostName.c_str(), cntof(packet.hostName));
-	strncpys(packet.verb, "query", cntof(packet.verb));
-    packet.port = htons(static_cast<u_short>(g_settings.tcpPort()));
-    std::memcpy(packet.hostID, g_hostID.data(), sizeof(packet.hostID));
-	std::memcpy(g_lastSentQueryID.data(), packet.queryID, sizeof(packet.queryID));
-    return packet;
-}
-
-static mdns_packet BuildResponsePacket(const std::string& hostName, const unsigned char* queryID) {
+static mdns_packet BuildMDNSPacket(const std::string& hostName, const std::string& verb, const unsigned char* queryID = nullptr) {
     mdns_packet packet;
     packet.version = htons(kProtocolVersion);
     randombytes_buf(packet.nonce, sizeof(packet.nonce));
     strncpys(packet.selector, kProtocolSelector, cntof(packet.selector));
     strncpys(packet.hostName, hostName.c_str(), cntof(packet.hostName));
-    strncpys(packet.verb, "response", cntof(packet.verb));
-	packet.port = htons(static_cast<u_short>(g_settings.tcpPort()));
+    strncpys(packet.verb, verb.c_str(), cntof(packet.verb));
+    packet.port = htons(static_cast<u_short>(g_settings.tcpPort()));
     std::memcpy(packet.hostID, g_hostID.data(), sizeof(packet.hostID));
-    std::memcpy(packet.queryID, queryID, sizeof(packet.queryID));
+    if (queryID) {
+        std::memcpy(packet.queryID, queryID, sizeof(packet.queryID));
+        std::memcpy(g_lastSentQueryID.data(), queryID, sizeof(packet.queryID));
+    } else {
+        randombytes_buf(packet.queryID, sizeof(packet.queryID));
+        std::memcpy(g_lastSentQueryID.data(), packet.queryID, sizeof(packet.queryID));
+    }
     return packet;
 }
 
@@ -167,7 +159,7 @@ static bool ParseDiscoveryPacket(mdns_packet& pkt,
 }
 
 static bool SendDiscoveryPacket(SOCKET sock, const sockaddr_in& targetAddr, const std::string& hostName) {
-    mdns_packet pkt = BuildDiscoveryPacket(hostName);
+    mdns_packet pkt = BuildMDNSPacket(hostName, "query");
     encrypted_mdns_packet encryptedPacket{};
     if (!EncryptPacket(pkt, encryptedPacket))
         return false;
@@ -288,7 +280,7 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
             }
 
             if (verb == "query" && rawQueryID != nullptr) {
-                mdns_packet responsePacket = BuildResponsePacket(localHostName, rawQueryID);
+                mdns_packet responsePacket = BuildMDNSPacket(localHostName, "response", rawQueryID);
                 encrypted_mdns_packet encryptedResponse{};
                 if (EncryptPacket(responsePacket, encryptedResponse)) {
                     sendto(sock, reinterpret_cast<const char*>(&encryptedResponse), sizeof(encryptedResponse), 0,
