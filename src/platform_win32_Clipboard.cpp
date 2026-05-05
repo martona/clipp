@@ -145,7 +145,7 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
     return payload;
 }
 
-void SetClipboardData(const ClipboardPayload& payload) {
+void SetClipboardData(ClipboardPayload& payload) {
     XXH128_hash_t newHash = XXH3_128bits(payload.rawData.data(), payload.rawData.size());
     {
         std::lock_guard<std::mutex> lock(g_hashMutex);
@@ -163,9 +163,10 @@ void SetClipboardData(const ClipboardPayload& payload) {
             }
 
             if (payload.formatId == CF_UNICODETEXT) {
-                const char* utf8Data = reinterpret_cast<const char*>(payload.rawData.data());
-                const int utf8Bytes = static_cast<int>(payload.rawData.size());
-                const int wideChars = MultiByteToWideChar(CP_UTF8, 0, utf8Data, utf8Bytes, nullptr, 0);
+                char* utf8Data = reinterpret_cast<char*>(payload.rawData.data());
+                int utf8Bytes = reinterpret_cast<int>(payload.rawData.size());
+				if (utf8Bytes > 0) utf8Data[utf8Bytes - 1] = '\0'; 
+                int wideChars = MultiByteToWideChar(CP_UTF8, 0, utf8Data, utf8Bytes, nullptr, 0);
                 if (wideChars > 0) {
                     const SIZE_T wideBytes = static_cast<SIZE_T>(wideChars) * sizeof(wchar_t);
                     HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, wideBytes);

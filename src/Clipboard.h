@@ -16,4 +16,4 @@ void StopClipboardNotification();
 
 // Reads the clipboard data and returns it as packet
 ClipboardPayload ReadClipboardData(PlatformWindowHandle hwnd);
-void SetClipboardData(const ClipboardPayload& payload);
+void SetClipboardData(ClipboardPayload& payload);

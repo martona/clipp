@@ -39,11 +39,13 @@ if (APPLE)
     find_library(COREFOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
     find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
     find_library(SECURITY_FRAMEWORK Security REQUIRED)
+    find_library(APPKIT_FRAMEWORK AppKit REQUIRED)
 
     target_link_libraries(clipp PRIVATE
         ${COREFOUNDATION_FRAMEWORK}
         ${FOUNDATION_FRAMEWORK}
         ${SECURITY_FRAMEWORK}
+        ${APPKIT_FRAMEWORK}
     )
 endif()
 
