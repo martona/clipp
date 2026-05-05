@@ -89,9 +89,6 @@
     <ClInclude Include="platform.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="platform_win32_Clipboard.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="Logger.h">
       <Filter>Header Files</Filter>
     </ClInclude>

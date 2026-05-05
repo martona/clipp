@@ -3,6 +3,11 @@
 #include <thread>
 #include <future>
 #include <cstring>
+#include <cstdint>
+#include <limits>
+#include <vector>
+#include <utility>
+#include <lodepng.h>
 #include <xxhash.h>
 #include "Logger.h"
 
@@ -15,6 +20,328 @@ static XXH128_hash_t g_lastClipboardHash{ 0, 0 };
 #define CLIPBOARD_DEBOUNCE_INTERVAL_MS 250
 
 static ClipboardCallback g_clipboardCallback = nullptr;
+
+#ifndef BI_ALPHABITFIELDS
+#define BI_ALPHABITFIELDS 6L
+#endif
+
+static bool IsPngStream(const std::vector<unsigned char>& data) {
+    static constexpr unsigned char signature[] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n' };
+    return data.size() >= sizeof(signature) && std::memcmp(data.data(), signature, sizeof(signature)) == 0;
+}
+
+static bool CheckedMulSize(size_t a, size_t b, size_t& result) {
+    if (a != 0 && b > (std::numeric_limits<size_t>::max)() / a) return false;
+    result = a * b;
+    return true;
+}
+
+static void LogLastError(const char* function, const wchar_t* message) {
+    g_logger.log(function, Logger::Level::Warning, L"%ls (GetLastError=%lu)", message, GetLastError());
+}
+
+static unsigned char ScaleMaskComponent(uint32_t pixel, uint32_t mask) {
+    if (mask == 0) return 0;
+
+    unsigned int shift = 0;
+    while (shift < 32u && ((mask >> shift) & 1u) == 0u) ++shift;
+
+    unsigned int bits = 0;
+    uint32_t shiftedMask = mask >> shift;
+    while (bits < 32u && (shiftedMask & (uint32_t{ 1 } << bits)) != 0u) ++bits;
+
+    const uint32_t value = (pixel & mask) >> shift;
+    const uint32_t maxValue = (bits >= 32u) ? 0xffffffffu : ((uint32_t{ 1 } << bits) - 1u);
+    if (maxValue == 0) return 0;
+    return static_cast<unsigned char>((value * 255u + (maxValue / 2u)) / maxValue);
+}
+
+static uint32_t ReadLe16(const unsigned char* data) {
+    return static_cast<uint32_t>(data[0]) | (static_cast<uint32_t>(data[1]) << 8);
+}
+
+static uint32_t ReadLe32(const unsigned char* data) {
+    return static_cast<uint32_t>(data[0]) |
+        (static_cast<uint32_t>(data[1]) << 8) |
+        (static_cast<uint32_t>(data[2]) << 16) |
+        (static_cast<uint32_t>(data[3]) << 24);
+}
+
+static size_t DIBColorTableEntries(const BITMAPINFOHEADER& header) {
+    if (header.biClrUsed != 0) return header.biClrUsed;
+    if (header.biBitCount <= 8) return size_t{ 1 } << header.biBitCount;
+    return 0;
+}
+
+static bool DIBToPNG(const unsigned char* dibData, size_t dibSize, std::vector<unsigned char>& pngData) {
+    pngData.clear();
+    if (dibSize < sizeof(BITMAPINFOHEADER)) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot encode clipboard DIB as PNG: DIB is too small (%zu bytes)", dibSize);
+        return false;
+    }
+
+    const auto* header = reinterpret_cast<const BITMAPINFOHEADER*>(dibData);
+    if (header->biSize < sizeof(BITMAPINFOHEADER) || header->biSize > dibSize) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot encode clipboard DIB as PNG: invalid header size %lu for %zu byte DIB", header->biSize, dibSize);
+        return false;
+    }
+    if (header->biPlanes != 1 || header->biWidth <= 0 || header->biHeight == 0) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot encode clipboard DIB as PNG: unsupported geometry/planes (width=%ld, height=%ld, planes=%u)", header->biWidth, header->biHeight, header->biPlanes);
+        return false;
+    }
+
+    const uint16_t bitCount = header->biBitCount;
+    if (bitCount != 1 && bitCount != 4 && bitCount != 8 && bitCount != 16 && bitCount != 24 && bitCount != 32) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot encode clipboard DIB as PNG: unsupported bit depth %u", bitCount);
+        return false;
+    }
+
+    const bool bitfields = header->biCompression == BI_BITFIELDS || header->biCompression == BI_ALPHABITFIELDS;
+    if (header->biCompression != BI_RGB && !bitfields) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot encode clipboard DIB as PNG: unsupported compression %lu", header->biCompression);
+        return false;
+    }
+
+    const size_t width = static_cast<size_t>(header->biWidth);
+    const size_t height = header->biHeight < 0
+        ? static_cast<size_t>(-static_cast<int64_t>(header->biHeight))
+        : static_cast<size_t>(header->biHeight);
+    const bool bottomUp = header->biHeight > 0;
+
+    size_t rowBits = 0;
+    if (!CheckedMulSize(width, bitCount, rowBits)) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot encode clipboard DIB as PNG: row bit count overflow (width=%zu, bit depth=%u)", width, bitCount);
+        return false;
+    }
+    size_t rowStride = ((rowBits + 31u) / 32u) * 4u;
+    size_t pixelBytes = 0;
+    if (!CheckedMulSize(rowStride, height, pixelBytes)) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot encode clipboard DIB as PNG: pixel data size overflow (width=%zu, height=%zu, bit depth=%u)", width, height, bitCount);
+        return false;
+    }
+
+    size_t masksOffset = header->biSize;
+    uint32_t redMask = 0;
+    uint32_t greenMask = 0;
+    uint32_t blueMask = 0;
+    uint32_t alphaMask = 0;
+
+    if (bitfields) {
+        if (header->biSize >= sizeof(BITMAPV4HEADER)) {
+            const auto* v4 = reinterpret_cast<const BITMAPV4HEADER*>(dibData);
+            redMask = v4->bV4RedMask;
+            greenMask = v4->bV4GreenMask;
+            blueMask = v4->bV4BlueMask;
+            alphaMask = v4->bV4AlphaMask;
+        }
+        else {
+            const size_t maskBytes = header->biCompression == BI_ALPHABITFIELDS ? 16u : 12u;
+            if (masksOffset > dibSize || dibSize - masksOffset < maskBytes) {
+                g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot encode clipboard DIB as PNG: missing bitfield masks");
+                return false;
+            }
+            redMask = ReadLe32(dibData + masksOffset);
+            greenMask = ReadLe32(dibData + masksOffset + 4);
+            blueMask = ReadLe32(dibData + masksOffset + 8);
+            if (maskBytes == 16u) alphaMask = ReadLe32(dibData + masksOffset + 12);
+            masksOffset += maskBytes;
+        }
+    }
+    else if (bitCount == 16) {
+        redMask = 0x7c00;
+        greenMask = 0x03e0;
+        blueMask = 0x001f;
+    }
+    else if (bitCount == 32) {
+        redMask = 0x00ff0000;
+        greenMask = 0x0000ff00;
+        blueMask = 0x000000ff;
+        alphaMask = 0xff000000;
+    }
+
+    const size_t paletteOffset = masksOffset;
+    const size_t paletteEntries = DIBColorTableEntries(*header);
+    size_t paletteBytes = 0;
+    if (!CheckedMulSize(paletteEntries, sizeof(RGBQUAD), paletteBytes)) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot encode clipboard DIB as PNG: palette size overflow (%zu entries)", paletteEntries);
+        return false;
+    }
+    if (paletteOffset > dibSize || dibSize - paletteOffset < paletteBytes) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot encode clipboard DIB as PNG: DIB palette is truncated (entries=%zu)", paletteEntries);
+        return false;
+    }
+
+    const unsigned char* palette = dibData + paletteOffset;
+    const size_t pixelOffset = paletteOffset + paletteBytes;
+    if (pixelOffset > dibSize || dibSize - pixelOffset < pixelBytes) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot encode clipboard DIB as PNG: DIB pixel data is truncated (needed=%zu bytes)", pixelBytes);
+        return false;
+    }
+
+    size_t rgbaBytes = 0;
+    if (!CheckedMulSize(width, height, rgbaBytes) || !CheckedMulSize(rgbaBytes, 4u, rgbaBytes)) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot encode clipboard DIB as PNG: RGBA buffer size overflow (width=%zu, height=%zu)", width, height);
+        return false;
+    }
+    std::vector<unsigned char> rgba(rgbaBytes);
+
+    bool anyAlpha = false;
+    if (bitCount == 32 && alphaMask != 0) {
+        for (size_t y = 0; y < height && !anyAlpha; ++y) {
+            const unsigned char* srcRow = dibData + pixelOffset + y * rowStride;
+            for (size_t x = 0; x < width; ++x) {
+                if (ScaleMaskComponent(ReadLe32(srcRow + x * 4), alphaMask) != 0) {
+                    anyAlpha = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    for (size_t y = 0; y < height; ++y) {
+        const size_t srcY = bottomUp ? (height - 1u - y) : y;
+        const unsigned char* srcRow = dibData + pixelOffset + srcY * rowStride;
+        unsigned char* dst = rgba.data() + (y * width * 4u);
+
+        for (size_t x = 0; x < width; ++x) {
+            unsigned char r = 0;
+            unsigned char g = 0;
+            unsigned char b = 0;
+            unsigned char a = 255;
+
+            if (bitCount == 24) {
+                const unsigned char* px = srcRow + x * 3u;
+                b = px[0];
+                g = px[1];
+                r = px[2];
+            }
+            else if (bitCount == 32 || bitCount == 16) {
+                const uint32_t pixel = bitCount == 32 ? ReadLe32(srcRow + x * 4u) : ReadLe16(srcRow + x * 2u);
+                r = ScaleMaskComponent(pixel, redMask);
+                g = ScaleMaskComponent(pixel, greenMask);
+                b = ScaleMaskComponent(pixel, blueMask);
+                if (alphaMask != 0 && anyAlpha) a = ScaleMaskComponent(pixel, alphaMask);
+            } else {
+                uint32_t index = 0;
+                if (bitCount == 8) {
+                    index = srcRow[x];
+                }
+                else if (bitCount == 4) {
+                    const unsigned char packed = srcRow[x / 2u];
+                    index = (x % 2u == 0) ? (packed >> 4) : (packed & 0x0f);
+                }
+                else {
+                    const unsigned char packed = srcRow[x / 8u];
+                    index = (packed >> (7u - (x % 8u))) & 0x01;
+                }
+
+                if (index >= paletteEntries) {
+                    g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot encode clipboard DIB as PNG: palette index %u exceeds %zu entries", index, paletteEntries);
+                    return false;
+                }
+                const unsigned char* entry = palette + index * sizeof(RGBQUAD);
+                b = entry[0];
+                g = entry[1];
+                r = entry[2];
+            }
+
+            dst[x * 4u + 0u] = r;
+            dst[x * 4u + 1u] = g;
+            dst[x * 4u + 2u] = b;
+            dst[x * 4u + 3u] = a;
+        }
+    }
+
+    const unsigned int error = lodepng::encode(pngData, rgba, static_cast<unsigned>(width), static_cast<unsigned>(height));
+    if (error != 0) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to encode DIB clipboard image as PNG: %hs", lodepng_error_text(error));
+        pngData.clear();
+        return false;
+    }
+
+    if (!IsPngStream(pngData)) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Encoded clipboard image did not produce a valid PNG stream");
+        return false;
+    }
+
+    return true;
+}
+
+static bool PNGToDIB(const std::vector<unsigned char>& pngData, std::vector<unsigned char>& dibData) {
+    dibData.clear();
+    if (!IsPngStream(pngData)) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot decode clipboard image payload: payload is not a PNG stream (%zu bytes)", pngData.size());
+        return false;
+    }
+
+    std::vector<unsigned char> rgba;
+    unsigned width = 0;
+    unsigned height = 0;
+    const unsigned int error = lodepng::decode(rgba, width, height, pngData);
+    if (error != 0) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to decode PNG clipboard image: %hs", lodepng_error_text(error));
+        return false;
+    }
+
+    if (width == 0 || height == 0) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot decode PNG clipboard image: decoded image has invalid dimensions (%u x %u)", width, height);
+        return false;
+    }
+    if (width > static_cast<unsigned>((std::numeric_limits<LONG>::max)()) ||
+        height > static_cast<unsigned>((std::numeric_limits<LONG>::max)())) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot decode PNG clipboard image: dimensions are too large for DIB (%u x %u)", width, height);
+        return false;
+    }
+
+    size_t pixelCount = 0;
+    size_t pixelBytes = 0;
+    if (!CheckedMulSize(width, height, pixelCount) || !CheckedMulSize(pixelCount, 4u, pixelBytes)) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot decode PNG clipboard image: RGBA buffer size overflow (%u x %u)", width, height);
+        return false;
+    }
+    if (rgba.size() != pixelBytes) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot decode PNG clipboard image: decoded RGBA size mismatch (expected=%zu, actual=%zu)", pixelBytes, rgba.size());
+        return false;
+    }
+
+    const size_t headerBytes = sizeof(BITMAPV5HEADER);
+    size_t dibBytes = 0;
+    if (!CheckedMulSize(width, 4u, pixelBytes) || !CheckedMulSize(pixelBytes, height, pixelBytes) ||
+        pixelBytes > (std::numeric_limits<size_t>::max)() - headerBytes) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot decode PNG clipboard image: DIB buffer size overflow (%u x %u)", width, height);
+        return false;
+    }
+    dibBytes = headerBytes + pixelBytes;
+
+    dibData.assign(dibBytes, 0);
+    auto* header = reinterpret_cast<BITMAPV5HEADER*>(dibData.data());
+    header->bV5Size = sizeof(BITMAPV5HEADER);
+    header->bV5Width = static_cast<LONG>(width);
+    header->bV5Height = -static_cast<LONG>(height);
+    header->bV5Planes = 1;
+    header->bV5BitCount = 32;
+    header->bV5Compression = BI_BITFIELDS;
+    header->bV5SizeImage = static_cast<DWORD>(pixelBytes);
+    header->bV5RedMask = 0x00ff0000;
+    header->bV5GreenMask = 0x0000ff00;
+    header->bV5BlueMask = 0x000000ff;
+    header->bV5AlphaMask = 0xff000000;
+    header->bV5CSType = LCS_sRGB;
+
+    unsigned char* pixels = dibData.data() + headerBytes;
+    for (size_t y = 0; y < height; ++y) {
+        unsigned char* dstRow = pixels + y * static_cast<size_t>(width) * 4u;
+        const unsigned char* srcRow = rgba.data() + y * static_cast<size_t>(width) * 4u;
+        for (size_t x = 0; x < width; ++x) {
+            dstRow[x * 4u + 0u] = srcRow[x * 4u + 2u];
+            dstRow[x * 4u + 1u] = srcRow[x * 4u + 1u];
+            dstRow[x * 4u + 2u] = srcRow[x * 4u + 0u];
+            dstRow[x * 4u + 3u] = srcRow[x * 4u + 3u];
+        }
+    }
+
+    return true;
+}
 
 LRESULT CALLBACK ClipboardWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
@@ -95,8 +422,10 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
     ClipboardPayload payload{};
     payload.formatId = 0; // 0 indicates empty/unsupported
 
+    bool opened = false;
     for (int i = 0; i < 5; ++i) {
         if (OpenClipboard(hwnd)) {
+            opened = true;
             // 1. Try to read Text
             if (IsClipboardFormatAvailable(CF_UNICODETEXT)) {
                 HANDLE hData = GetClipboardData(CF_UNICODETEXT);
@@ -109,11 +438,27 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
                             payload.formatId = CF_UNICODETEXT;
                             payload.rawData.resize(utf8Size);
                             // Perform the actual conversion straight into the vector
-                            WideCharToMultiByte(CP_UTF8, 0, utf16Str, -1,
-                                reinterpret_cast<char*>(payload.rawData.data()), utf8Size, nullptr, nullptr);
+                            if (WideCharToMultiByte(CP_UTF8, 0, utf16Str, -1,
+                                reinterpret_cast<char*>(payload.rawData.data()), utf8Size, nullptr, nullptr) > 0) {
+                                g_logger.log(__FUNCTION__, Logger::Level::Info, L"Read CF_UNICODETEXT from system clipboard (UTF-8 payload: %zu bytes)", payload.rawData.size());
+                            }
+                            else {
+                                payload.formatId = 0;
+                                payload.rawData.clear();
+                                LogLastError(__FUNCTION__, L"Failed to convert CF_UNICODETEXT clipboard data to UTF-8");
+                            }
+                        }
+                        else {
+                            LogLastError(__FUNCTION__, L"Failed to measure CF_UNICODETEXT clipboard data as UTF-8");
                         }
                         GlobalUnlock(hData);
                     }
+                    else {
+                        LogLastError(__FUNCTION__, L"Failed to lock CF_UNICODETEXT clipboard data");
+                    }
+                }
+                else {
+                    LogLastError(__FUNCTION__, L"Failed to retrieve CF_UNICODETEXT clipboard data");
                 }
             }
             // 2. Try to read an Image (if text isn't available)
@@ -122,14 +467,31 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
                 if (hData) {
                     const unsigned char* dibData = static_cast<const unsigned char*>(GlobalLock(hData));
                     if (dibData) {
-                        // GlobalSize tells us exactly how many bytes the DIB takes up in memory
+                        // GlobalSize tells us exactly how many bytes the DIB takes up in memory.
+                        // Encode the local DIB as PNG before placing it into the network payload.
                         SIZE_T dataSize = GlobalSize(hData);
                         if (dataSize > 0) {
-                            payload.formatId = CF_DIB;
-                            payload.rawData.assign(dibData, dibData + dataSize);
+                            std::vector<unsigned char> pngData;
+                            if (DIBToPNG(dibData, static_cast<size_t>(dataSize), pngData)) {
+                                payload.formatId = CF_DIB;
+                                payload.rawData = std::move(pngData);
+                                g_logger.log(__FUNCTION__, Logger::Level::Info, L"Read CF_DIB from system clipboard and encoded PNG payload (DIB: %zu bytes, PNG: %zu bytes)", static_cast<size_t>(dataSize), payload.rawData.size());
+                            }
+                            else {
+                                g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to encode CF_DIB clipboard image as PNG; skipping image payload");
+                            }
+                        }
+                        else {
+                            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"CF_DIB clipboard data has zero byte GlobalSize; skipping image payload");
                         }
                         GlobalUnlock(hData);
                     }
+                    else {
+                        LogLastError(__FUNCTION__, L"Failed to lock CF_DIB clipboard data");
+                    }
+                }
+                else {
+                    LogLastError(__FUNCTION__, L"Failed to retrieve CF_DIB clipboard data");
                 }
             }
             else {
@@ -138,8 +500,13 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
             CloseClipboard();
             break;
         }
-        // Yield and wait. 
+        LogLastError(__FUNCTION__, L"OpenClipboard failed while reading; retrying");
+        // Yield and wait.
         Sleep(10 + (i * 10));
+    }
+
+    if (!opened) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to open system clipboard for reading after retries");
     }
 
     return payload;
@@ -154,9 +521,14 @@ void SetClipboardData(ClipboardPayload& payload) {
             return;
         }
     }
+
+    bool opened = false;
+    bool wroteClipboard = false;
     for (int i = 0; i < 5; ++i) {
         if (OpenClipboard(g_hwnd)) {
+            opened = true;
             if (!EmptyClipboard()) {
+                LogLastError(__FUNCTION__, L"Failed to empty system clipboard before writing; retrying");
                 CloseClipboard();
                 Sleep(10 + (i * 10));
                 continue;
@@ -165,7 +537,7 @@ void SetClipboardData(ClipboardPayload& payload) {
             if (payload.formatId == CF_UNICODETEXT) {
                 char* utf8Data = reinterpret_cast<char*>(payload.rawData.data());
                 int utf8Bytes = static_cast<int>(payload.rawData.size());
-				if (utf8Bytes > 0) utf8Data[utf8Bytes - 1] = '\0'; 
+                if (utf8Bytes > 0) utf8Data[utf8Bytes - 1] = '\0';
                 int wideChars = MultiByteToWideChar(CP_UTF8, 0, utf8Data, utf8Bytes, nullptr, 0);
                 if (wideChars > 0) {
                     const SIZE_T wideBytes = static_cast<SIZE_T>(wideChars) * sizeof(wchar_t);
@@ -176,49 +548,84 @@ void SetClipboardData(ClipboardPayload& payload) {
                             if (MultiByteToWideChar(CP_UTF8, 0, utf8Data, utf8Bytes, dst, wideChars) > 0) {
                                 GlobalUnlock(hMem);
                                 if (!::SetClipboardData(CF_UNICODETEXT, hMem)) {
+                                    LogLastError(__FUNCTION__, L"Failed to set CF_UNICODETEXT on system clipboard");
                                     GlobalFree(hMem);
                                 }
                                 else {
+                                    wroteClipboard = true;
+                                    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Wrote CF_UNICODETEXT to system clipboard (UTF-8 payload: %zu bytes, UTF-16 bytes: %zu)", payload.rawData.size(), static_cast<size_t>(wideBytes));
                                     std::lock_guard<std::mutex> lock(g_hashMutex);
                                     g_lastClipboardHash = newHash;
                                 }
                             }
                             else {
+                                LogLastError(__FUNCTION__, L"Failed to convert UTF-8 payload to CF_UNICODETEXT");
                                 GlobalUnlock(hMem);
                                 GlobalFree(hMem);
                             }
                         }
                         else {
+                            LogLastError(__FUNCTION__, L"Failed to lock CF_UNICODETEXT output buffer");
                             GlobalFree(hMem);
-                        }
-                    }
-                }
-            }
-            else if (payload.formatId == CF_DIB) {
-                const size_t bytes = payload.rawData.size();
-                HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, bytes);
-                if (hMem) {
-                    void* dst = GlobalLock(hMem);
-                    if (dst) {
-                        std::memcpy(dst, payload.rawData.data(), bytes);
-                        GlobalUnlock(hMem);
-                        if (!::SetClipboardData(CF_DIB, hMem)) {
-                            GlobalFree(hMem);
-                        }
-                        else {
-                            std::lock_guard<std::mutex> lock(g_hashMutex);
-                            g_lastClipboardHash = newHash;
                         }
                     }
                     else {
-                        GlobalFree(hMem);
+                        LogLastError(__FUNCTION__, L"Failed to allocate CF_UNICODETEXT output buffer");
                     }
                 }
+                else {
+                    LogLastError(__FUNCTION__, L"Failed to measure UTF-8 payload as CF_UNICODETEXT");
+                }
+            }
+            else if (payload.formatId == CF_DIB) {
+                std::vector<unsigned char> dibData;
+                if (!PNGToDIB(payload.rawData, dibData)) {
+                    g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to decode PNG clipboard image payload as CF_DIB");
+                }
+                else {
+                    const size_t bytes = dibData.size();
+                    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, bytes);
+                    if (hMem) {
+                        void* dst = GlobalLock(hMem);
+                        if (dst) {
+                            std::memcpy(dst, dibData.data(), bytes);
+                            GlobalUnlock(hMem);
+                            if (!::SetClipboardData(CF_DIB, hMem)) {
+                                LogLastError(__FUNCTION__, L"Failed to set CF_DIB on system clipboard");
+                                GlobalFree(hMem);
+                            }
+                            else {
+                                wroteClipboard = true;
+                                g_logger.log(__FUNCTION__, Logger::Level::Info, L"Wrote CF_DIB to system clipboard from PNG payload (PNG: %zu bytes, DIB: %zu bytes)", payload.rawData.size(), bytes);
+                                std::lock_guard<std::mutex> lock(g_hashMutex);
+                                g_lastClipboardHash = newHash;
+                            }
+                        }
+                        else {
+                            LogLastError(__FUNCTION__, L"Failed to lock CF_DIB output buffer");
+                            GlobalFree(hMem);
+                        }
+                    }
+                    else {
+                        LogLastError(__FUNCTION__, L"Failed to allocate CF_DIB output buffer");
+                    }
+                }
+            }
+            else {
+                g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Unsupported clipboard payload format ID %u; nothing written", payload.formatId);
             }
 
             CloseClipboard();
             break;
         }
+        LogLastError(__FUNCTION__, L"OpenClipboard failed while writing; retrying");
         Sleep(10 + (i * 10));
+    }
+
+    if (!opened) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to open system clipboard for writing after retries");
+    }
+    else if (!wroteClipboard) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"System clipboard write did not complete (format ID: %u, payload size: %zu bytes)", payload.formatId, payload.rawData.size());
     }
 }

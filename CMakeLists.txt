@@ -23,6 +23,7 @@ endif()
 find_package(unofficial-sodium CONFIG REQUIRED)
 find_package(xxHash CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
+find_package(lodepng CONFIG REQUIRED)
 
 #find_package(unofficial-sodium CONFIG REQUIRED)
 ## Force CMake to print the absolute path where it found the configuration, then crash
@@ -32,6 +33,7 @@ target_link_libraries(clipp PRIVATE
     unofficial-sodium::sodium
     xxHash::xxhash
     zstd::libzstd
+    lodepng
 )
 
 

@@ -20,7 +20,7 @@ struct ClipboardPayload {
 		}
 
 		decodedDataSize = static_cast<uint32_t>(rawData.size());
-		if (rawData.size() < 512) {
+		if (rawData.size() < 512 || formatId != CF_UNICODETEXT) {
 			isCompressed = false;
 			return true;
 		}
