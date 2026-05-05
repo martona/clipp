@@ -5,7 +5,6 @@
 #include <iostream>
 #include <sodium.h>
 #include <string>
-#include <mdns.h>
 
 #include "platform.h"
 
