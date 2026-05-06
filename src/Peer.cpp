@@ -105,8 +105,8 @@ void Peer::CloseSocket() {
 }
 
 bool Peer::ConnectSocket() {
-	SOCKET socketHandle = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-	if (socketHandle == INVALID_SOCKET) {
+	socket_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (socket_ == INVALID_SOCKET) {
 		log(__FUNCTION__, Logger::Level::Error, L"Peer: failed to create socket.");
 		return false;
 	}
@@ -117,17 +117,16 @@ bool Peer::ConnectSocket() {
 	std::string peerIp = WideToUtf8String(ip());
 	if (inet_pton(AF_INET, peerIp.c_str(), &address.sin_addr) != 1) {
 		log(__FUNCTION__, Logger::Level::Error, L"Peer: invalid remote IP address.");
-		closesocket(socketHandle);
+		closesocket(socket_);
 		return false;
 	}
 
-	if (connect(socketHandle, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == SOCKET_ERROR) {
+	if (connect(socket_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == SOCKET_ERROR) {
 		log(__FUNCTION__, Logger::Level::Debug, L"Peer: TCP connect failed; retrying.");
-		closesocket(socketHandle);
+		closesocket(socket_);
 		return false;
 	}
 
-	socket_ = socketHandle;
 	return true;
 }
 

@@ -31,6 +31,7 @@ PeerManager g_peerManager;
 #ifdef _WIN32
 std::mutex g_shutdownMutex;
 std::condition_variable g_shutdownCV;
+std::atomic<bool> g_shutdownRequested{ false };
 
 BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType) {
     if (dwCtrlType == CTRL_C_EVENT || dwCtrlType == CTRL_BREAK_EVENT || dwCtrlType == CTRL_CLOSE_EVENT) {
