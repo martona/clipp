@@ -1,9 +1,9 @@
 #pragma once
 
 static bool RecvAll(SOCKET sock, char* buffer, int length) {
-	int total = 0;
+	long total = 0;
 	while (total < length) {
-		int received = recv(sock, buffer + total, (int)(length - total), 0);
+		long received = recv(sock, buffer + total, (int)(length - total), 0);
 		if (received <= 0) {
 			return false;
 		}
@@ -13,9 +13,9 @@ static bool RecvAll(SOCKET sock, char* buffer, int length) {
 }
 
 static bool SendAll(SOCKET sock, const char* buffer, int length) {
-	int total = 0;
+	long total = 0;
 	while (total < length) {
-		int sent = send(sock, buffer + total, (int)(length - total), 0);
+		long sent = send(sock, buffer + total, (int)(length - total), 0);
 		if (sent <= 0) {
 			return false;
 		}

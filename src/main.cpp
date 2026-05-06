@@ -21,10 +21,26 @@
     #include <termios.h>
     #include <unistd.h>
     #include <signal.h>
+    #include <signal.h>
+    #include <pthread.h>
 #endif
 
 Settings g_settings;
 PeerManager g_peerManager;
+
+#ifdef _WIN32
+std::mutex g_shutdownMutex;
+std::condition_variable g_shutdownCV;
+
+BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType) {
+    if (dwCtrlType == CTRL_C_EVENT || dwCtrlType == CTRL_BREAK_EVENT || dwCtrlType == CTRL_CLOSE_EVENT) {
+        g_shutdownRequested.store(true);
+        g_shutdownCV.notify_all(); // 100% safe on Windows
+        return TRUE;
+    }
+    return FALSE;
+}
+#endif
 
 static std::string ReadHiddenLine(const std::string & prompt) {
     std::cout << prompt.c_str();
@@ -147,7 +163,14 @@ int main(int argc, char* argv[]) {
             return -1;
         }
     #else
+	    // ignore SIGPIPE to prevent crashes when writing to a closed socket
         signal(SIGPIPE, SIG_IGN);
+		// block SIGINT and SIGTERM in all threads; we'll handle shutdown 
+        sigset_t waitset;
+        sigemptyset(&waitset);
+        sigaddset(&waitset, SIGINT);
+        sigaddset(&waitset, SIGTERM);
+        pthread_sigmask(SIG_BLOCK, &waitset, nullptr);
     #endif
 
     // libsodium requires initialization before calling any other functions
@@ -176,8 +199,17 @@ int main(int argc, char* argv[]) {
         if (StartMDNS(OnMDNSNotification)) {
             if (g_listener.Start()) {
                 g_logger.log(__FUNCTION__, Logger::Level::Info, "Successfully started.");
-                g_logger.log(__FUNCTION__, Logger::Level::Info, "Press Enter to exit.");
-                std::cin.get();
+
+                #ifdef _WIN32
+                    // Windows: Hook the dedicated thread handler and instantly sleep the main thread
+                    SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
+                    std::unique_lock<std::mutex> lock(g_shutdownMutex);
+                    g_shutdownCV.wait(lock, [] { return g_shutdownRequested.load(); });
+                #else
+                    // macOS: Instantly sleep the main thread until the blocked signal arrives
+                    int caughtSignal;
+                    sigwait(&waitset, &caughtSignal);
+                #endif
                 g_peerManager.ClearPeers();
                 g_listener.Stop();
 				g_logger.log(__FUNCTION__, Logger::Level::Info, "Listener stopped.");
