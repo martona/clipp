@@ -6,6 +6,7 @@
 #include <iostream>
 #include <cwchar>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <vector>
 
@@ -14,8 +15,9 @@
 #include "utils.h"
 
 Client::Client(SOCKET socket, ClipboardReceivedCallback clipboardReceivedCallback)
-    : clipboardReceivedCallback_(std::move(clipboardReceivedCallback)) {
-	socket_ = socket;
+    : clipboardReceivedCallback_(std::move(clipboardReceivedCallback)),
+      socket_(socket),
+      remoteIp_(Utf8ToWideString(SocketPeerIp(socket))) {
 }
 
 Client::~Client() {
@@ -57,24 +59,40 @@ std::wstring Client::remoteHostName() const {
     return remoteHostName_;
 }
 
+void Client::log(const char* function, Logger::Level level, const wchar_t* message, ...) const {
+    va_list args;
+    va_start(args, message);
+    logV(function, level, message, args);
+    va_end(args);
+}
+
+void Client::logV(const char* function, Logger::Level level, const wchar_t* message, va_list args) const {
+    wchar_t formattedMessage[1024];
+    int bufferSize = cntof(formattedMessage);
+    {
+        std::lock_guard<std::mutex> lock(remoteInfoMutex_);
+        int prefixlen = _snwprintf_s(formattedMessage, bufferSize, _TRUNCATE, L"[%ls %ls] ",
+            remoteHostName_.empty() ? L"<unknown>" : remoteHostName_.c_str(),
+            remoteIp_.empty() ? L"<unknown>" : remoteIp_.c_str());
+        if (prefixlen < 0) return;
+        vsnwprintf_truncate(formattedMessage + prefixlen, bufferSize - prefixlen, message != nullptr ? message : L"", args);
+    }
+    g_logger.log(function, level, L"%s", formattedMessage);
+}
+
 void Client::ThreadProc() {
     CryptoChannel channel;
     std::array<unsigned char, 32> remoteHostId{};
     std::string remoteHostNameUtf8;
     if (!channel.ServerHandshake(socket_, remoteHostId, remoteHostNameUtf8)) {
-        g_logger.log(__FUNCTION__, Logger::Level::Error, L"Client secure handshake failed.");
+        log(__FUNCTION__, Logger::Level::Error, L"Client secure handshake failed.");
     } else {
         {
             std::lock_guard<std::mutex> lock(remoteInfoMutex_);
             remoteHostID_ = remoteHostId;
-            size_t remoteHostNameWLen = utf8_to_utf16(remoteHostNameUtf8.c_str(), remoteHostNameUtf8.size(), nullptr, 0);
-            std::wstring remoteHostName(remoteHostNameWLen > 0 ? remoteHostNameWLen - 1 : 0, L'\0');
-            if (remoteHostNameWLen > 1) {
-                utf8_to_utf16(remoteHostNameUtf8.c_str(), remoteHostNameUtf8.size(), remoteHostName.data(), remoteHostNameWLen);
-            }
-            remoteHostName_ = remoteHostName;
+            remoteHostName_ = Utf8ToWideString(remoteHostNameUtf8);
         }
-        g_logger.log(__FUNCTION__, Logger::Level::Info, "Client connected: %s", remoteHostNameUtf8.c_str());
+        log(__FUNCTION__, Logger::Level::Info, L"Client connected");
 
         char packet[4] = {};
         while (!stopRequested_.load()) {
@@ -83,7 +101,7 @@ void Client::ThreadProc() {
             }
 
             if (std::memcmp(packet, "PING", 4) == 0) {
-                g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Client: PING");
+                log(__FUNCTION__, Logger::Level::Debug, L"Client: PING");
                 if (!channel.SendTaggedMessage(socket_, "PONG")) {
                     break;
                 }
@@ -96,7 +114,7 @@ void Client::ThreadProc() {
                     break;
                 }
 				if (headerMsg.size() != sizeof(NetworkDefs::ClipboardMessage)) {
-                    g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard message: header size mismatch (expected %zu bytes, actual %zu bytes)", sizeof(NetworkDefs::ClipboardMessage), headerMsg.size());
+                    log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard message: header size mismatch (expected %zu bytes, actual %zu bytes)", sizeof(NetworkDefs::ClipboardMessage), headerMsg.size());
                     break;
                 }
 
@@ -112,17 +130,17 @@ void Client::ThreadProc() {
 				}
 
 				if (payload.rawData.size() != static_cast<size_t>(encodedDataSize)) {
-					g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard message: encoded size mismatch (header: %u bytes, body: %zu bytes)", encodedDataSize, payload.rawData.size());
+					log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard message: encoded size mismatch (header: %u bytes, body: %zu bytes)", encodedDataSize, payload.rawData.size());
 					break;
 				}
 
 				if (payload.decodedDataSize > ClipboardLimits::kMaxDecompressedClipboardBytes) {
-                    g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard message: decoded size %u bytes exceeds limit %llu bytes", payload.decodedDataSize, ClipboardLimits::kMaxDecompressedClipboardBytes);
+                    log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard message: decoded size %u bytes exceeds limit %llu bytes", payload.decodedDataSize, ClipboardLimits::kMaxDecompressedClipboardBytes);
 					break;
 				}
 
 				if (!payload.isCompressed && encodedDataSize != payload.decodedDataSize) {
-                    g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting uncompressed clipboard message: encoded size %u bytes does not equal decoded size %u bytes", encodedDataSize, payload.decodedDataSize);
+                    log(__FUNCTION__, Logger::Level::Warning, L"Rejecting uncompressed clipboard message: encoded size %u bytes does not equal decoded size %u bytes", encodedDataSize, payload.decodedDataSize);
 					break;
 				}
 

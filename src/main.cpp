@@ -15,6 +15,7 @@
 #include "Peer.h"
 #include "PeerManager.h"
 #include "Clipboard.h"
+#include "utils.h"
 
 #ifndef _WIN32
     #include <termios.h>
@@ -91,11 +92,11 @@ void OnMDNSNotification(const char* hostNameUtf8,
 
     if (/*std::string(verb) == "response" &&*/rawHostID != nullptr) {
         size_t hostNameWLen = utf8_to_utf16(hostNameUtf8, strlen(hostNameUtf8), nullptr, 0);
-        std::wstring hostNameW(hostNameWLen > 0 ? hostNameWLen - 1 : 0, L'\0');
-        if (hostNameWLen > 1) {
-            utf8_to_utf16(hostNameUtf8, strlen(hostNameUtf8), hostNameW.data(), hostNameWLen);
+        std::wstring hostNameW(hostNameWLen, L'\0');
+        if (hostNameWLen > 0) {
+            utf8_to_utf16(hostNameUtf8, strlen(hostNameUtf8), hostNameW.data(), hostNameW.size());
         }
-        g_peerManager.AddPeer(hostNameW.c_str(), rawHostID, senderIp, port);
+        g_peerManager.AddPeer(hostNameW.c_str(), rawHostID, Utf8ToWideString(senderIp).c_str(), port);
     }
 
     g_peerManager.CullPeers();

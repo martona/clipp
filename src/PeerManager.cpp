@@ -14,7 +14,7 @@ PeerManager::~PeerManager() {
 	ClearPeers();
 }
 
-void PeerManager::AddPeer(const wchar_t* hostName, const unsigned char* hostID, const char* ip, unsigned short port) {
+void PeerManager::AddPeer(const wchar_t* hostName, const unsigned char* hostID, const wchar_t* ip, unsigned short port) {
 	std::array<unsigned char, 32> incomingHostId{};
 	std::memcpy(incomingHostId.data(), hostID, incomingHostId.size());
 

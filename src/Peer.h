@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstdarg>
 #include <atomic>
 #include <chrono>
 #include <mutex>
@@ -12,11 +13,12 @@
 #include "platform.h"
 #include "BlockingQueue.h"
 #include "ClipboardData.h"
+#include "Logger.h"
 class CryptoChannel;
 
 class Peer {
 public:
-	Peer(const wchar_t* hostName, const unsigned char* hostID, const char* ip, unsigned short port);
+	Peer(const wchar_t* hostName, const unsigned char* hostID, const wchar_t* ip, unsigned short port);
 	~Peer();
 
 	void Start();
@@ -24,8 +26,7 @@ public:
 
 	std::wstring hostName() const;
 	std::array<unsigned char, 32> hostID() const;
-	std::wstring ipw() const;
-	std::string ip() const;
+	std::wstring ip() const;
 	unsigned short port() const;
 	std::chrono::steady_clock::time_point lastPingReceivedAt() const;
 	std::chrono::steady_clock::time_point createdAt() const;
@@ -38,12 +39,14 @@ private:
 	bool SendHello();
 	bool SendClipboardData(CryptoChannel& channel, const ClipboardPayload& payload);
 	void InterruptibleSleep(std::chrono::milliseconds duration);
+	void log(const char* function, Logger::Level level, const wchar_t* message, ...) const;
+	void logV(const char* function, Logger::Level level, const wchar_t* message, va_list args) const;
 
 	mutable std::mutex dataMutex_;
 	std::wstring hostName_;
-	std::array<unsigned char, 32> hostID_{};
-	std::string ip_;
+	std::wstring ip_;
 	unsigned short port_{};
+	std::array<unsigned char, 32> hostID_{};
 	std::chrono::steady_clock::time_point createdAt_;
 	std::chrono::steady_clock::time_point lastPingReceivedAt_;
 

@@ -3,6 +3,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <iostream>
 #include <limits>
@@ -13,11 +14,32 @@
 #include "NetworkDefs.h"
 #include "utils.h"
 
-Peer::Peer(const wchar_t* hostName, const unsigned char* hostID, const char* ip, u_short port)
+Peer::Peer(const wchar_t* hostName, const unsigned char* hostID, const wchar_t* ip, u_short port)
 	: hostName_(hostName), ip_(ip), port_(port),
 	createdAt_(std::chrono::steady_clock::now()),
 	lastPingReceivedAt_(createdAt_) {
 	std::memcpy(hostID_.data(), hostID, hostID_.size());
+}
+
+void Peer::log(const char* function, Logger::Level level, const wchar_t* message, ...) const {
+	va_list args;
+	va_start(args, message);
+	logV(function, level, message, args);
+	va_end(args);
+}
+
+void Peer::logV(const char* function, Logger::Level level, const wchar_t* message, va_list args) const {
+	wchar_t formattedMessage[1024];
+	int bufferSize = cntof(formattedMessage);
+	{
+		std::lock_guard<std::mutex> lock(dataMutex_);
+		int prefixlen = _snwprintf_s(formattedMessage, bufferSize, _TRUNCATE, L"[%ls %ls] ",
+			hostName_.empty() ? L"<unknown>" : hostName_.c_str(),
+			ip_.empty() ? L"<unknown>" : ip_.c_str());
+		if (prefixlen < 0) return;
+		vsnwprintf_truncate(formattedMessage + prefixlen, bufferSize - prefixlen, message != nullptr ? message : L"", args);
+	}
+	g_logger.log(function, level, L"%s", formattedMessage);
 }
 
 Peer::~Peer() {
@@ -29,7 +51,7 @@ void Peer::Start() {
 }
 
 void Peer::Stop() {
-	g_logger.log(__FUNCTION__, Logger::Level::Debug, L"%p Stopping Peer.", this);
+	log(__FUNCTION__, Logger::Level::Debug, L"Stopping Peer.");
 	stopRequested_.store(true);
 	stopCV_.notify_all();
 	messageQueue_.WakeAll();
@@ -54,12 +76,7 @@ std::array<unsigned char, 32> Peer::hostID() const {
 	return hostID_;
 }
 
-std::wstring Peer::ipw() const {
-	std::lock_guard<std::mutex> lock(dataMutex_);
-	return std::wstring(ip_.begin(), ip_.end());
-}
-
-std::string Peer::ip() const {
+std::wstring Peer::ip() const {
 	std::lock_guard<std::mutex> lock(dataMutex_);
 	return ip_;
 }
@@ -90,22 +107,22 @@ void Peer::CloseSocket() {
 bool Peer::ConnectSocket() {
 	SOCKET socketHandle = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (socketHandle == INVALID_SOCKET) {
-		g_logger.log(__FUNCTION__, Logger::Level::Error, L"Peer: failed to create socket.");
+		log(__FUNCTION__, Logger::Level::Error, L"Peer: failed to create socket.");
 		return false;
 	}
 
 	sockaddr_in address{};
 	address.sin_family = AF_INET;
 	address.sin_port = htons(port());
-	std::string peerIp = ip();
+	std::string peerIp = WideToUtf8String(ip());
 	if (inet_pton(AF_INET, peerIp.c_str(), &address.sin_addr) != 1) {
-		g_logger.log(__FUNCTION__, Logger::Level::Error, L"Peer: invalid remote IP address.");
+		log(__FUNCTION__, Logger::Level::Error, L"Peer: invalid remote IP address.");
 		closesocket(socketHandle);
 		return false;
 	}
 
 	if (connect(socketHandle, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == SOCKET_ERROR) {
-		g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Peer: TCP connect failed; retrying.");
+		log(__FUNCTION__, Logger::Level::Warning, L"Peer: TCP connect failed; retrying.");
 		closesocket(socketHandle);
 		return false;
 	}
@@ -145,7 +162,7 @@ bool Peer::SendClipboardData(CryptoChannel& channel, const ClipboardPayload& pay
 void Peer::ThreadProc() {
 	while (!stopRequested_.load()) {
 		if (!ConnectSocket()) {
-			g_logger.log(__FUNCTION__, Logger::Level::Error, L"Peer: failed to connect.");
+			log(__FUNCTION__, Logger::Level::Error, L"Peer: failed to connect.");
 			if (!stopRequested_.load()) InterruptibleSleep(std::chrono::milliseconds(5000));
 			continue;
 		}
@@ -157,35 +174,35 @@ void Peer::ThreadProc() {
 		char localHostNameA[256] = {};
 		if (gethostname(localHostNameA, sizeof(localHostNameA)) != 0) { CloseSocket(); continue; }
 		if (!channel.ClientHandshake(socket_, localHostId, localHostNameA, remoteHostId, remoteHostNameUtf8)) {
-			g_logger.log(__FUNCTION__, Logger::Level::Error, L"Peer: secure handshake failed.");
+			log(__FUNCTION__, Logger::Level::Error, L"Peer: secure handshake failed.");
 			CloseSocket();
 			if (!stopRequested_.load()) InterruptibleSleep(std::chrono::milliseconds(5000));
 			continue;
 		}
 
-		g_logger.log(__FUNCTION__, Logger::Level::Info, L"Peer connected and authenticated.");
+		log(__FUNCTION__, Logger::Level::Info, L"Peer connected and authenticated.");
 		while (!stopRequested_.load()) {
 			if (socket_ == INVALID_SOCKET || !channel.SendTaggedMessage(socket_, "PING")) {
-				g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Peer failed secure send");
+				log(__FUNCTION__, Logger::Level::Warning, L"Peer failed secure send");
 				break;
 			}
 
 			char packet[4] = {};
 			if (socket_ == INVALID_SOCKET || !channel.RecvTaggedMessage(socket_, packet)) {
-				g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Peer failed secure recv");
+				log(__FUNCTION__, Logger::Level::Warning, L"Peer failed secure recv");
 				break;
 			}
 
 			if (std::memcmp(packet, "PONG", 4) != 0) {
-				g_logger.log(__FUNCTION__, Logger::Level::Error, L"Peer: unexpected packet received.");
+				log(__FUNCTION__, Logger::Level::Error, L"Peer: unexpected packet received.");
 				break;
 			}
 
 			{
 				std::lock_guard<std::mutex> lock(dataMutex_);
 				lastPingReceivedAt_ = std::chrono::steady_clock::now();
-				g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Peer: PONG");
 			}
+			log(__FUNCTION__, Logger::Level::Debug, L"Peer: PONG");
 
 			auto msg = messageQueue_.WaitFor(std::chrono::seconds(60), stopRequested_);
 
@@ -194,9 +211,9 @@ void Peer::ThreadProc() {
 			} else {
 				// A message was pulled from the queue
 				std::shared_ptr<const ClipboardPayload> payload = msg.value();
-				g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Received clipboard payload.");
+				log(__FUNCTION__, Logger::Level::Debug, L"Received clipboard payload.");
 				if (!SendClipboardData(channel, *payload)) {
-					g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Peer failed to send clipboard payload.");
+					log(__FUNCTION__, Logger::Level::Warning, L"Peer failed to send clipboard payload.");
 					break;
 				}
 			}
@@ -205,5 +222,5 @@ void Peer::ThreadProc() {
 		CloseSocket();
 		if (!stopRequested_.load()) InterruptibleSleep(std::chrono::milliseconds(5000));
 	}
-	g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Peer thread exiting.");
+	log(__FUNCTION__, Logger::Level::Debug, L"Peer thread exiting.");
 }
