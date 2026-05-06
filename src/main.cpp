@@ -157,12 +157,14 @@ int main(int argc, char* argv[]) {
 
     if (argc > 1 && std::string(argv[1]) == "setkey") {
         std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
-        const std::string keyInput = ReadHiddenLine("Enter a password to derive network key from: ");
+        std::string keyInput = ReadHiddenLine("Enter a password to derive network key from: ");
 		if (keyInput.empty()) {
             g_logger.log(__FUNCTION__, Logger::Level::Error, "No input provided.");
             return 1;
         }
-        if (!DeriveNetworkKey(keyInput, networkKey)) {
+		bool keyDerived = DeriveNetworkKey(keyInput, networkKey);
+        sodium_memzero(keyInput.data(), keyInput.capacity());
+        if (!keyDerived) {
             g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to derive network key from password.");
             return 1;
 		}
