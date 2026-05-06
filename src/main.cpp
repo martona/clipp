@@ -73,7 +73,7 @@ void OnClipboardNotification(PlatformWindowHandle hwnd) {
 }
 
 Listener g_listener([](const std::wstring& hostName, const std::array<unsigned char, 32>& hostID, ClipboardPayload& payload) {
-    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Received clipboard data from client %s (format ID: %u, size: %zu bytes)", hostName.c_str(), payload.formatId, payload.rawData.size());
+    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Received clipboard data from client %ls (format ID: %u, size: %zu bytes)", hostName.c_str(), payload.formatId, payload.rawData.size());
     SetClipboardData(payload);
 });
 
