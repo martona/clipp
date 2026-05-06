@@ -3,7 +3,7 @@
 #include <array>
 #include <cstdarg>
 #include <atomic>
-#include <future>
+#include <chrono>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -22,25 +22,36 @@ public:
     ~Client();
 
     void Start();
-    void Terminate();
-    bool IsRunning() const;
-    std::array<unsigned char, 32> remoteHostID() const;
-    std::wstring remoteHostName() const;
+    void Stop();
+    bool isRunning() const;
+
+    std::wstring hostName() const;
+    std::array<unsigned char, 32> hostID() const;
+    std::wstring ip() const;
+    unsigned short port() const;
+    std::chrono::steady_clock::time_point lastPingReceivedAt() const;
+    std::chrono::steady_clock::time_point createdAt() const;
+
 
 private:
     void ThreadProc();
+    void CloseSocket();
     void log(const char* function, Logger::Level level, const wchar_t* message, ...) const;
     void logV(const char* function, Logger::Level level, const wchar_t* message, va_list args) const;
 
     ClipboardReceivedCallback clipboardReceivedCallback_;
-    SOCKET socket_;
+
+    mutable std::mutex dataMutex_;
+    std::wstring hostName_;
+    std::wstring ip_;
+    unsigned short port_{};
+    std::array<unsigned char, 32> hostID_{};
+    std::chrono::steady_clock::time_point createdAt_;
+    std::chrono::steady_clock::time_point lastPingReceivedAt_;
+
     std::thread thread_;
     std::atomic<bool> stopRequested_{ false };
-	std::atomic<bool> running_{ false };
-    mutable std::mutex socketMutex_;
-    mutable std::mutex remoteInfoMutex_;
+    std::atomic<bool> running_{ false };
 
-    std::array<unsigned char, 32> remoteHostID_{};
-    std::wstring remoteHostName_;
-    std::wstring remoteIp_;
+    SOCKET socket_{ INVALID_SOCKET };
 };

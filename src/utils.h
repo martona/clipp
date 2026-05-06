@@ -46,6 +46,26 @@ static std::string WideToUtf8String(const std::wstring& value) {
 	return narrow;
 }
 
+static unsigned short SocketPeerPort(SOCKET socket) {
+	sockaddr_storage address{};
+	socklen_t addressLength = sizeof(address);
+	if (getpeername(socket, reinterpret_cast<sockaddr*>(&address), &addressLength) != 0) {
+		return 0;
+	}
+
+	if (address.ss_family == AF_INET) {
+		const auto* address4 = reinterpret_cast<const sockaddr_in*>(&address);
+		return ntohs(address4->sin_port);
+	}
+
+	if (address.ss_family == AF_INET6) {
+		const auto* address6 = reinterpret_cast<const sockaddr_in6*>(&address);
+		return ntohs(address6->sin6_port);
+	}
+
+	return 0;
+}
+
 static std::string SocketPeerIp(SOCKET socket) {
 	sockaddr_storage address{};
 	socklen_t addressLength = sizeof(address);

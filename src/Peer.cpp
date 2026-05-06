@@ -47,6 +47,7 @@ Peer::~Peer() {
 }
 
 void Peer::Start() {
+	running_.store(true);
 	thread_ = std::thread(&Peer::ThreadProc, this);
 }
 
@@ -64,6 +65,10 @@ void Peer::Stop() {
 void Peer::InterruptibleSleep(std::chrono::milliseconds duration) {
 	std::unique_lock<std::mutex> lock(stopMutex_);
 	stopCV_.wait_for(lock, duration, [this]() { return stopRequested_.load(); });
+}
+
+bool Peer::isRunning() const {
+	return running_.load();
 }
 
 std::wstring Peer::hostName() const {
@@ -130,10 +135,6 @@ bool Peer::ConnectSocket() {
 	return true;
 }
 
-bool Peer::SendHello() {
-	return false;
-}
-
 bool Peer::SendClipboardData(CryptoChannel& channel, const ClipboardPayload& payload) {
 	ClipboardPayload payloadToSend = payload;
 	const size_t maxEncodedPayloadBytes = (64u * 1024u * 1024u) - sizeof(NetworkDefs::ClipboardMessage) - crypto_secretstream_xchacha20poly1305_ABYTES;
@@ -179,6 +180,20 @@ void Peer::ThreadProc() {
 			continue;
 		}
 
+		{
+			std::lock_guard<std::mutex> lock(dataMutex_);
+			if (hostID_ != remoteHostId) {
+				log(__FUNCTION__, Logger::Level::Warning, L"Peer: host ID mismatch; expected %02x... but got %02x...", hostID_[0], remoteHostId[0]);
+				if (!stopRequested_.load()) InterruptibleSleep(std::chrono::milliseconds(5000));
+				continue;
+			}
+			if (hostName_ != Utf8ToWideString(remoteHostNameUtf8)) {
+				log(__FUNCTION__, Logger::Level::Warning, L"Peer: host name mismatch; expected %ls but got %ls", hostName_.c_str(), Utf8ToWideString(remoteHostNameUtf8).c_str());
+				if (!stopRequested_.load()) InterruptibleSleep(std::chrono::milliseconds(5000));
+				continue;
+			}
+		}
+
 		log(__FUNCTION__, Logger::Level::Info, L"Peer connected and authenticated.");
 		while (!stopRequested_.load()) {
 			if (socket_ == INVALID_SOCKET || !channel.SendTaggedMessage(socket_, "PING")) {
@@ -221,4 +236,5 @@ void Peer::ThreadProc() {
 		if (!stopRequested_.load()) InterruptibleSleep(std::chrono::milliseconds(5000));
 	}
 	log(__FUNCTION__, Logger::Level::Info, L"Peer disconnected");
+	running_.store(false);
 }

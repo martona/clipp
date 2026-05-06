@@ -16,12 +16,15 @@
 
 Client::Client(SOCKET socket, ClipboardReceivedCallback clipboardReceivedCallback)
     : clipboardReceivedCallback_(std::move(clipboardReceivedCallback)),
-      socket_(socket),
-      remoteIp_(Utf8ToWideString(SocketPeerIp(socket))) {
+      ip_(Utf8ToWideString(SocketPeerIp(socket))),
+      port_(SocketPeerPort(socket)),
+      createdAt_(std::chrono::steady_clock::now()),
+      lastPingReceivedAt_(createdAt_),
+      socket_(socket) {
 }
 
 Client::~Client() {
-    Terminate();
+    Stop();
 }
 
 void Client::Start() {
@@ -29,34 +32,55 @@ void Client::Start() {
     thread_ = std::thread(&Client::ThreadProc, this);
 }
 
-void Client::Terminate() {
+void Client::Stop() {
     stopRequested_.store(true);
-    {
-        std::lock_guard<std::mutex> lock(socketMutex_);
-        if (socket_ != INVALID_SOCKET) {
-            shutdown(socket_, SD_BOTH);
-            closesocket(socket_);
-            socket_ = INVALID_SOCKET;
-        }
-    }
+    CloseSocket();
 
     if (thread_.joinable()) {
         thread_.join();
     }
 }
 
-bool Client::IsRunning() const {
-	return running_.load();
+bool Client::isRunning() const {
+    return running_.load();
 }
 
-std::array<unsigned char, 32> Client::remoteHostID() const {
-    std::lock_guard<std::mutex> lock(remoteInfoMutex_);
-    return remoteHostID_;
+std::wstring Client::hostName() const {
+    std::lock_guard<std::mutex> lock(dataMutex_);
+    return hostName_;
 }
 
-std::wstring Client::remoteHostName() const {
-    std::lock_guard<std::mutex> lock(remoteInfoMutex_);
-    return remoteHostName_;
+std::array<unsigned char, 32> Client::hostID() const {
+    std::lock_guard<std::mutex> lock(dataMutex_);
+    return hostID_;
+}
+
+std::wstring Client::ip() const {
+    std::lock_guard<std::mutex> lock(dataMutex_);
+    return ip_;
+}
+
+unsigned short Client::port() const {
+    std::lock_guard<std::mutex> lock(dataMutex_);
+    return port_;
+}
+
+std::chrono::steady_clock::time_point Client::lastPingReceivedAt() const {
+    std::lock_guard<std::mutex> lock(dataMutex_);
+    return lastPingReceivedAt_;
+}
+
+std::chrono::steady_clock::time_point Client::createdAt() const {
+    std::lock_guard<std::mutex> lock(dataMutex_);
+    return createdAt_;
+}
+
+void Client::CloseSocket() {
+    if (socket_ != INVALID_SOCKET) {
+        shutdown(socket_, SD_BOTH);
+        closesocket(socket_);
+        socket_ = INVALID_SOCKET;
+    }
 }
 
 void Client::log(const char* function, Logger::Level level, const wchar_t* message, ...) const {
@@ -70,10 +94,10 @@ void Client::logV(const char* function, Logger::Level level, const wchar_t* mess
     wchar_t formattedMessage[1024];
     int bufferSize = cntof(formattedMessage);
     {
-        std::lock_guard<std::mutex> lock(remoteInfoMutex_);
+        std::lock_guard<std::mutex> lock(dataMutex_);
         int prefixlen = snwprintf_truncate(formattedMessage, bufferSize, L"[%ls %ls] ",
-            remoteHostName_.empty() ? L"<unknown>" : remoteHostName_.c_str(),
-            remoteIp_.empty() ? L"<unknown>" : remoteIp_.c_str());
+            hostName_.empty() ? L"<unknown>" : hostName_.c_str(),
+            ip_.empty() ? L"<unknown>" : ip_.c_str());
         if (prefixlen < 0) return;
         vsnwprintf_truncate(formattedMessage + prefixlen, bufferSize - prefixlen, message != nullptr ? message : L"", args);
     }
@@ -88,9 +112,9 @@ void Client::ThreadProc() {
         log(__FUNCTION__, Logger::Level::Error, L"Client secure handshake failed.");
     } else {
         {
-            std::lock_guard<std::mutex> lock(remoteInfoMutex_);
-            remoteHostID_ = remoteHostId;
-            remoteHostName_ = Utf8ToWideString(remoteHostNameUtf8);
+            std::lock_guard<std::mutex> lock(dataMutex_);
+            hostID_ = remoteHostId;
+            hostName_ = Utf8ToWideString(remoteHostNameUtf8);
         }
         log(__FUNCTION__, Logger::Level::Info, L"Client connected");
 
@@ -102,6 +126,10 @@ void Client::ThreadProc() {
 
             if (std::memcmp(packet, "PING", 4) == 0) {
                 log(__FUNCTION__, Logger::Level::Debug, L"Client: PING");
+                {
+                    std::lock_guard<std::mutex> lock(dataMutex_);
+                    lastPingReceivedAt_ = std::chrono::steady_clock::now();
+                }
                 if (!channel.SendTaggedMessage(socket_, "PONG")) {
                     break;
                 }
@@ -152,9 +180,9 @@ void Client::ThreadProc() {
                     std::array<unsigned char, 32> remoteHostId;
                     std::wstring remoteHostName;
                     {
-                        std::lock_guard<std::mutex> lock(remoteInfoMutex_);
-                        remoteHostId = remoteHostID_;
-                        remoteHostName = remoteHostName_;
+                        std::lock_guard<std::mutex> lock(dataMutex_);
+                        remoteHostId = hostID_;
+                        remoteHostName = hostName_;
                     }
                     clipboardReceivedCallback_(remoteHostName, remoteHostId, payload);
                 }

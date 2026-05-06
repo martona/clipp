@@ -17,7 +17,7 @@ void ClientManager::Cleanup() {
     std::lock_guard<std::mutex> lock(mutex_);
     const auto before = clients_.size();
     clients_.erase(std::remove_if(clients_.begin(), clients_.end(), [](const std::unique_ptr<Client>& c) {
-        return !c || !c->IsRunning();
+        return !c || !c->isRunning();
     }), clients_.end());
 
     if (clients_.size() != before) {
@@ -34,7 +34,7 @@ void ClientManager::Terminate() {
 
     for (auto& client : clients) {
         if (client) {
-            client->Terminate();
+            client->Stop();
         }
     }
 }

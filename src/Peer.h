@@ -4,6 +4,7 @@
 #include <cstdarg>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -23,6 +24,7 @@ public:
 
 	void Start();
 	void Stop();
+	bool isRunning() const;
 
 	std::wstring hostName() const;
 	std::array<unsigned char, 32> hostID() const;
@@ -36,7 +38,6 @@ private:
 	void ThreadProc();
 	bool ConnectSocket();
 	void CloseSocket();
-	bool SendHello();
 	bool SendClipboardData(CryptoChannel& channel, const ClipboardPayload& payload);
 	void InterruptibleSleep(std::chrono::milliseconds duration);
 	void log(const char* function, Logger::Level level, const wchar_t* message, ...) const;
@@ -52,6 +53,7 @@ private:
 
 	std::thread thread_;
 	std::atomic<bool> stopRequested_{ false };
+	std::atomic<bool> running_{ false };
 	std::mutex stopMutex_;
 	std::condition_variable stopCV_;
 	
