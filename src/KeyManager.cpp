@@ -266,20 +266,4 @@ bool KeyManager::GetNetworkKey(std::array<unsigned char, NetworkKeySize>& networ
     return true;
 }
 
-bool KeyManager::ParseHexNetworkKey(const std::string& hex, std::array<unsigned char, KeyManager::NetworkKeySize>& networkKey) {
-    if (hex.size() != KeyManager::NetworkKeySize * 2) {
-        return false;
-    }
-
-    for (size_t i = 0; i < KeyManager::NetworkKeySize; ++i) {
-        const std::string byteHex = hex.substr(i * 2, 2);
-        char* endPtr = nullptr;
-        const long value = std::strtol(byteHex.c_str(), &endPtr, 16);
-        if (endPtr == nullptr || *endPtr != '\0' || value < 0 || value > 255) {
-            return false;
-        }
-        networkKey[i] = static_cast<unsigned char>(value);
-    }
-    return true;
-}
 

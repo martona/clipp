@@ -168,3 +168,27 @@ static inline void strncpys(char(&dst)[N], const char* src) {
 }
 
 #define cntof(arr) (sizeof(arr) / sizeof(arr[0]))
+
+#ifndef NDEBUG
+    #ifdef _WIN32
+        #define CLIPP_DEBUG_BREAK() __debugbreak()
+    #elif defined(__APPLE__) || defined(__linux__)
+        #if __has_builtin(__builtin_debugtrap)
+            #define CLIPP_DEBUG_BREAK() __builtin_debugtrap()
+        #else
+            #define CLIPP_DEBUG_BREAK() __builtin_trap()
+        #endif
+    #else
+        #include <cstdlib>
+        #define CLIPP_DEBUG_BREAK() std::abort()
+    #endif
+    #define CLIPP_ASSERT(condition) \
+            do { \
+                if (!(condition)) { \
+                    CLIPP_DEBUG_BREAK(); \
+                } \
+            } while (false)
+#else
+#define CLIPP_ASSERT(condition) do { (void)sizeof(condition); } while(false)
+#define CLIPP_DEBUG_BREAK() do {} while(0)
+#endif

@@ -90,3 +90,33 @@ static std::string SocketPeerIp(SOCKET socket) {
 
 	return ip;
 }
+
+static std::vector<unsigned char> HexStringToBytes(const std::string& hex) {
+	std::vector<unsigned char> bytes;
+	if (hex.size() % 2 != 0)
+		return bytes;
+
+	const size_t expected_len = hex.size() / 2;
+	bytes.resize(expected_len);
+
+	size_t actual_len = 0;
+	int ret = sodium_hex2bin(
+		bytes.data(),
+		bytes.size(),      // Maximum bytes to write
+		hex.c_str(),
+		hex.size(),        // Length of the hex string
+		nullptr,           // Ignore string (e.g., ": " to ignore colons/spaces)
+		&actual_len,       // Outputs the actual number of bytes written
+		nullptr            // Pointer to the end of the parsed hex string
+	);
+
+	// sodium_hex2bin returns 0 on SUCCESS, -1 on error
+	if (ret != 0) {
+		bytes.clear();
+		return bytes;
+	}
+
+	// Shrink the vector to the actual number of bytes parsed
+	bytes.resize(actual_len);
+	return bytes;
+}

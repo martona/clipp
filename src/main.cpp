@@ -73,6 +73,23 @@ static std::string ReadHiddenLine(const std::string & prompt) {
     return input;
 }
 
+bool DeriveNetworkKey(const std::string& password, std::array<unsigned char, 32>& outKey) {
+    static std::vector<unsigned char> staticSalt = HexStringToBytes("9ea1e55abc07c859fd900958d8b7efbe");
+	CLIPP_ASSERT(staticSalt.size() == crypto_pwhash_SALTBYTES);
+    if (crypto_pwhash(
+        outKey.data(),
+        outKey.size(),
+        password.c_str(),
+        password.length(),
+		staticSalt.data(),
+        crypto_pwhash_OPSLIMIT_MODERATE,
+        crypto_pwhash_MEMLIMIT_MODERATE,
+        crypto_pwhash_ALG_ARGON2ID13) != 0) {
+        return false; 
+    }
+    return true;
+}
+
 void OnClipboardNotification(PlatformWindowHandle hwnd) {
     g_logger.log(__FUNCTION__, Logger::Level::Debug, "Clipboard notification received");
     auto clipboardData = ReadClipboardData(hwnd);
@@ -140,12 +157,16 @@ int main(int argc, char* argv[]) {
 
     if (argc > 1 && std::string(argv[1]) == "setkey") {
         std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
-        const std::string keyInput = ReadHiddenLine("Enter 64-character network key hex: ");
-
-        if (!g_keyManager.ParseHexNetworkKey(keyInput, networkKey)) {
-            g_logger.log(__FUNCTION__, Logger::Level::Error, "Invalid input. Expected exactly 64 hexadecimal characters.");
+        const std::string keyInput = ReadHiddenLine("Enter a password to derive network key from: ");
+		if (keyInput.empty()) {
+            g_logger.log(__FUNCTION__, Logger::Level::Error, "No input provided.");
             return 1;
         }
+        if (!DeriveNetworkKey(keyInput, networkKey)) {
+            g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to derive network key from password.");
+            return 1;
+		}
+
 		PrintNetworkKeyHash(networkKey);
 
         std::string errorMessage;
