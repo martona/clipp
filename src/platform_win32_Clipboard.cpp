@@ -476,26 +476,21 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
                                 payload.formatId = CF_DIB;
                                 payload.rawData = std::move(pngData);
                                 g_logger.log(__FUNCTION__, Logger::Level::Info, L"Read CF_DIB from system clipboard and encoded PNG payload (DIB: %zu bytes, PNG: %zu bytes)", static_cast<size_t>(dataSize), payload.rawData.size());
+                            } else {
+                                g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Failed to encode CF_DIB clipboard image as PNG; skipping image payload");
                             }
-                            else {
-                                g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to encode CF_DIB clipboard image as PNG; skipping image payload");
-                            }
-                        }
-                        else {
-                            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"CF_DIB clipboard data has zero byte GlobalSize; skipping image payload");
+                        } else {
+                            g_logger.log(__FUNCTION__, Logger::Level::Debug, L"CF_DIB clipboard data has zero byte GlobalSize; skipping image payload");
                         }
                         GlobalUnlock(hData);
-                    }
-                    else {
+                    } else {
                         LogLastError(__FUNCTION__, L"Failed to lock CF_DIB clipboard data");
                     }
-                }
-                else {
+                } else {
                     LogLastError(__FUNCTION__, L"Failed to retrieve CF_DIB clipboard data");
                 }
-            }
-            else {
-                g_logger.log(__FUNCTION__, Logger::Level::Info, L"No supported clipboard format available");
+            } else {
+                g_logger.log(__FUNCTION__, Logger::Level::Error, L"No supported clipboard format available");
             }
             CloseClipboard();
             break;

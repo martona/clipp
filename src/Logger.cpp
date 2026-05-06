@@ -74,7 +74,10 @@ void Logger::writeLine(const wchar_t* function, Level level, const wchar_t* mess
     timestamp << std::put_time(&tmNow, L"%Y-%m-%d %H:%M:%S") << L'.' << std::setfill(L'0') << std::setw(3) << millis.count();
 
     std::lock_guard<std::mutex> lock(mutex_);
-    std::wcout << timestamp.str() << L" [" << LevelToString(level) << L"] [" << (function != nullptr ? function : L"") << L"] " << (message != nullptr ? message : L"") << std::endl;
+    std::wcout << L"\x1b[90m" << timestamp.str()
+        << LevelToColor(level) << L" [" << LevelToString(level) << L"] "
+        << L"\x1b[90m" << "[" << (function != nullptr ? function : L"") << L"] "
+        << ResetColor() << (message != nullptr ? message : L"<null>") << std::endl;
 }
 
 const wchar_t* Logger::LevelToString(Level level) {
@@ -90,6 +93,27 @@ const wchar_t* Logger::LevelToString(Level level) {
     default:
         return L"unknown";
     }
+}
+
+const wchar_t* Logger::LevelToColor(Level level) {
+    // \x1b[ is the escape sequence. 
+    // The trailing 'm' signals the end of the color code.
+    switch (level) {
+    case Level::Debug:
+        return L"\x1b[36m";       // Cyan (Clear, but visually recedes slightly for spammy logs)
+    case Level::Info:
+        return L"\x1b[1;32m";     // Bold Green (Bright, positive confirmation)
+    case Level::Warning:
+        return L"\x1b[1;33m";     // Bold Yellow (High contrast, catches the eye)
+    case Level::Error:
+        return L"\x1b[1;31m";     // Bold Red (Maximum urgency)
+    default:
+        return L"\x1b[0m";        // Reset (Returns to default terminal foreground)
+    }
+}
+
+const wchar_t* Logger::ResetColor() {
+    return L"\x1b[0m";
 }
 
 std::wstring Logger::Utf8ToWide(const std::string& value) {

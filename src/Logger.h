@@ -24,6 +24,8 @@ private:
     void writeLine(const wchar_t* function, Level level, const wchar_t* message);
     static const wchar_t* LevelToString(Level level);
     static std::wstring Utf8ToWide(const std::string& value);
+	static const wchar_t* LevelToColor(Level level);
+    static const wchar_t* ResetColor();
 
     std::mutex mutex_;
 };

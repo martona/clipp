@@ -134,7 +134,7 @@ void Listener::ThreadProc() {
 
             SOCKET clientSock = accept(listenSock, nullptr, nullptr);
             if (clientSock == INVALID_SOCKET) {
-                g_logger.log(__FUNCTION__, Logger::Level::Error, L"Listener: accept failed.");
+                g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Listener: accept failed.");
                 continue;
             }
 

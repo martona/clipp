@@ -160,6 +160,7 @@ void Client::ThreadProc() {
                 }
             }
         }
+        log(__FUNCTION__, Logger::Level::Info, L"Client disconnected");
     }
 
     running_.store(false);

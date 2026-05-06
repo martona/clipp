@@ -56,10 +56,10 @@ static std::string ReadHiddenLine(const std::string & prompt) {
 }
 
 void OnClipboardNotification(PlatformWindowHandle hwnd) {
-    g_logger.log(__FUNCTION__, Logger::Level::Info, "Clipboard notification received");
+    g_logger.log(__FUNCTION__, Logger::Level::Debug, "Clipboard notification received");
     auto clipboardData = ReadClipboardData(hwnd);
     if (clipboardData.formatId == 0) {
-        g_logger.log(__FUNCTION__, Logger::Level::Info, "Clipboard is empty or contains unsupported format");
+        g_logger.log(__FUNCTION__, Logger::Level::Debug, "Clipboard is empty or contains unsupported format");
         return;
 	}
 	const size_t decodedDataSize = clipboardData.rawData.size();
@@ -69,11 +69,11 @@ void OnClipboardNotification(PlatformWindowHandle hwnd) {
 	}
 	auto payload = std::make_shared<const ClipboardPayload>(clipboardData);
     g_peerManager.BroadcastClipboard(payload);
-	g_logger.log(__FUNCTION__, Logger::Level::Info, "Broadcasted clipboard data to peers (format ID: %u, encoded size: %zu bytes, decoded size: %zu bytes)", clipboardData.formatId, clipboardData.rawData.size(), decodedDataSize);
+	g_logger.log(__FUNCTION__, Logger::Level::Debug, "Broadcasted clipboard data to peers (format ID: %u, encoded size: %zu bytes, decoded size: %zu bytes)", clipboardData.formatId, clipboardData.rawData.size(), decodedDataSize);
 }
 
 Listener g_listener([](const std::wstring& hostName, const std::array<unsigned char, 32>& hostID, ClipboardPayload& payload) {
-    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Received clipboard data from client %ls (format ID: %u, size: %zu bytes)", hostName.c_str(), payload.formatId, payload.rawData.size());
+    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Received clipboard data from client %ls (format ID: %u, size: %zu bytes)", hostName.c_str(), payload.formatId, payload.rawData.size());
     SetClipboardData(payload);
 });
 
@@ -86,7 +86,7 @@ void OnMDNSNotification(const char* hostNameUtf8,
                         u_short port, 
                         const unsigned char* rawHostID) 
 {
-	g_logger.log(__FUNCTION__, Logger::Level::Info, 
+	g_logger.log(__FUNCTION__, Logger::Level::Debug, 
         "mDNS notification received for host: %s / %s\n  from: %s:%hu\n  verb:    %s\n  queryID: %s\n  nonce:   %s", 
         hostNameUtf8, hostID, senderIp, port, verb, queryID, nonce);
 
@@ -107,10 +107,19 @@ void PrintNetworkKeyHash(const std::array<unsigned char, KeyManager::NetworkKeyS
     crypto_hash_sha256(keyHash, networkKey.data(), networkKey.size());
     char keyHashHex[crypto_hash_sha256_BYTES * 2 + 1];
     sodium_bin2hex(keyHashHex, sizeof(keyHashHex), keyHash, sizeof(keyHash));
-    g_logger.log(__FUNCTION__, Logger::Level::Info, "Network Key SHA-256: %s", keyHashHex);
+    g_logger.log(__FUNCTION__, Logger::Level::Info, "Network Key SHA256: %s", keyHashHex);
 }
 
 int main(int argc, char* argv[]) {
+    #ifdef _WIN32
+    {
+        HANDLE hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
+        DWORD outMode = 0;
+        GetConsoleMode(hStdout, &outMode);
+        SetConsoleMode(hStdout, outMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    }
+    #endif
+
     if (argc > 1 && std::string(argv[1]) == "setkey") {
         std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
         const std::string keyInput = ReadHiddenLine("Enter 64-character network key hex: ");
@@ -143,7 +152,7 @@ int main(int argc, char* argv[]) {
         g_logger.log(__FUNCTION__, Logger::Level::Error, "Fatal: libsodium failed to initialize!");
         return 1;
     }
-    g_logger.log(__FUNCTION__, Logger::Level::Info, "libsodium initialized successfully.");
+    g_logger.log(__FUNCTION__, Logger::Level::Debug, "libsodium initialized successfully.");
 
     std::array<unsigned char, 32> hostID{};
     if (!g_settings.ensureHostID(hostID)) {
@@ -163,7 +172,8 @@ int main(int argc, char* argv[]) {
     if (StartClipboardNotification(OnClipboardNotification)) {
         if (StartMDNS(OnMDNSNotification)) {
             if (g_listener.Start()) {
-                g_logger.log(__FUNCTION__, Logger::Level::Info, "Press Enter to exit...");
+                g_logger.log(__FUNCTION__, Logger::Level::Info, "Successfully started.");
+                g_logger.log(__FUNCTION__, Logger::Level::Info, "Press Enter to exit.");
                 std::cin.get();
                 g_peerManager.ClearPeers();
                 g_listener.Stop();

@@ -122,7 +122,7 @@ bool Peer::ConnectSocket() {
 	}
 
 	if (connect(socketHandle, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == SOCKET_ERROR) {
-		log(__FUNCTION__, Logger::Level::Warning, L"Peer: TCP connect failed; retrying.");
+		log(__FUNCTION__, Logger::Level::Debug, L"Peer: TCP connect failed; retrying.");
 		closesocket(socketHandle);
 		return false;
 	}
@@ -174,7 +174,7 @@ void Peer::ThreadProc() {
 		char localHostNameA[256] = {};
 		if (gethostname(localHostNameA, sizeof(localHostNameA)) != 0) { CloseSocket(); continue; }
 		if (!channel.ClientHandshake(socket_, localHostId, localHostNameA, remoteHostId, remoteHostNameUtf8)) {
-			log(__FUNCTION__, Logger::Level::Error, L"Peer: secure handshake failed.");
+			log(__FUNCTION__, Logger::Level::Debug, L"Peer: secure handshake failed.");
 			CloseSocket();
 			if (!stopRequested_.load()) InterruptibleSleep(std::chrono::milliseconds(5000));
 			continue;
@@ -183,13 +183,13 @@ void Peer::ThreadProc() {
 		log(__FUNCTION__, Logger::Level::Info, L"Peer connected and authenticated.");
 		while (!stopRequested_.load()) {
 			if (socket_ == INVALID_SOCKET || !channel.SendTaggedMessage(socket_, "PING")) {
-				log(__FUNCTION__, Logger::Level::Warning, L"Peer failed secure send");
+				log(__FUNCTION__, Logger::Level::Debug, L"Peer failed secure send");
 				break;
 			}
 
 			char packet[4] = {};
 			if (socket_ == INVALID_SOCKET || !channel.RecvTaggedMessage(socket_, packet)) {
-				log(__FUNCTION__, Logger::Level::Warning, L"Peer failed secure recv");
+				log(__FUNCTION__, Logger::Level::Debug, L"Peer failed secure recv");
 				break;
 			}
 
@@ -213,14 +213,13 @@ void Peer::ThreadProc() {
 				std::shared_ptr<const ClipboardPayload> payload = msg.value();
 				log(__FUNCTION__, Logger::Level::Debug, L"Received clipboard payload.");
 				if (!SendClipboardData(channel, *payload)) {
-					log(__FUNCTION__, Logger::Level::Warning, L"Peer failed to send clipboard payload.");
+					log(__FUNCTION__, Logger::Level::Debug, L"Peer failed to send clipboard payload.");
 					break;
 				}
 			}
-
 		}
 		CloseSocket();
 		if (!stopRequested_.load()) InterruptibleSleep(std::chrono::milliseconds(5000));
 	}
-	log(__FUNCTION__, Logger::Level::Debug, L"Peer thread exiting.");
+	log(__FUNCTION__, Logger::Level::Info, L"Peer disconnected");
 }

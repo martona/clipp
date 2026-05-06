@@ -21,7 +21,7 @@ void ClientManager::Cleanup() {
     }), clients_.end());
 
     if (clients_.size() != before) {
-        g_logger.log(__FUNCTION__, Logger::Level::Info, L"Client cleanup removed %zu client(s).", (before - clients_.size()));
+        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Client cleanup removed %zu client(s).", (before - clients_.size()));
     }
 }
 

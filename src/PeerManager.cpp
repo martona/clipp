@@ -30,7 +30,7 @@ void PeerManager::AddPeer(const wchar_t* hostName, const unsigned char* hostID, 
 	auto peer = std::make_unique<Peer>(hostName, hostID, ip, port);
 	peer->Start();
 	peers_.emplace_back(std::move(peer));
-	g_logger.log(__FUNCTION__, Logger::Level::Info, L"PeerManager: added new peer.");
+	g_logger.log(__FUNCTION__, Logger::Level::Debug, L"PeerManager: added new peer.");
 }
 
 void PeerManager::RemovePeer(const unsigned char* hostID) {
@@ -51,7 +51,7 @@ void PeerManager::CullPeers() {
 		const bool dead = age >= std::chrono::minutes(1) && silence >= std::chrono::minutes(1);
 		if (dead) {
 			peer->Stop();
-			g_logger.log(__FUNCTION__, Logger::Level::Info, L"PeerManager: culled dead peer.");
+			g_logger.log(__FUNCTION__, Logger::Level::Debug, L"PeerManager: culled dead peer.");
 		}
 		return dead;
 	}), peers_.end());
@@ -60,7 +60,7 @@ void PeerManager::CullPeers() {
 void PeerManager::ClearPeers() {
 	std::lock_guard<std::mutex> lock(peersMutex_);
 	for (const auto& peer : peers_) {
-		g_logger.log(__FUNCTION__, Logger::Level::Info, L"PeerManager: clearing peer %ls", peer->hostName().c_str());
+		g_logger.log(__FUNCTION__, Logger::Level::Debug, L"PeerManager: clearing peer %ls", peer->hostName().c_str());
 		peer->Stop();
 	}
 	peers_.clear();
