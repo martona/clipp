@@ -33,13 +33,13 @@ void Peer::logV(const char* function, Logger::Level level, const wchar_t* messag
 	int bufferSize = cntof(formattedMessage);
 	{
 		std::lock_guard<std::mutex> lock(dataMutex_);
-		int prefixlen = _snwprintf_s(formattedMessage, bufferSize, _TRUNCATE, L"[%ls %ls] ",
+		int prefixlen = snwprintf_truncate(formattedMessage, bufferSize, L"[%ls %ls] ",
 			hostName_.empty() ? L"<unknown>" : hostName_.c_str(),
 			ip_.empty() ? L"<unknown>" : ip_.c_str());
 		if (prefixlen < 0) return;
 		vsnwprintf_truncate(formattedMessage + prefixlen, bufferSize - prefixlen, message != nullptr ? message : L"", args);
 	}
-	g_logger.log(function, level, L"%s", formattedMessage);
+	g_logger.log(function, level, L"%ls", formattedMessage);
 }
 
 Peer::~Peer() {
@@ -204,7 +204,7 @@ void Peer::ThreadProc() {
 			}
 			log(__FUNCTION__, Logger::Level::Debug, L"Peer: PONG");
 
-			auto msg = messageQueue_.WaitFor(std::chrono::seconds(60), stopRequested_);
+			auto msg = messageQueue_.WaitFor(std::chrono::seconds(30), stopRequested_);
 
 			if (!msg.has_value()) {
 				// TIMEOUT or explicit wake: just roll over

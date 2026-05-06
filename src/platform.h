@@ -154,6 +154,14 @@ static inline void strncpys(char* dst, const char* src, size_t maxlen) {
     #endif
 }
 
+static inline int snwprintf_truncate(wchar_t* buffer, size_t size, const wchar_t* format, ...) {
+    va_list args;
+    va_start(args, format);
+    int result = vsnwprintf_truncate(buffer, size, format, args);
+    va_end(args);
+    return result;
+}
+
 template <size_t N>
 static inline void strncpys(char(&dst)[N], const char* src) {
     strncpys(dst, src, N);

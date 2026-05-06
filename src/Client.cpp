@@ -71,13 +71,13 @@ void Client::logV(const char* function, Logger::Level level, const wchar_t* mess
     int bufferSize = cntof(formattedMessage);
     {
         std::lock_guard<std::mutex> lock(remoteInfoMutex_);
-        int prefixlen = _snwprintf_s(formattedMessage, bufferSize, _TRUNCATE, L"[%ls %ls] ",
+        int prefixlen = snwprintf_truncate(formattedMessage, bufferSize, L"[%ls %ls] ",
             remoteHostName_.empty() ? L"<unknown>" : remoteHostName_.c_str(),
             remoteIp_.empty() ? L"<unknown>" : remoteIp_.c_str());
         if (prefixlen < 0) return;
         vsnwprintf_truncate(formattedMessage + prefixlen, bufferSize - prefixlen, message != nullptr ? message : L"", args);
     }
-    g_logger.log(function, level, L"%s", formattedMessage);
+    g_logger.log(function, level, L"%ls", formattedMessage);
 }
 
 void Client::ThreadProc() {
