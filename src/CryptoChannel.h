@@ -34,8 +34,6 @@ public:
 
 private:
     bool LoadNetworkKey(std::array<unsigned char, crypto_secretbox_KEYBYTES>& networkKey);
-    static bool RecvAll(SOCKET sock, char* buffer, size_t length);
-    static bool SendAll(SOCKET sock, const char* buffer, size_t length);
 
     crypto_secretstream_xchacha20poly1305_state txState_{};
     crypto_secretstream_xchacha20poly1305_state rxState_{};

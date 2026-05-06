@@ -6,6 +6,7 @@
 #include "platform.h"
 #include "Settings.h"
 #include "KeyManager.h"
+#include "utils.h"
 
 namespace {
 #pragma pack(push, 1)
@@ -30,26 +31,6 @@ bool CryptoChannel::LoadNetworkKey(std::array<unsigned char, crypto_secretbox_KE
         return false;
     }
     return true;
-}
-
-bool CryptoChannel::RecvAll(SOCKET sock, char* buffer, size_t length) { 
-    size_t total = 0; 
-    while (total < length) { 
-        size_t r = recv(sock, buffer + total, (int)(length - total), 0); 
-        if (r == 0) return false; 
-        total += r; 
-    } 
-    return true; 
-}
-
-bool CryptoChannel::SendAll(SOCKET sock, const char* buffer, size_t length) { 
-    size_t total = 0; 
-    while (total < length) { 
-        size_t s = send(sock, buffer + total, (int)(length - total), 0); 
-        if (s == 0) return false; 
-        total += s; 
-    } 
-    return true; 
 }
 
 bool CryptoChannel::ClientHandshake(SOCKET socket, 

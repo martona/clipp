@@ -20,6 +20,7 @@
 #ifndef _WIN32
     #include <termios.h>
     #include <unistd.h>
+    #include <signal.h>
 #endif
 
 Settings g_settings;
@@ -145,6 +146,8 @@ int main(int argc, char* argv[]) {
         if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
             return -1;
         }
+    #else
+        signal(SIGPIPE, SIG_IGN);
     #endif
 
     // libsodium requires initialization before calling any other functions
