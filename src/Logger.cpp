@@ -83,10 +83,17 @@ void Logger::writeLine(const wchar_t* function, Level level, const wchar_t* mess
     std::lock_guard<std::mutex> lock(mutex_);
 
     // Console Output (With ANSI Colors)
-    std::wcout << L"\x1b[90m" << tsStr
+    std::wstringstream wstrstr;
+    wstrstr << L"\x1b[90m" << tsStr
         << LevelToColor(level) << L" [" << lvlStr << L"] "
         << L"\x1b[90m" << L"[" << fnStr << L"] "
         << ResetColor() << msgStr << std::endl;
+	std::wstring wstr = wstrstr.str();
+
+    std::wcout << wstr;
+    for (const auto& reflector : logReflectors_) {
+        reflector(wstr);
+    }
 
     #ifdef _WIN32
         // Debugger Output (Raw, No Colors)

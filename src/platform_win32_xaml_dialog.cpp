@@ -29,6 +29,7 @@
 #include <winrt/Windows.UI.Xaml.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
 #include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
+#include <winrt/Windows.UI.Xaml.Documents.h>
 #include <winrt/Windows.UI.Xaml.Hosting.h>
 #include <winrt/Windows.UI.Xaml.Input.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
@@ -70,6 +71,8 @@ winrt::Windows::UI::Xaml::Controls::TextBlock g_readOnlyText{ nullptr };
 winrt::Windows::UI::Xaml::Controls::TextBlock g_hashDisplay{ nullptr };
 winrt::Windows::UI::Xaml::Controls::TextBox g_peerDisplayTextBox{ nullptr };
 winrt::Windows::System::DispatcherQueue g_uiDispatcher{ nullptr };
+winrt::Windows::UI::Xaml::Documents::Paragraph g_logParagraph{ nullptr };
+winrt::Windows::UI::Xaml::Controls::ScrollViewer g_logScrollViewer{ nullptr };
 
 KeyDerivationWorker g_keyDerivationWorker;
 UINT g_msgDerivedKey = RegisterWindowMessageW(L"ClippDerivedKeyNotification");
@@ -307,6 +310,255 @@ winrt::Windows::UI::Xaml::Media::Brush GetThemeBackgroundBrush() {
     return SolidColorBrush(ColorFromColorRef(fallbackColor));
 }
 
+winrt::Windows::UI::Xaml::Controls::ScrollViewer CreateTerminalLikeScrollViewer() {
+    using namespace winrt::Windows::UI::Xaml::Controls;
+    using namespace winrt::Windows::UI::Xaml::Media;
+    using namespace winrt::Windows::UI::Xaml::Documents;
+
+    winrt::Windows::UI::Xaml::Controls::ScrollViewer logScroll;
+    logScroll.Background(winrt::Windows::UI::Xaml::Media::SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(255, 12, 12, 12)));
+    logScroll.Padding(winrt::Windows::UI::Xaml::ThicknessHelper::FromUniformLength(10));
+    logScroll.VerticalScrollBarVisibility(winrt::Windows::UI::Xaml::Controls::ScrollBarVisibility::Auto);
+
+    winrt::Windows::UI::Xaml::Controls::RichTextBlock terminalBlock;
+    terminalBlock.FontFamily(winrt::Windows::UI::Xaml::Media::FontFamily(L"Consolas"));
+    terminalBlock.FontSize(13);
+    terminalBlock.TextWrapping(winrt::Windows::UI::Xaml::TextWrapping::Wrap);
+
+    // Instantiate the Paragraph object, then append it
+    g_logParagraph = winrt::Windows::UI::Xaml::Documents::Paragraph();
+    terminalBlock.Blocks().Append(g_logParagraph);
+
+    logScroll.Content(terminalBlock);
+    logScroll.MinHeight(150);
+    logScroll.MaxHeight(450);
+	
+    g_logScrollViewer = logScroll;
+
+	return logScroll;
+}
+
+void AppendAnsiLogLine(winrt::Windows::UI::Xaml::Documents::Paragraph const& paragraph, const std::wstring& logLine) {
+    using namespace winrt::Windows::UI::Xaml::Media;
+    using namespace winrt::Windows::UI::Xaml::Documents;
+
+    static auto brushDefault = SolidColorBrush(winrt::Windows::UI::Colors::LightGray());
+    static auto brushGray    = SolidColorBrush(winrt::Windows::UI::Colors::Gray());
+    static auto brushCyan    = SolidColorBrush(winrt::Windows::UI::Colors::Cyan());
+    static auto brushGreen   = SolidColorBrush(winrt::Windows::UI::Colors::LimeGreen());
+    static auto brushYellow  = SolidColorBrush(winrt::Windows::UI::Colors::Gold());
+    static auto brushRed     = SolidColorBrush(winrt::Windows::UI::Colors::OrangeRed());
+
+    auto currentBrush = brushDefault;
+    std::wstring currentText = L"";
+
+    auto flushText = [&]() {
+            if (!currentText.empty()) {
+                Run run;
+                run.Text(currentText);
+                run.Foreground(currentBrush);
+                paragraph.Inlines().Append(run);
+                currentText.clear();
+            }
+        };
+
+    size_t i = 0;
+    while (i < logLine.length()) {
+        if (logLine[i] == L'\x1b' && i + 1 < logLine.length() && logLine[i + 1] == L'[') {
+            flushText();
+
+            i += 2;
+            std::wstring code = L"";
+
+            while (i < logLine.length() && logLine[i] != L'm') {
+                code += logLine[i];
+                i++;
+            }
+            if (i < logLine.length() && logLine[i] == L'm') i++;
+
+            if (code == L"0") currentBrush = brushDefault;
+            else if (code == L"90") currentBrush = brushGray;
+            else if (code == L"36") currentBrush = brushCyan;
+            else if (code == L"1;32") currentBrush = brushGreen;
+            else if (code == L"1;33") currentBrush = brushYellow;
+            else if (code == L"1;31") currentBrush = brushRed;
+        } else {
+            currentText += logLine[i];
+            i++;
+        }
+    }
+
+    flushText();
+    g_logScrollViewer.UpdateLayout();
+    g_logScrollViewer.ChangeView(nullptr, g_logScrollViewer.ScrollableHeight(), nullptr);
+
+    constexpr uint32_t MAX_TERMINAL_RUNS = 4000;
+    while (paragraph.Inlines().Size() > MAX_TERMINAL_RUNS) {
+        paragraph.Inlines().RemoveAt(0);
+    }
+}
+
+winrt::Windows::UI::Xaml::Controls::StackPanel CreateNetworkCard() {
+    using namespace winrt::Windows::UI::Xaml;
+    using namespace winrt::Windows::UI::Xaml::Controls;
+    using namespace winrt::Windows::UI::Xaml::Controls::Primitives;
+    using namespace winrt::Windows::UI::Xaml::Media;
+    using namespace winrt::Windows::UI::Text;
+    // 1. The Outer Card Container
+    StackPanel card;
+    // Optional: Give the card a subtle background to match Windows 11 settings
+    // card.Background(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(10, 255, 255, 255)));
+    card.CornerRadius(CornerRadius{ 4 });
+    card.BorderThickness(ThicknessHelper::FromLengths(1, 1, 1, 1));
+    // Use a subtle border color
+    card.BorderBrush(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(50, 150, 150, 150)));
+
+    // 2. The Header Row
+
+    // Helper to cleanly create columns
+    auto makeCol = [](double value, GridUnitType type) {
+        ColumnDefinition col;
+        col.Width(GridLength{ value, type });
+        return col;
+        };
+
+    Grid headerGrid;
+    headerGrid.Padding(ThicknessHelper::FromLengths(16, 12, 16, 12));
+    headerGrid.ColumnDefinitions().Append(makeCol(40, GridUnitType::Pixel)); // Main Icon
+    headerGrid.ColumnDefinitions().Append(makeCol(1, GridUnitType::Star));  // Text
+    headerGrid.ColumnDefinitions().Append(makeCol(45, GridUnitType::Pixel)); // IN/OUT ICONS
+    headerGrid.ColumnDefinitions().Append(makeCol(40, GridUnitType::Pixel)); // Chevron
+
+    // Network Icon (Using standard Windows 10/11 Segoe MDL2 Assets)
+    FontIcon netIcon;
+    netIcon.FontFamily(Media::FontFamily(L"Segoe MDL2 Assets"));
+    netIcon.Glyph(L"\xE839"); // E839 is a common network/Ethernet glyph
+    netIcon.FontSize(18);
+    netIcon.VerticalAlignment(VerticalAlignment::Center);
+    netIcon.HorizontalAlignment(HorizontalAlignment::Left);
+    Grid::SetColumn(netIcon, 0);
+
+    // Text Stack (Name and Details)
+    StackPanel textStack;
+    textStack.VerticalAlignment(VerticalAlignment::Center);
+    Grid::SetColumn(textStack, 1);
+
+    TextBlock title;
+    title.Text(L"MacMini.local");
+    title.FontSize(14);
+    // "Brighter" text by using SemiBold
+    title.FontWeight(FontWeights::SemiBold());
+
+    TextBlock subtitle;
+    subtitle.Text(L"Connected for 5 days, 14:23:43");
+    subtitle.FontSize(12);
+    // "Duller" text by dropping opacity
+    subtitle.Opacity(0.6);
+
+    textStack.Children().Append(title);
+    textStack.Children().Append(subtitle);
+
+    // Chevron Toggle Button
+    ToggleButton chevron;
+    chevron.FontFamily(Media::FontFamily(L"Segoe MDL2 Assets"));
+    chevron.Content(winrt::box_value(L"\xE70D")); // ChevronDown
+    chevron.Background(SolidColorBrush(winrt::Windows::UI::Colors::Transparent()));
+    chevron.BorderThickness(ThicknessHelper::FromLengths(0, 0, 0, 0));
+    chevron.VerticalAlignment(VerticalAlignment::Center);
+    chevron.HorizontalAlignment(HorizontalAlignment::Right);
+    Grid::SetColumn(chevron, 3);
+
+    StackPanel statusIcons;
+    statusIcons.Orientation(Orientation::Horizontal);
+    statusIcons.VerticalAlignment(VerticalAlignment::Center);
+    statusIcons.HorizontalAlignment(HorizontalAlignment::Right);
+    Grid::SetColumn(statusIcons, 2);
+
+    FontIcon inIcon;
+    inIcon.FontFamily(Media::FontFamily(L"Segoe MDL2 Assets"));
+    inIcon.Glyph(L"\xE118"); // Download/Incoming arrow
+    inIcon.FontSize(12);
+    inIcon.Width(20); // Fixed width so layout doesn't jump
+    inIcon.Foreground(SolidColorBrush(winrt::Windows::UI::Colors::LimeGreen()));
+    // inIcon.Visibility(Visibility::Collapsed); // Toggle this based on state
+
+    FontIcon outIcon;
+    outIcon.FontFamily(Media::FontFamily(L"Segoe MDL2 Assets"));
+    outIcon.Glyph(L"\xE11C"); // Upload/Outgoing arrow
+    outIcon.FontSize(12);
+    outIcon.Width(20);
+    outIcon.Foreground(SolidColorBrush(winrt::Windows::UI::Colors::DeepSkyBlue()));
+    // outIcon.Visibility(Visibility::Collapsed); // Toggle this based on state
+
+    statusIcons.Children().Append(inIcon);
+    statusIcons.Children().Append(outIcon);
+
+    headerGrid.Children().Append(netIcon);
+    headerGrid.Children().Append(textStack);
+    headerGrid.Children().Append(chevron);
+    headerGrid.Children().Append(statusIcons);
+
+    // 3. The Collapsible Content (Two-Column Layout)
+    Grid contentGrid;
+    contentGrid.Visibility(Visibility::Collapsed);
+    // Nice margins: pad the left to align with the text above, pad the bottom
+    contentGrid.Padding(ThicknessHelper::FromLengths(56, 0, 16, 16));
+    contentGrid.ColumnDefinitions().Append(makeCol(130, GridUnitType::Pixel)); // Headers
+    contentGrid.ColumnDefinitions().Append(makeCol(1, GridUnitType::Star));  // Values    Grid headerGrid;
+
+    // Helper lambda to easily add rows to our table
+    auto addRow = [&](int rowIndex, const wchar_t* labelText, const wchar_t* valueText) {
+        RowDefinition rowDef;
+        rowDef.Height(GridLength{ 1, GridUnitType::Auto });
+        contentGrid.RowDefinitions().Append(rowDef);
+
+        TextBlock label;
+        label.Text(labelText);
+        label.FontSize(13);
+        label.FontWeight(FontWeights::SemiBold()); // Brighter/heavier text for the left side
+        label.Margin(ThicknessHelper::FromLengths(0, 4, 0, 4));
+        Grid::SetColumn(label, 0);
+        Grid::SetRow(label, rowIndex);
+
+        TextBlock value;
+        value.Text(valueText);
+        value.FontSize(13);
+        value.Opacity(0.7); // Duller text for the right side
+        value.Margin(ThicknessHelper::FromLengths(0, 4, 0, 4));
+        Grid::SetColumn(value, 1);
+        Grid::SetRow(value, rowIndex);
+
+        contentGrid.Children().Append(label);
+        contentGrid.Children().Append(value);
+    };
+
+    // Populate the table
+    addRow(1, L"Bytes sent:", L"5,339,546,273");
+    addRow(2, L"Bytes received:", L"2,946,613,942");
+    addRow(3, L"Incoming connection:", L"Ok");
+    addRow(4, L"Outgoing connection:", L"Ok");
+
+    // 4. The Interaction Logic
+    // When the chevron is clicked, toggle the content visibility and flip the arrow
+    chevron.Click([=](winrt::Windows::Foundation::IInspectable const& sender, RoutedEventArgs const&) {
+        auto toggle = sender.as<ToggleButton>();
+        if (toggle.IsChecked().GetBoolean()) {
+            contentGrid.Visibility(Visibility::Visible);
+            toggle.Content(winrt::box_value(L"\xE70E")); // ChevronUp
+        }
+        else {
+            contentGrid.Visibility(Visibility::Collapsed);
+            toggle.Content(winrt::box_value(L"\xE70D")); // ChevronDown
+        }
+        });
+
+    // Assemble the final card
+    card.Children().Append(headerGrid);
+    card.Children().Append(contentGrid);
+
+    return card;
+}
+
 winrt::Windows::UI::Xaml::Controls::Grid BuildPlaceholderContent() {
     using namespace winrt::Windows::UI::Xaml;
     using namespace winrt::Windows::UI::Xaml::Controls;
@@ -413,6 +665,8 @@ winrt::Windows::UI::Xaml::Controls::Grid BuildPlaceholderContent() {
     outerContainer.Children().Append(g_peerDisplayTextBox);
 
     content.Children().Append(outerContainer);
+    content.Children().Append(CreateNetworkCard());
+    content.Children().Append(CreateTerminalLikeScrollViewer());
 
     /*
     TextBlock listHeading;
@@ -447,8 +701,12 @@ winrt::Windows::UI::Xaml::Controls::Grid BuildPlaceholderContent() {
     actions.Children().Append(toggle);
 
     content.Children().Append(actions);
-    */
     root.Children().Append(content);
+    */
+    winrt::Windows::UI::Xaml::Controls::ScrollViewer mainScroll;
+    mainScroll.VerticalScrollBarVisibility(winrt::Windows::UI::Xaml::Controls::ScrollBarVisibility::Auto);
+    mainScroll.Content(content); // Put the whole StackPanel inside the ScrollViewer
+    root.Children().Append(mainScroll);
 
     g_uiDispatcher = winrt::Windows::System::DispatcherQueue::GetForCurrentThread();
 
@@ -590,6 +848,14 @@ void InitializeXamlIsland(HWND hwnd) {
     ResizeXamlHost(hwnd);
 }
 
+void LogReflectorCallback(const std::wstring& line) {
+    if (g_logParagraph) {
+        g_uiDispatcher.TryEnqueue([=]() {
+            AppendAnsiLogLine(g_logParagraph, line);
+        });
+	}
+}
+
 LRESULT CALLBACK MainDialogWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_CREATE:
@@ -611,8 +877,10 @@ LRESULT CALLBACK MainDialogWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     case WM_SHOWWINDOW:
         if (wParam) {
             PeerDisplay_BeginNotifications(hwnd);
+            g_logger.AddLogReflector(LogReflectorCallback);
         } else {
             PeerDisplay_EndNotifications();
+            g_logger.RemoveLogReflector(LogReflectorCallback);
         }
         return 0;
 

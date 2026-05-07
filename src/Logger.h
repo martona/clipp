@@ -3,6 +3,7 @@
 #include <cstdarg>
 #include <mutex>
 #include <string>
+#include <vector>
 
 class Logger {
 public:
@@ -12,6 +13,16 @@ public:
         Warning,
         Error,
     };
+
+    using LogReflectorCallback = void(*)(const std::wstring& line);
+    void AddLogReflector(LogReflectorCallback callback) {
+        std::lock_guard<std::mutex> lock(mutex_);
+		logReflectors_.push_back(callback);
+    }
+    void RemoveLogReflector(LogReflectorCallback callback) {
+		std::lock_guard<std::mutex> lock(mutex_);
+        logReflectors_.erase(std::remove(logReflectors_.begin(), logReflectors_.end(), callback), logReflectors_.end());
+	}
 
     void log(const wchar_t* function, Level level, const wchar_t* message, ...);
     void log(const char* function, Level level, const char* message, ...);
@@ -26,6 +37,7 @@ private:
     static std::wstring Utf8ToWide(const std::string& value);
 	static const wchar_t* LevelToColor(Level level);
     static const wchar_t* ResetColor();
+	std::vector<LogReflectorCallback> logReflectors_;
 
     std::mutex mutex_;
 };
