@@ -51,6 +51,9 @@
     <ClCompile Include="platform_win32_tray.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="platform_win32_xaml_dialog.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Listener.h">
@@ -80,6 +83,9 @@
     <ClInclude Include="platform.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="platform_win32_xaml_dialog.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="Logger.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -103,5 +109,10 @@
     <ResourceCompile Include="clipp-win32.rc">
       <Filter>Resource Files</Filter>
     </ResourceCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <Manifest Include="clipp-win32.exe.manifest">
+      <Filter>Resource Files</Filter>
+    </Manifest>
   </ItemGroup>
 </Project>

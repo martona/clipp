@@ -36,6 +36,13 @@ target_link_libraries(clipp PRIVATE
     lodepng
 )
 
+if (WIN32)
+    target_link_libraries(clipp PRIVATE windowsapp runtimeobject dwmapi)
+    if (MSVC)
+        target_link_options(clipp PRIVATE "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/src/clipp-win32.exe.manifest")
+    endif()
+endif()
+
 
 if (APPLE)
     find_library(COREFOUNDATION_FRAMEWORK CoreFoundation REQUIRED)

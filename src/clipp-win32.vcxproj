@@ -104,6 +104,7 @@
     </Link>
     <Manifest>
       <EnableDpiAwareness>true</EnableDpiAwareness>
+      <AdditionalManifestFiles>clipp-win32.exe.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles>
     </Manifest>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -122,6 +123,7 @@
     </Link>
     <Manifest>
       <EnableDpiAwareness>true</EnableDpiAwareness>
+      <AdditionalManifestFiles>clipp-win32.exe.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles>
     </Manifest>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -139,6 +141,7 @@
     </Link>
     <Manifest>
       <EnableDpiAwareness>true</EnableDpiAwareness>
+      <AdditionalManifestFiles>clipp-win32.exe.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles>
     </Manifest>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -158,12 +161,17 @@
     </Link>
     <Manifest>
       <EnableDpiAwareness>true</EnableDpiAwareness>
+      <AdditionalManifestFiles>clipp-win32.exe.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles>
       <OutputManifestFile>$(IntDir)$(TargetName)$(TargetExt).embed.manifest</OutputManifestFile>
     </Manifest>
     <ManifestResourceCompile>
       <ResourceOutputFileName>$(IntDir)$(TargetName)$(TargetExt).embed.manifest.res</ResourceOutputFileName>
     </ManifestResourceCompile>
   </ItemDefinitionGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Toolkit.Win32.UI.SDK" Version="6.1.2" />
+    <PackageReference Include="Microsoft.Windows.CppWinRT" Version="2.0.250303.1" />
+  </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Listener.cpp" />
     <ClCompile Include="CryptoChannel.cpp" />
@@ -176,6 +184,7 @@
     <ClCompile Include="PeerManager.cpp" />
     <ClCompile Include="platform_win32_Settings.cpp" />
     <ClCompile Include="platform_win32_tray.cpp" />
+    <ClCompile Include="platform_win32_xaml_dialog.cpp" />
     <ClCompile Include="Settings.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -184,6 +193,7 @@
     <ClInclude Include="Listener.h" />
     <ClInclude Include="CryptoChannel.h" />
     <ClInclude Include="platform.h" />
+    <ClInclude Include="platform_win32_xaml_dialog.h" />
     <ClInclude Include="MDNSThread.h" />
     <ClInclude Include="KeyManager.h" />
     <ClInclude Include="Logger.h" />
@@ -197,6 +207,9 @@
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="clipp-win32.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <Manifest Include="clipp-win32.exe.manifest" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -1,5 +1,6 @@
 #include <Windows.h>
 #include "Logger.h"
+#include "platform_win32_xaml_dialog.h"
 #include "clipp-win32-darkmode32/DMSubclass.h"
 #pragma comment(lib, "darkmode32.lib")
 
@@ -15,6 +16,7 @@
 
 // Custom message ID for our tray icon events
 #define WM_TRAYICON (WM_USER + 1)
+#define ID_TRAY_OPEN  1000
 #define ID_TRAY_ABOUT 1001
 #define ID_TRAY_EXIT  1002
 
@@ -31,9 +33,15 @@ LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
 			break;
         case WM_TRAYICON:
             // When the user right-clicks the tray icon...
-            if (LOWORD(lParam) == WM_RBUTTONUP) {
+            if (LOWORD(lParam) == WM_LBUTTONDBLCLK) {
+                ShowClippMainDialog(hwnd);
+            }
+            else if (LOWORD(lParam) == WM_RBUTTONUP) {
                 // 1. Create a native, Unicode context menu
                 HMENU hMenu = CreatePopupMenu();
+                AppendMenuW(hMenu, MF_STRING, ID_TRAY_OPEN, L"Open Clipp");
+                SetMenuDefaultItem(hMenu, ID_TRAY_OPEN, FALSE);
+                AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
                 AppendMenuW(hMenu, MF_STRING, ID_TRAY_ABOUT, L"About Clipp");
                 AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
                 AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, L"Exit");
@@ -54,6 +62,9 @@ LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
         case WM_COMMAND:
             // Handle the menu clicks
             switch (LOWORD(wParam)) {
+            case ID_TRAY_OPEN:
+                ShowClippMainDialog(hwnd);
+                break;
             case ID_TRAY_ABOUT:
                 DarkMode::DarkMessageBox(g_trayWindow, L"Clipp v1.0\nSecure cross-platform clipboard sync.", L"About", MB_ICONINFORMATION | MB_OK);
                 break;
@@ -68,6 +79,7 @@ LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
 		    break;
 
         case WM_DESTROY:
+            CloseClippMainDialog();
             Shell_NotifyIconW(NIM_DELETE, &g_nid);
             break;
 
@@ -104,6 +116,10 @@ void TrayIconMessageLoop() {
 
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0)) {
+        if (ClippMainDialogPreTranslateMessage(&msg)) {
+            continue;
+        }
+
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
