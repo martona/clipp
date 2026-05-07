@@ -17,7 +17,10 @@
 #include "Clipboard.h"
 #include "utils.h"
 
-#ifndef _WIN32
+#ifdef _WIN32
+    #include <io.h>
+    #include <fcntl.h>
+#else
     #include <termios.h>
     #include <unistd.h>
     #include <signal.h>
@@ -29,19 +32,63 @@ Settings g_settings;
 PeerManager g_peerManager;
 
 #ifdef _WIN32
-std::mutex g_shutdownMutex;
-std::condition_variable g_shutdownCV;
-std::atomic<bool> g_shutdownRequested{ false };
+    std::mutex g_shutdownMutex;
+    std::condition_variable g_shutdownCV;
+    std::atomic<bool> g_shutdownRequested{ false };
 
-BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType) {
-    if (dwCtrlType == CTRL_C_EVENT || dwCtrlType == CTRL_BREAK_EVENT || dwCtrlType == CTRL_CLOSE_EVENT) {
-        g_shutdownRequested.store(true);
-        g_shutdownCV.notify_all(); // 100% safe on Windows
-        return TRUE;
+    BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType) {
+        if (dwCtrlType == CTRL_C_EVENT || dwCtrlType == CTRL_BREAK_EVENT || dwCtrlType == CTRL_CLOSE_EVENT) {
+            g_shutdownRequested.store(true);
+            g_shutdownCV.notify_all(); // 100% safe on Windows
+            return TRUE;
+        }
+        return FALSE;
     }
-    return FALSE;
-}
+
+    #pragma comment(linker, "/SUBSYSTEM:windows /ENTRY:mainCRTStartup")
 #endif
+
+bool InitializeConsoleOutput() {
+    #ifdef _WIN32
+    // Attempt to attach to the console of the process that launched this app (e.g., cmd.exe or pwsh.exe).
+    // If launched from Explorer (double-click), there is no parent console, and this fails.
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+
+        // The console is attached, but C/C++ standard streams still point to the void. 
+        // We must map them directly to the console output buffer.
+        FILE* fp;
+        freopen_s(&fp, "CONOUT$", "w", stdout);
+        freopen_s(&fp, "CONOUT$", "w", stderr);
+
+        // Clear the state of C++ streams and sync them to the newly mapped C streams
+        std::wcout.clear();
+        std::cout.clear();
+        std::wcerr.clear();
+        std::cerr.clear();
+        std::ios::sync_with_stdio(true);
+
+        freopen_s(&fp, "CONIN$", "r", stdin);
+        std::wcin.clear();
+        std::cin.clear();
+
+        // Enable ANSI color escape codes for this attached terminal
+        HANDLE hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
+        DWORD mode;
+        if (GetConsoleMode(hStdout, &mode)) {
+            SetConsoleMode(hStdout, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING); 
+        }
+
+        // Output a blank line to ensure the prompt cursor is pushed down cleanly
+        std::cout << std::endl;
+        return true;
+    }
+    return false;
+#else
+    // On macOS, if the app is launched from LaunchServices (Finder/Dock), stdout is redirected 
+    // to /dev/null or the system log. If launched from a terminal, stdout is an active TTY.
+    return isatty(STDOUT_FILENO) != 0;
+#endif
+}
 
 static std::string ReadHiddenLine(const std::string & prompt) {
     std::cout << prompt.c_str();
@@ -160,14 +207,8 @@ void PrintNetworkKeyHash(const std::array<unsigned char, KeyManager::NetworkKeyS
 }
 
 int main(int argc, char* argv[]) {
-    #ifdef _WIN32
-    {
-        HANDLE hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
-        DWORD outMode = 0;
-        GetConsoleMode(hStdout, &outMode);
-        SetConsoleMode(hStdout, outMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
-    }
-    #endif
+	
+    InitializeConsoleOutput();
 
     if (argc > 1 && std::string(argv[1]) == "setkey") {
         std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
