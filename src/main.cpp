@@ -163,6 +163,7 @@ void OnMDNSNotification(const char* hostNameUtf8,
                         const char* queryID, 
                         const char* nonce, 
                         const char* verb, 
+                        const char* networkName,
                         u_short port, 
                         const unsigned char* rawHostID) 
 {
@@ -178,15 +179,27 @@ void OnMDNSNotification(const char* hostNameUtf8,
 	}
 
     g_peerManager.CullPeers();
-    
+
+    const char* networkNameForLog = networkName ? networkName : "";
     g_logger.log(__FUNCTION__, Logger::Level::Debug,
-        "mDNS notification received for host: %s / %s\n  from: %s:%hu\n  verb:    %s\n  queryID: %s\n  nonce:   %s", 
-        hostNameUtf8, hostID, senderIp, port, verb, queryID, nonce);
+        "mDNS notification received for host: %s / %s\n  from: %s:%hu\n  verb:    %s\n  network: %s\n  queryID: %s\n  nonce:   %s",
+        hostNameUtf8, hostID, senderIp, port, verb, networkNameForLog, queryID, nonce);
 
     if (memcmp(ourHostId.data(), rawHostID, 32) == 0) {
         g_logger.log(__FUNCTION__, Logger::Level::Debug, "mDNS notification is from self; ignoring.");
         return;
 	}
+
+    const std::string receivedNetworkName = networkNameForLog;
+    const std::string localNetworkName = g_settings.networkName();
+    if (localNetworkName.empty() || localNetworkName < receivedNetworkName) {
+        if (g_settings.set_networkName(receivedNetworkName)) {
+            g_logger.log(__FUNCTION__, Logger::Level::Info, "Updated local network name to %s from mDNS notification.", receivedNetworkName.c_str());
+        } else {
+            g_logger.log(__FUNCTION__, Logger::Level::Warning, "Failed to save network name from mDNS notification: %s", receivedNetworkName.c_str());
+        }
+    }
+
     if (rawHostID != nullptr) {
         size_t hostNameWLen = utf8_to_utf16(hostNameUtf8, strlen(hostNameUtf8), nullptr, 0);
         std::wstring hostNameW(hostNameWLen, L'\0');

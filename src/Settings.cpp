@@ -8,6 +8,7 @@ namespace {
 	constexpr wchar_t kListenerIpName[] = L"ListenerIp";
     constexpr wchar_t kMdnsPortName[] = L"MdnsPort";
     constexpr wchar_t kTcpPortName[] = L"TcpPort";
+    constexpr wchar_t kNetworkNameName[] = L"NetworkName";
     constexpr wchar_t kEncryptedNetworkKeyName[] = L"EncryptedNetworkKey";
     constexpr wchar_t kHostIDName[] = L"HostID";
 }
@@ -16,7 +17,8 @@ Settings::Settings()
     : multicastIp_(DefaultMulticastIp),
 	  listenerIp_(DefaultListenerIp),
       mdnsPort_(DefaultMdnsPort),
-      tcpPort_(DefaultTcpPort) {
+      tcpPort_(DefaultTcpPort),
+      networkName_(DefaultNetworkName) {
     LoadCache();
 }
 
@@ -24,6 +26,7 @@ const std::string& Settings::multicastIp() const { return multicastIp_; }
 const std::string& Settings::listenerIp() const { return listenerIp_; }
 int Settings::mdnsPort() const { return mdnsPort_; }
 int Settings::tcpPort() const { return tcpPort_; }
+const std::string& Settings::networkName() const { return networkName_; }
 
 bool Settings::set_multicastIp(const std::string& value) {
     if (!WriteStringValue(kMulticastIpName, value)) {
@@ -54,6 +57,15 @@ bool Settings::set_tcpPort(int value) {
         return false;
     }
     tcpPort_ = value;
+    return true;
+}
+
+bool Settings::set_networkName(const std::string& value) {
+    std::string truncatedValue = value.substr(0, MaxNetworkNameLength);
+    if (!WriteStringValue(kNetworkNameName, truncatedValue)) {
+        return false;
+    }
+    networkName_ = truncatedValue;
     return true;
 }
 
@@ -89,11 +101,15 @@ bool Settings::getHostID(std::array<unsigned char, 32>& value) const {
 
 bool Settings::LoadCache() {
     std::string multicast;
+    std::string networkName;
     int mdns = DefaultMdnsPort;
     int tcp = DefaultTcpPort;
 
     if (ReadStringValue(kMulticastIpName, multicast) && !multicast.empty()) {
         multicastIp_ = multicast;
+    }
+    if (ReadStringValue(kNetworkNameName, networkName)) {
+        networkName_ = networkName.substr(0, MaxNetworkNameLength);
     }
     if (ReadUint32Value(kMdnsPortName, mdns)) {
         mdnsPort_ = mdns;

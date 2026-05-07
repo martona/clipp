@@ -1,12 +1,13 @@
 #pragma once
 
-// Callback type: receives discovered host name, sender IP, queryID, and nonce (all as strings)
+// Callback type: receives discovered host metadata and network name.
 using MDNSCallback = void(*)(const char* hostNameUtf8, 
 							const char* hostIDHex, 
 							const char* senderIpUtf8, 
 							const char* queryIDHex, 
 							const char* nonceHex, 
 							const char* verbUtf8, 
+                            const char* networkNameUtf8,
 							unsigned short port, 
 							const unsigned char* rawHostID);
 
