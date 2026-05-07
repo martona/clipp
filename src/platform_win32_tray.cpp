@@ -3,6 +3,16 @@
 #include "clipp-win32-darkmode32/DMSubclass.h"
 #pragma comment(lib, "darkmode32.lib")
 
+#ifdef _UNICODE
+    #if defined _M_IX86
+        #pragma comment(linker,"/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='x86' publicKeyToken='6595b64144ccf1df' language='*'\"")
+    #elif defined _M_X64
+        #pragma comment(linker,"/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='amd64' publicKeyToken='6595b64144ccf1df' language='*'\"")
+    #else
+        #pragma comment(linker,"/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
+    #endif
+#endif
+
 // Custom message ID for our tray icon events
 #define WM_TRAYICON (WM_USER + 1)
 #define ID_TRAY_ABOUT 1001
@@ -45,7 +55,7 @@ LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             // Handle the menu clicks
             switch (LOWORD(wParam)) {
             case ID_TRAY_ABOUT:
-                DarkMode::DarkMessageBox(NULL, L"Clipp v1.0\nSecure cross-platform clipboard sync.", L"About", MB_ICONINFORMATION | MB_OK);
+                DarkMode::DarkMessageBox(g_trayWindow, L"Clipp v1.0\nSecure cross-platform clipboard sync.", L"About", MB_ICONINFORMATION | MB_OK);
                 break;
             case ID_TRAY_EXIT:
                 PostQuitMessage(0);
