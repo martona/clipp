@@ -1,12 +1,16 @@
 #include "PeerManager.h"
+#include "PeerDisplay.h"
 #include "platform_win32_xaml_dialog.h"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <Windows.h>
 // winrt/Windows.UI.Xaml.Media.Animation.h has a GetCurrentTime method; Windows.h
@@ -41,6 +45,7 @@
 #pragma comment(lib, "windowsapp.lib")
 
 extern PeerManager g_peerManager;
+extern PeerDisplay g_peerDisplay;
 
 namespace {
 
@@ -63,13 +68,125 @@ winrt::Windows::UI::Xaml::Controls::Button g_changeBtn{ nullptr };
 winrt::Windows::UI::Xaml::Controls::PasswordBox g_passwordField{ nullptr };
 winrt::Windows::UI::Xaml::Controls::TextBlock g_readOnlyText{ nullptr };
 winrt::Windows::UI::Xaml::Controls::TextBlock g_hashDisplay{ nullptr };
+winrt::Windows::UI::Xaml::Controls::TextBox g_peerDisplayTextBox{ nullptr };
 winrt::Windows::System::DispatcherQueue g_uiDispatcher{ nullptr };
 
 KeyDerivationWorker g_keyDerivationWorker;
 UINT g_msgDerivedKey = RegisterWindowMessageW(L"ClippDerivedKeyNotification");
+UINT g_msgPeerDisplayUpdate = RegisterWindowMessageW(L"ClippPeerDisplayUpdate");
 bool g_ignoreDerivedKeys = true;
 std::array<unsigned char, KeyManager::NetworkKeySize> g_lastKnownNetworkKey;
 bool g_lastKnownNetworkKeyEmpty;
+
+std::size_t g_peerDisplayWatcherID{};
+std::vector<PeerDisplayItem> g_peerDisplayItems;
+
+constexpr std::size_t kPeerDisplayHostNameWidth = 24;
+constexpr std::size_t kPeerDisplayByteCounterWidth = 15; // 12 digits plus 3 thousand separators.
+constexpr uint64_t kPeerDisplayMaxByteCounter = 999'999'999'999;
+
+std::wstring PeerDisplayHostNameField(const std::wstring& hostName) {
+    std::wstring field = hostName.empty() ? L"(unknown)" : hostName;
+    if (field.size() > kPeerDisplayHostNameWidth) {
+        field.resize(kPeerDisplayHostNameWidth);
+    } else {
+        field.append(kPeerDisplayHostNameWidth - field.size(), L' ');
+    }
+    return field;
+}
+
+std::wstring PeerDisplayByteCounter(uint64_t bytes) {
+    if (bytes > kPeerDisplayMaxByteCounter) {
+        return L"+++,+++,+++,+++";
+    }
+
+    std::wstring digits = std::to_wstring(bytes);
+    std::wstring counter;
+    counter.reserve(kPeerDisplayByteCounterWidth);
+    for (std::size_t i = 0; i < digits.size(); ++i) {
+        if (i > 0 && ((digits.size() - i) % 3) == 0) {
+            counter.push_back(L',');
+        }
+        counter.push_back(digits[i]);
+    }
+
+    if (counter.size() < kPeerDisplayByteCounterWidth) {
+        counter.insert(counter.begin(), kPeerDisplayByteCounterWidth - counter.size(), L' ');
+    }
+    return counter;
+}
+
+bool PeerDisplayItemLess(const PeerDisplayItem& left, const PeerDisplayItem& right) {
+    if (left.hostID != right.hostID) {
+        return std::lexicographical_compare(left.hostID.begin(), left.hostID.end(), right.hostID.begin(), right.hostID.end());
+    }
+    return left.hostName < right.hostName;
+}
+
+std::wstring PeerDisplayItemLine(const PeerDisplayItem& item) {
+    std::wstring line = PeerDisplayHostNameField(item.hostName);
+    line += L" [";
+    line += item.hasIncomingConnection ? L"in" : L"  ";
+    line += L"/";
+    line += item.hasOutgoingConnection ? L"out" : L"   ";
+    line += L"] sent=";
+    line += PeerDisplayByteCounter(item.bytesSent);
+    line += L" recv=";
+    line += PeerDisplayByteCounter(item.bytesReceived);
+    return line;
+}
+
+void PeerDisplay_Render() {
+    if (!g_peerDisplayTextBox) {
+        return;
+    }
+
+    if (g_peerDisplayItems.empty()) {
+        g_peerDisplayTextBox.Text(L"No peers connected.");
+        return;
+    }
+
+    std::wstring text;
+    for (const auto& item : g_peerDisplayItems) {
+        if (!text.empty()) {
+            text += L"\r\n";
+        }
+        text += PeerDisplayItemLine(item);
+    }
+    g_peerDisplayTextBox.Text(text);
+}
+
+void PeerDisplay_LoadSnapshot(std::vector<PeerDisplayItem> items) {
+    g_peerDisplayItems = std::move(items);
+    std::sort(g_peerDisplayItems.begin(), g_peerDisplayItems.end(), PeerDisplayItemLess);
+    PeerDisplay_Render();
+}
+
+void PeerDisplay_Watcher(const PeerDisplayUpdate&, void* userData) {
+    const HWND hwnd = reinterpret_cast<HWND>(userData);
+    if (hwnd && IsWindow(hwnd)) {
+        PostMessageW(hwnd, g_msgPeerDisplayUpdate, 0, 0);
+    }
+}
+
+void PeerDisplay_BeginNotifications(HWND hwnd) {
+    if (!hwnd || g_peerDisplayWatcherID != 0) {
+        return;
+    }
+
+    const auto registration = g_peerDisplay.QueryAndRegister(PeerDisplay_Watcher, hwnd);
+    g_peerDisplayWatcherID = registration.watcherID;
+    PeerDisplay_LoadSnapshot(registration.items);
+}
+
+void PeerDisplay_EndNotifications() {
+    if (g_peerDisplayWatcherID == 0) {
+        return;
+    }
+
+    g_peerDisplay.Unregister(g_peerDisplayWatcherID);
+    g_peerDisplayWatcherID = 0;
+}
 
 void PasswordFields_Setup() {
     using namespace winrt::Windows::UI::Xaml;
@@ -280,6 +397,21 @@ winrt::Windows::UI::Xaml::Controls::Grid BuildPlaceholderContent() {
     container.Children().Append(g_changeBtn);
 	outerContainer.Children().Append(container);
     outerContainer.Children().Append(g_hashDisplay);
+
+    TextBlock peerDisplayLabel;
+    peerDisplayLabel.Text(L"Peers:");
+    peerDisplayLabel.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+    outerContainer.Children().Append(peerDisplayLabel);
+
+    g_peerDisplayTextBox = TextBox();
+    g_peerDisplayTextBox.AcceptsReturn(true);
+    g_peerDisplayTextBox.IsReadOnly(true);
+    g_peerDisplayTextBox.MinHeight(120);
+    g_peerDisplayTextBox.TextWrapping(TextWrapping::NoWrap);
+    g_peerDisplayTextBox.FontFamily(FontFamily(L"Consolas"));
+    g_peerDisplayTextBox.Text(L"No peers connected.");
+    outerContainer.Children().Append(g_peerDisplayTextBox);
+
     content.Children().Append(outerContainer);
 
     /*
@@ -476,6 +608,14 @@ LRESULT CALLBACK MainDialogWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         }
         return 0;
 
+    case WM_SHOWWINDOW:
+        if (wParam) {
+            PeerDisplay_BeginNotifications(hwnd);
+        } else {
+            PeerDisplay_EndNotifications();
+        }
+        return 0;
+
     case WM_SIZE:
         ResizeXamlHost(hwnd);
         return 0;
@@ -509,6 +649,8 @@ LRESULT CALLBACK MainDialogWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         return 0;
 
     case WM_DESTROY: {
+        PeerDisplay_EndNotifications();
+
         auto* state = reinterpret_cast<XamlDialogState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
         delete state;
@@ -530,6 +672,13 @@ LRESULT CALLBACK MainDialogWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             }
             return 0;
 		}
+
+        if (msg == g_msgPeerDisplayUpdate) {
+            if (g_peerDisplayWatcherID != 0) {
+                PeerDisplay_LoadSnapshot(g_peerDisplay.Query());
+            }
+            return 0;
+        }
         return DefWindowProcW(hwnd, msg, wParam, lParam);
     }
 }

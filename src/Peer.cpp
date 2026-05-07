@@ -15,6 +15,9 @@
 #include "NetworkDefs.h"
 #include "utils.h"
 #include "utils_socket.h"
+#include "PeerManager.h"
+
+static PeerManager g_peerManager;
 
 Peer::Peer(const wchar_t* hostName, const unsigned char* hostID, const wchar_t* ip, u_short port, VerifiedCallback verifiedCallback, TrafficCallback trafficCallback)
 	: hostName_(hostName), ip_(ip), port_(port),
@@ -240,6 +243,7 @@ void Peer::ThreadProcSend() {
 				break;
 			}
 			ReportTraffic(4, 0);
+			log(__FUNCTION__, Logger::Level::Debug, L"PING?");
 
 			char packet[4] = {};
 			if (socket_ == INVALID_SOCKET || !channel.RecvTaggedMessage(socket_, packet)) {
@@ -258,7 +262,7 @@ void Peer::ThreadProcSend() {
 				std::lock_guard<std::mutex> lock(dataMutex_);
 				lastPingReceivedAt_ = std::chrono::steady_clock::now();
 			}
-			log(__FUNCTION__, Logger::Level::Debug, L"Peer: PONG");
+			log(__FUNCTION__, Logger::Level::Debug, L"PONG");
 
 			auto msg = messageQueue_.WaitFor(std::chrono::seconds(30), stopRequested_);
 
@@ -279,6 +283,7 @@ void Peer::ThreadProcSend() {
 	}
 	log(__FUNCTION__, Logger::Level::Info, L"Peer disconnected");
 	running_.store(false);
+	log(__FUNCTION__, Logger::Level::Info, L"Thread exiting");
 }
 
 void Peer::ThreadProcRecv() {
@@ -309,7 +314,7 @@ void Peer::ThreadProcRecv() {
 			ReportTraffic(0, 4);
 
 			if (std::memcmp(packet, "PING", 4) == 0) {
-				log(__FUNCTION__, Logger::Level::Debug, L"Client: PING");
+				log(__FUNCTION__, Logger::Level::Debug, L"PING");
 				{
 					std::lock_guard<std::mutex> lock(dataMutex_);
 					lastPingReceivedAt_ = std::chrono::steady_clock::now();
@@ -317,6 +322,7 @@ void Peer::ThreadProcRecv() {
 				if (!channel.SendTaggedMessage(socket_, "PONG")) {
 					break;
 				}
+				log(__FUNCTION__, Logger::Level::Debug, L"PONG!");
 				ReportTraffic(4, 0);
 				continue;
 			}
@@ -379,4 +385,6 @@ void Peer::ThreadProcRecv() {
 	}
 
 	running_.store(false);
+	g_peerManager.CullPeers();
+	log(__FUNCTION__, Logger::Level::Info, L"Thread exiting");
 }
