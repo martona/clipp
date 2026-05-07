@@ -36,6 +36,7 @@ void PeerManager::AddPeer(const wchar_t* hostName, const unsigned char* hostID, 
 void PeerManager::AddPeer(SOCKET socket, Peer::ClipboardReceivedCallback clipboardReceivedCallback) {
 	auto peer = std::make_unique<Peer>(socket, std::move(clipboardReceivedCallback));
 	peer->Start();
+	std::lock_guard<std::mutex> lock(peersMutex_);
 	peers_.emplace_back(std::move(peer));
 	g_logger.log(__FUNCTION__, Logger::Level::Debug, L"PeerManager: added new peer (incoming).");
 }

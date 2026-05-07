@@ -173,8 +173,9 @@ void OnMDNSNotification(const char* hostNameUtf8,
 			ourHostIdInitialized = true;
         } else {
             g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to get host ID from settings during mDNS notification handling.");
+            return;
         }
-	};
+	}
 
 	g_logger.log(__FUNCTION__, Logger::Level::Debug, 
         "mDNS notification received for host: %s / %s\n  from: %s:%hu\n  verb:    %s\n  queryID: %s\n  nonce:   %s", 
@@ -184,7 +185,7 @@ void OnMDNSNotification(const char* hostNameUtf8,
         g_logger.log(__FUNCTION__, Logger::Level::Debug, "mDNS notification is from self; ignoring.");
         return;
 	}
-    if (/*std::string(verb) == "response" &&*/rawHostID != nullptr) {
+    if (rawHostID != nullptr) {
         size_t hostNameWLen = utf8_to_utf16(hostNameUtf8, strlen(hostNameUtf8), nullptr, 0);
         std::wstring hostNameW(hostNameWLen, L'\0');
         if (hostNameWLen > 0) {
