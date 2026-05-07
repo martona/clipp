@@ -73,11 +73,29 @@ void Logger::writeLine(const wchar_t* function, Level level, const wchar_t* mess
     std::wostringstream timestamp;
     timestamp << std::put_time(&tmNow, L"%Y-%m-%d %H:%M:%S") << L'.' << std::setfill(L'0') << std::setw(3) << millis.count();
 
+
+    // Pre-resolve strings once so we don't evaluate them twice
+    std::wstring tsStr = timestamp.str();
+    std::wstring lvlStr = LevelToString(level);
+    std::wstring fnStr = (function != nullptr ? function : L"");
+    std::wstring msgStr = (message != nullptr ? message : L"<null>");
+
     std::lock_guard<std::mutex> lock(mutex_);
-    std::wcout << L"\x1b[90m" << timestamp.str()
-        << LevelToColor(level) << L" [" << LevelToString(level) << L"] "
-        << L"\x1b[90m" << "[" << (function != nullptr ? function : L"") << L"] "
-        << ResetColor() << (message != nullptr ? message : L"<null>") << std::endl;
+
+    // Console Output (With ANSI Colors)
+    std::wcout << L"\x1b[90m" << tsStr
+        << LevelToColor(level) << L" [" << lvlStr << L"] "
+        << L"\x1b[90m" << L"[" << fnStr << L"] "
+        << ResetColor() << msgStr << std::endl;
+
+    #ifdef _WIN32
+        // Debugger Output (Raw, No Colors)
+        // Only pay the string concatenation cost if a debugger is actually listening
+        if (IsDebuggerPresent()) {
+            std::wstring debugStr = tsStr + L" [" + lvlStr + L"] [" + fnStr + L"] " + msgStr + L"\n";
+            OutputDebugStringW(debugStr.c_str());
+        }
+    #endif
 }
 
 const wchar_t* Logger::LevelToString(Level level) {

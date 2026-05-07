@@ -157,6 +157,7 @@
     <ClCompile Include="Peer.cpp" />
     <ClCompile Include="PeerManager.cpp" />
     <ClCompile Include="platform_win32_Settings.cpp" />
+    <ClCompile Include="platform_win32_tray.cpp" />
     <ClCompile Include="Settings.cpp" />
   </ItemGroup>
   <ItemGroup>

@@ -32,14 +32,12 @@ Settings g_settings;
 PeerManager g_peerManager;
 
 #ifdef _WIN32
-    std::mutex g_shutdownMutex;
-    std::condition_variable g_shutdownCV;
-    std::atomic<bool> g_shutdownRequested{ false };
-
+    void TrayIconMessageLoop();
+    void TrayIconShutdown();
     BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType) {
         if (dwCtrlType == CTRL_C_EVENT || dwCtrlType == CTRL_BREAK_EVENT || dwCtrlType == CTRL_CLOSE_EVENT) {
-            g_shutdownRequested.store(true);
-            g_shutdownCV.notify_all(); // 100% safe on Windows
+			g_logger.log(__FUNCTION__, Logger::Level::Info, "Console control event received, shutting down...");
+            TrayIconShutdown();
             return TRUE;
         }
         return FALSE;
@@ -280,10 +278,8 @@ int main(int argc, char* argv[]) {
                 g_logger.log(__FUNCTION__, Logger::Level::Info, "Successfully started.");
 
                 #ifdef _WIN32
-                    // Windows: Hook the dedicated thread handler and instantly sleep the main thread
                     SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
-                    std::unique_lock<std::mutex> lock(g_shutdownMutex);
-                    g_shutdownCV.wait(lock, [] { return g_shutdownRequested.load(); });
+                    TrayIconMessageLoop();
                 #else
                     // macOS: Instantly sleep the main thread until the blocked signal arrives
                     int caughtSignal;
