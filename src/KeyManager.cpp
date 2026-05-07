@@ -8,6 +8,9 @@
 
 #include <sstream>
 #include <vector>
+#include <sodium.h>
+#include "platform.h"
+#include "utils.h"
 
 #ifdef __APPLE__
     #include <CoreFoundation/CoreFoundation.h>
@@ -50,6 +53,37 @@
         return access;
     }
 #endif
+
+static std::vector<unsigned char> HexStringToBytes(const std::string& hex) {
+    std::vector<unsigned char> bytes;
+    if (hex.size() % 2 != 0)
+        return bytes;
+
+    const size_t expected_len = hex.size() / 2;
+    bytes.resize(expected_len);
+
+    size_t actual_len = 0;
+    int ret = sodium_hex2bin(
+        bytes.data(),
+        bytes.size(),      // Maximum bytes to write
+        hex.c_str(),
+        hex.size(),        // Length of the hex string
+        nullptr,           // Ignore string (e.g., ": " to ignore colons/spaces)
+        &actual_len,       // Outputs the actual number of bytes written
+        nullptr            // Pointer to the end of the parsed hex string
+    );
+
+    // sodium_hex2bin returns 0 on SUCCESS, -1 on error
+    if (ret != 0) {
+        bytes.clear();
+        return bytes;
+    }
+
+    // Shrink the vector to the actual number of bytes parsed
+    bytes.resize(actual_len);
+    return bytes;
+}
+
 
 KeyManager g_keyManager(g_settings);
 
@@ -266,4 +300,35 @@ bool KeyManager::GetNetworkKey(std::array<unsigned char, NetworkKeySize>& networ
     return true;
 }
 
+bool KeyManager::DeriveNetworkKey(const std::string& password, std::array<unsigned char, 32>& outKey) {
+    static std::vector<unsigned char> staticSalt = HexStringToBytes("9ea1e55abc07c859fd900958d8b7efbe");
+    CLIPP_ASSERT(staticSalt.size() == crypto_pwhash_SALTBYTES);
+    if (crypto_pwhash(
+        outKey.data(),
+        outKey.size(),
+        password.c_str(),
+        password.length(),
+        staticSalt.data(),
+        crypto_pwhash_OPSLIMIT_MODERATE,
+        crypto_pwhash_MEMLIMIT_MODERATE,
+        crypto_pwhash_ALG_ARGON2ID13) != 0) {
+        return false;
+    }
+    return true;
+}
 
+std::wstring KeyManager::GetNetworkKeyHash(const std::array<unsigned char, NetworkKeySize>* networkKey) {
+    if (networkKey == nullptr) {
+        if (cacheValid_) {
+            networkKey = &cachedNetworkKey_;
+        } else {
+            return L"";
+        }
+    }
+    unsigned char keyHash[crypto_hash_sha256_BYTES];
+    crypto_hash_sha256(keyHash, networkKey->data(), networkKey->size());
+    std::string keyHashUtf8;
+    keyHashUtf8.resize(crypto_hash_sha256_BYTES * 2 + 1);
+    sodium_bin2hex(keyHashUtf8.data(), keyHashUtf8.size(), keyHash, sizeof(keyHash));
+    return Utf8ToWideString(keyHashUtf8);
+}

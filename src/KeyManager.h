@@ -13,6 +13,8 @@ public:
 
     bool SetNetworkKey(const std::array<unsigned char, NetworkKeySize>& networkKey, std::string* errorMessage = nullptr);
     bool GetNetworkKey(std::array<unsigned char, NetworkKeySize>& networkKey, std::string* errorMessage = nullptr);
+    bool DeriveNetworkKey(const std::string& password, std::array<unsigned char, 32>& outKey);
+    std::wstring GetNetworkKeyHash(const std::array<unsigned char, NetworkKeySize>* networkKey = nullptr);
 
 private:
     Settings& settings_;

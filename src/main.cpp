@@ -125,23 +125,6 @@ static std::string ReadHiddenLine(const std::string & prompt) {
     return input;
 }
 
-bool DeriveNetworkKey(const std::string& password, std::array<unsigned char, 32>& outKey) {
-    static std::vector<unsigned char> staticSalt = HexStringToBytes("9ea1e55abc07c859fd900958d8b7efbe");
-	CLIPP_ASSERT(staticSalt.size() == crypto_pwhash_SALTBYTES);
-    if (crypto_pwhash(
-        outKey.data(),
-        outKey.size(),
-        password.c_str(),
-        password.length(),
-		staticSalt.data(),
-        crypto_pwhash_OPSLIMIT_MODERATE,
-        crypto_pwhash_MEMLIMIT_MODERATE,
-        crypto_pwhash_ALG_ARGON2ID13) != 0) {
-        return false; 
-    }
-    return true;
-}
-
 void OnClipboardNotification(PlatformWindowHandle hwnd) {
     g_logger.log(__FUNCTION__, Logger::Level::Debug, "Clipboard notification received");
     auto clipboardData = ReadClipboardData(hwnd);
@@ -227,11 +210,7 @@ void OnMDNSNotification(const char* hostNameUtf8,
 }
 
 void PrintNetworkKeyHash(const std::array<unsigned char, KeyManager::NetworkKeySize>& networkKey) {
-    unsigned char keyHash[crypto_hash_sha256_BYTES];
-    crypto_hash_sha256(keyHash, networkKey.data(), networkKey.size());
-    char keyHashHex[crypto_hash_sha256_BYTES * 2 + 1];
-    sodium_bin2hex(keyHashHex, sizeof(keyHashHex), keyHash, sizeof(keyHash));
-    g_logger.log(__FUNCTION__, Logger::Level::Info, "Network Key SHA256: %s", keyHashHex);
+    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Network Key SHA256: %s", g_keyManager.GetNetworkKeyHash(&networkKey).c_str());
 }
 
 int main(int argc, char* argv[]) {
@@ -245,7 +224,7 @@ int main(int argc, char* argv[]) {
             g_logger.log(__FUNCTION__, Logger::Level::Error, "No input provided.");
             return 1;
         }
-		bool keyDerived = DeriveNetworkKey(keyInput, networkKey);
+		bool keyDerived = g_keyManager.DeriveNetworkKey(keyInput, networkKey);
         sodium_memzero(keyInput.data(), keyInput.capacity());
         if (!keyDerived) {
             g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to derive network key from password.");

@@ -13,6 +13,7 @@
 #include "CryptoChannel.h"
 #include "NetworkDefs.h"
 #include "utils.h"
+#include "utils_socket.h"
 
 Peer::Peer(const wchar_t* hostName, const unsigned char* hostID, const wchar_t* ip, u_short port)
 	: hostName_(hostName), ip_(ip), port_(port),

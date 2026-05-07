@@ -1,3 +1,4 @@
+#include "PeerManager.h"
 #include "platform_win32_xaml_dialog.h"
 
 #include <algorithm>
@@ -27,14 +28,19 @@
 #include <winrt/Windows.UI.Xaml.Hosting.h>
 #include <winrt/Windows.UI.Xaml.Input.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
+#include <winrt/Windows.System.h>
 #include <winrt/base.h>
 
 #include "Logger.h"
+#include "MDNSThread.h"
 #include "clipp-win32-darkmode32/DMSubclass.h"
+#include "platform_win32_KeyDerivationWorker.h"
 
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "runtimeobject.lib")
 #pragma comment(lib, "windowsapp.lib")
+
+extern PeerManager g_peerManager;
 
 namespace {
 
@@ -52,6 +58,73 @@ struct XamlDialogState {
 HWND g_dialogWindow = nullptr;
 winrt::Windows::UI::Xaml::Hosting::WindowsXamlManager g_xamlManager{ nullptr };
 std::wstring g_createError;
+
+winrt::Windows::UI::Xaml::Controls::Button g_changeBtn{ nullptr };
+winrt::Windows::UI::Xaml::Controls::PasswordBox g_passwordField{ nullptr };
+winrt::Windows::UI::Xaml::Controls::TextBlock g_readOnlyText{ nullptr };
+winrt::Windows::UI::Xaml::Controls::TextBlock g_hashDisplay{ nullptr };
+winrt::Windows::System::DispatcherQueue g_uiDispatcher{ nullptr };
+
+KeyDerivationWorker g_keyDerivationWorker;
+UINT g_msgDerivedKey = RegisterWindowMessageW(L"ClippDerivedKeyNotification");
+bool g_ignoreDerivedKeys = true;
+std::array<unsigned char, KeyManager::NetworkKeySize> g_lastKnownNetworkKey;
+bool g_lastKnownNetworkKeyEmpty;
+
+void PasswordFields_Setup() {
+    using namespace winrt::Windows::UI::Xaml;
+    using namespace winrt::Windows::UI::Xaml::Controls;
+	std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
+    bool haveNetworkKey = false;
+	if (g_keyManager.GetNetworkKey(networkKey)) {
+		haveNetworkKey = true;
+        sodium_memzero(networkKey.data(), networkKey.size());
+    }
+    if (haveNetworkKey) {
+        g_readOnlyText.Text(L"••••••••••••••••");
+        g_passwordField.Visibility(Visibility::Collapsed);
+        g_readOnlyText.Visibility(Visibility::Visible);
+        g_changeBtn.Content(winrt::box_value(L"Change"));
+        g_hashDisplay.Text(L"SHA256 of Argon2id: " + g_keyManager.GetNetworkKeyHash());
+    } else {
+        g_passwordField.Visibility(Visibility::Visible);
+        g_readOnlyText.Visibility(Visibility::Collapsed);
+		g_passwordField.Password(L"");
+        g_changeBtn.Content(winrt::box_value(L"Cancel"));
+        g_hashDisplay.Text(L"Please enter a password to derive the network key from.");
+    }
+}
+
+void PasswordFields_BeginEdit() {
+    using namespace winrt::Windows::UI::Xaml;
+    using namespace winrt::Windows::UI::Xaml::Controls;
+    g_readOnlyText.Visibility(Visibility::Collapsed);
+    g_changeBtn.Content(winrt::box_value(L"Cancel"));
+    g_passwordField.Password(L"••••••••••••••••");
+    g_passwordField.Visibility(Visibility::Visible);
+    g_passwordField.Focus(FocusState::Programmatic);
+    g_passwordField.SelectAll();
+}
+
+void PasswordFields_CancelEdit() {
+    g_ignoreDerivedKeys = true;
+    if (!g_lastKnownNetworkKeyEmpty) {
+        g_keyManager.SetNetworkKey(g_lastKnownNetworkKey);
+        MDNSNotifyNetworkKeyChange();
+        g_peerManager.ClearPeers();
+    }
+    PasswordFields_Setup();
+}
+
+void PasswordFields_ApplyEdit() {
+    using namespace winrt::Windows::UI::Xaml;
+    using namespace winrt::Windows::UI::Xaml::Controls;
+    g_hashDisplay.Text(L"... working ...");
+    std::string newPassword = winrt::to_string(g_passwordField.Password());
+    g_keyDerivationWorker.RequestKeyDerivation(newPassword);
+    sodium_memzero(newPassword.data(), newPassword.capacity());
+    g_ignoreDerivedKeys = false;
+}
 
 void EnsureXamlInitialized() {
     static bool apartmentInitialized = false;
@@ -132,18 +205,84 @@ winrt::Windows::UI::Xaml::Controls::Grid BuildPlaceholderContent() {
     content.Spacing(16);
 
     TextBlock heading;
-    heading.Text(L"Clipp main dialog");
+    heading.Text(L"Clipp");
     heading.FontSize(28);
     heading.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
     heading.TextWrapping(TextWrapping::Wrap);
     content.Children().Append(heading);
 
     TextBlock intro;
-    intro.Text(L"This is placeholder XAML Islands content for the future Clipp main dialog. The controls below are boilerplate so we can validate tray integration, focus, resizing, and deployment behavior.");
+    intro.Text(L"Secure cross-platform clipboard sync with peer-to-peer networking.");
     intro.FontSize(14);
     intro.TextWrapping(TextWrapping::WrapWholeWords);
     content.Children().Append(intro);
 
+    // the Read-Only Text
+    TextBlock passwordLabel;
+	passwordLabel.Text(L"Password: ");
+    passwordLabel.VerticalAlignment(VerticalAlignment::Center);
+
+	g_readOnlyText = TextBlock();
+    g_readOnlyText.VerticalAlignment(VerticalAlignment::Center);
+
+    // Editable Input (Hidden by default)
+    winrt::Windows::UI::Xaml::DispatcherTimer debounceTimer;
+    debounceTimer.Interval(std::chrono::milliseconds(500));
+    debounceTimer.Tick([=](winrt::Windows::Foundation::IInspectable const&, winrt::Windows::Foundation::IInspectable const&) {
+        debounceTimer.Stop();
+		PasswordFields_ApplyEdit();
+        });
+
+	g_passwordField = PasswordBox();
+    g_passwordField.VerticalAlignment(VerticalAlignment::Center);
+    g_passwordField.Visibility(Visibility::Collapsed);
+    g_passwordField.MinWidth(200);
+    g_passwordField.KeyDown([](auto&& sender, winrt::Windows::UI::Xaml::Input::KeyRoutedEventArgs const& e) {
+            if (e.Key() == winrt::Windows::System::VirtualKey::Escape) {
+                PasswordFields_CancelEdit();
+                e.Handled(true);
+            }
+        });
+    g_passwordField.PasswordChanged([=](winrt::Windows::Foundation::IInspectable const&, winrt::Windows::UI::Xaml::RoutedEventArgs const&) {
+            debounceTimer.Stop();
+            debounceTimer.Start();
+        });
+
+    // The Action Button
+    g_changeBtn = Button();
+    g_changeBtn.Content(winrt::box_value(L"Change"));
+    g_changeBtn.VerticalAlignment(VerticalAlignment::Center);
+
+    // The Event Handler
+    g_changeBtn.Click([=](winrt::Windows::Foundation::IInspectable const&, RoutedEventArgs const&) {
+            if (g_passwordField.Visibility() == Visibility::Visible) {
+                PasswordFields_CancelEdit();
+		    } else {
+			    PasswordFields_BeginEdit();
+		    }
+        });
+
+    g_hashDisplay = TextBlock();
+    g_hashDisplay.Text(L"Argon2id");
+    g_hashDisplay.VerticalAlignment(VerticalAlignment::Center);
+    g_hashDisplay.Visibility(Visibility::Visible);
+
+    // Create the containers
+    StackPanel container, outerContainer;
+    outerContainer.Orientation(Orientation::Vertical);
+    outerContainer.Spacing(10);
+    container.Orientation(Orientation::Horizontal);
+    container.Spacing(10);
+
+    container.Children().Append(passwordLabel);
+    container.Children().Append(g_readOnlyText);
+    container.Children().Append(g_passwordField);
+    container.Children().Append(g_changeBtn);
+	outerContainer.Children().Append(container);
+    outerContainer.Children().Append(g_hashDisplay);
+    content.Children().Append(outerContainer);
+
+    /*
     TextBlock listHeading;
     listHeading.Text(L"Placeholder activity");
     listHeading.FontSize(16);
@@ -157,60 +296,6 @@ winrt::Windows::UI::Xaml::Controls::Grid BuildPlaceholderContent() {
     listView.Items().Append(winrt::box_value(L"Known peers placeholder"));
     listView.Items().Append(winrt::box_value(L"Recent clipboard item placeholder"));
     content.Children().Append(listView);
-
-    // 1. Create the container
-    StackPanel container;
-    container.Orientation(Orientation::Horizontal);
-    container.Spacing(10);
-
-    // 2. The Read-Only Text
-    TextBlock readOnlyText;
-    readOnlyText.Text(L"Current Value: 15353");
-    readOnlyText.VerticalAlignment(VerticalAlignment::Center);
-    readOnlyText.Visibility(Visibility::Visible);
-
-    // 3. The Editable Input (Hidden by default)
-    TextBox editBox;
-    editBox.Text(L"15353");
-    editBox.VerticalAlignment(VerticalAlignment::Center);
-    editBox.Visibility(Visibility::Collapsed);
-    // Optional: Make it look a bit cleaner inline
-    editBox.MinWidth(100);
-
-    // 4. The Action Button
-    Button changeBtn;
-    changeBtn.Content(winrt::box_value(L"Change"));
-    changeBtn.VerticalAlignment(VerticalAlignment::Center);
-
-    // 5. The Event Handler (The "Morph" logic)
-    changeBtn.Click([=](winrt::Windows::Foundation::IInspectable const&, RoutedEventArgs const&) {
-        // If we are in "Read" mode, switch to "Edit" mode
-        if (readOnlyText.Visibility() == Visibility::Visible) {
-            readOnlyText.Visibility(Visibility::Collapsed);
-            editBox.Visibility(Visibility::Visible);
-
-            changeBtn.Content(winrt::box_value(L"Save"));
-
-            // Optional UX polish: auto-focus the textbox and select the text
-            editBox.Focus(FocusState::Programmatic);
-            editBox.SelectAll();
-        }
-        // If we are in "Edit" mode, save and switch back to "Read" mode
-        else {
-            // ... Save your value here ...
-            readOnlyText.Text(L"Current Value: " + editBox.Text());
-
-            editBox.Visibility(Visibility::Collapsed);
-            readOnlyText.Visibility(Visibility::Visible);
-
-            changeBtn.Content(winrt::box_value(L"Change"));
-        }
-        });
-
-    container.Children().Append(readOnlyText);
-    container.Children().Append(editBox);
-    container.Children().Append(changeBtn);
-	content.Children().Append(container);
 
     StackPanel actions;
     actions.Orientation(Orientation::Horizontal);
@@ -230,8 +315,10 @@ winrt::Windows::UI::Xaml::Controls::Grid BuildPlaceholderContent() {
     actions.Children().Append(toggle);
 
     content.Children().Append(actions);
-
+    */
     root.Children().Append(content);
+
+    g_uiDispatcher = winrt::Windows::System::DispatcherQueue::GetForCurrentThread();
 
     return root;
 }
@@ -379,6 +466,7 @@ LRESULT CALLBACK MainDialogWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             DarkMode::setDarkWndNotifySafe(hwnd, true);
             ApplyModernWindowAttributes(hwnd);
             InitializeXamlIsland(hwnd);
+			g_keyDerivationWorker.SetNotificationTarget(hwnd, g_msgDerivedKey);
         }
         catch (const winrt::hresult_error& error) {
             g_createError = L"Unable to open the XAML Islands dialog. This requires Windows 10 version 1903 or later and the WinRT XAML hosting runtime.\n\nHRESULT: " +
@@ -404,6 +492,18 @@ LRESULT CALLBACK MainDialogWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         return 0;
     }
 
+    case WM_ACTIVATE:
+        if (wParam != WA_INACTIVE) {
+            SetForegroundWindow(hwnd);
+            if (g_uiDispatcher) {
+                g_uiDispatcher.TryEnqueue([]() {
+                    PasswordFields_Setup();
+                });
+            }
+            g_lastKnownNetworkKeyEmpty = !g_keyManager.GetNetworkKey(g_lastKnownNetworkKey);
+        }
+		return 0;
+
     case WM_CLOSE:
         ShowWindow(hwnd, SW_HIDE);
         return 0;
@@ -420,6 +520,16 @@ LRESULT CALLBACK MainDialogWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     }
 
     default:
+        if (msg == g_msgDerivedKey) {
+            if (!g_ignoreDerivedKeys) {
+                KeyDerivationWorker::KeyDerivationResult* result = reinterpret_cast<KeyDerivationWorker::KeyDerivationResult*>(wParam);
+                g_hashDisplay.Text(L"SHA256 of Argon2id: " + result->derivedKeyHash);
+				g_keyManager.SetNetworkKey(result->derivedKey);
+				MDNSNotifyNetworkKeyChange();
+				g_peerManager.ClearPeers();
+            }
+            return 0;
+		}
         return DefWindowProcW(hwnd, msg, wParam, lParam);
     }
 }

@@ -7,6 +7,7 @@
 #include "Settings.h"
 #include "KeyManager.h"
 #include "utils.h"
+#include "utils_socket.h"
 
 namespace {
 #pragma pack(push, 1)
