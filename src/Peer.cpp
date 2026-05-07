@@ -236,7 +236,7 @@ void Peer::ThreadProcSend() {
 			} else {
 				// A message was pulled from the queue
 				std::shared_ptr<const ClipboardPayload> payload = msg.value();
-				log(__FUNCTION__, Logger::Level::Debug, L"Received clipboard payload.");
+				log(__FUNCTION__, Logger::Level::Debug, L"Clipboard payload to be sent: format ID %u, encoded size %zu bytes, decoded size %u bytes", payload->formatId, payload->rawData.size(), payload->decodedDataSize);
 				if (!SendClipboardData(channel, *payload)) {
 					log(__FUNCTION__, Logger::Level::Debug, L"Peer failed to send clipboard payload.");
 					break;

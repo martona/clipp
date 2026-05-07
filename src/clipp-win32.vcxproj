@@ -157,6 +157,7 @@
     <ClInclude Include="NetworkDefs.h" />
     <ClInclude Include="Peer.h" />
     <ClInclude Include="PeerManager.h" />
+    <ClInclude Include="ScopedTimer.h" />
     <ClInclude Include="Settings.h" />
     <ClInclude Include="utils.h" />
   </ItemGroup>

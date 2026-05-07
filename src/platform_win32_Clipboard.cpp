@@ -10,6 +10,7 @@
 #include <lodepng.h>
 #include <xxhash.h>
 #include "Logger.h"
+#include "ScopedTimer.h"
 
 static std::thread g_clipboardThread;
 static HWND g_hwnd = nullptr;
@@ -252,11 +253,19 @@ static bool DIBToPNG(const unsigned char* dibData, size_t dibSize, std::vector<u
         }
     }
 
-    const unsigned int error = lodepng::encode(pngData, rgba, static_cast<unsigned>(width), static_cast<unsigned>(height));
-    if (error != 0) {
-        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to encode DIB clipboard image as PNG: %hs", lodepng_error_text(error));
-        pngData.clear();
-        return false;
+    {
+        ScopedTimer timer(L"Clipboard DIB to PNG compression");
+        lodepng::State state;
+        state.encoder.zlibsettings.windowsize = 512;
+        const unsigned int error = lodepng::encode(pngData, rgba,
+            static_cast<unsigned>(width),
+            static_cast<unsigned>(height),
+            state);
+        if (error != 0) {
+            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to encode DIB clipboard image as PNG: %hs", lodepng_error_text(error));
+            pngData.clear();
+            return false;
+        }
     }
 
     if (!IsPngStream(pngData)) {
@@ -472,6 +481,7 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
                         SIZE_T dataSize = GlobalSize(hData);
                         if (dataSize > 0) {
                             std::vector<unsigned char> pngData;
+							ScopedTimer timer(L"Clipboard DIB to PNG encoding");
                             if (DIBToPNG(dibData, static_cast<size_t>(dataSize), pngData)) {
                                 payload.formatId = CF_DIB;
                                 payload.rawData = std::move(pngData);
