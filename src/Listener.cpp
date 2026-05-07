@@ -1,14 +1,24 @@
 #include "Logger.h"
 #include "Listener.h"
 
+#include <array>
 #include <chrono>
 #include <iostream>
 #include <memory>
+#include <string>
 
 #include "PeerManager.h"
 #include "Settings.h"
+#include "KeyManager.h"
 
 extern PeerManager g_peerManager;
+extern KeyManager g_keyManager;
+
+static bool HasNetworkKey() {
+    std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
+    std::string errorMessage;
+    return g_keyManager.GetNetworkKey(networkKey, &errorMessage);
+}
 
 Listener::Listener(ClipboardReceivedCallback clipboardReceivedCallback) { 
 	clipboardReceivedCallback_ = std::move(clipboardReceivedCallback);
@@ -134,6 +144,12 @@ void Listener::ThreadProc() {
             SOCKET clientSock = accept(listenSock, nullptr, nullptr);
             if (clientSock == INVALID_SOCKET) {
                 g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Listener: accept failed.");
+                continue;
+            }
+
+            if (!HasNetworkKey()) {
+                closesocket(clientSock);
+                g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Listener: closed incoming TCP client because no network key is configured.");
                 continue;
             }
 

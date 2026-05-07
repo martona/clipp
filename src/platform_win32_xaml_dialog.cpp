@@ -158,6 +158,60 @@ winrt::Windows::UI::Xaml::Controls::Grid BuildPlaceholderContent() {
     listView.Items().Append(winrt::box_value(L"Recent clipboard item placeholder"));
     content.Children().Append(listView);
 
+    // 1. Create the container
+    StackPanel container;
+    container.Orientation(Orientation::Horizontal);
+    container.Spacing(10);
+
+    // 2. The Read-Only Text
+    TextBlock readOnlyText;
+    readOnlyText.Text(L"Current Value: 15353");
+    readOnlyText.VerticalAlignment(VerticalAlignment::Center);
+    readOnlyText.Visibility(Visibility::Visible);
+
+    // 3. The Editable Input (Hidden by default)
+    TextBox editBox;
+    editBox.Text(L"15353");
+    editBox.VerticalAlignment(VerticalAlignment::Center);
+    editBox.Visibility(Visibility::Collapsed);
+    // Optional: Make it look a bit cleaner inline
+    editBox.MinWidth(100);
+
+    // 4. The Action Button
+    Button changeBtn;
+    changeBtn.Content(winrt::box_value(L"Change"));
+    changeBtn.VerticalAlignment(VerticalAlignment::Center);
+
+    // 5. The Event Handler (The "Morph" logic)
+    changeBtn.Click([=](winrt::Windows::Foundation::IInspectable const&, RoutedEventArgs const&) {
+        // If we are in "Read" mode, switch to "Edit" mode
+        if (readOnlyText.Visibility() == Visibility::Visible) {
+            readOnlyText.Visibility(Visibility::Collapsed);
+            editBox.Visibility(Visibility::Visible);
+
+            changeBtn.Content(winrt::box_value(L"Save"));
+
+            // Optional UX polish: auto-focus the textbox and select the text
+            editBox.Focus(FocusState::Programmatic);
+            editBox.SelectAll();
+        }
+        // If we are in "Edit" mode, save and switch back to "Read" mode
+        else {
+            // ... Save your value here ...
+            readOnlyText.Text(L"Current Value: " + editBox.Text());
+
+            editBox.Visibility(Visibility::Collapsed);
+            readOnlyText.Visibility(Visibility::Visible);
+
+            changeBtn.Content(winrt::box_value(L"Change"));
+        }
+        });
+
+    container.Children().Append(readOnlyText);
+    container.Children().Append(editBox);
+    container.Children().Append(changeBtn);
+	content.Children().Append(container);
+
     StackPanel actions;
     actions.Orientation(Orientation::Horizontal);
     actions.Spacing(8);

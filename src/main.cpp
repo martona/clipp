@@ -317,11 +317,11 @@ int main(int argc, char* argv[]) {
 
     std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
     std::string keyErrorMessage;
-    if (!g_keyManager.GetNetworkKey(networkKey, &keyErrorMessage)) {
-        g_logger.log(__FUNCTION__, Logger::Level::Error, "Fatal: failed to load network key before starting threads: %s", keyErrorMessage.c_str());
-        return 1;
+    if (g_keyManager.GetNetworkKey(networkKey, &keyErrorMessage)) {
+        PrintNetworkKeyHash(networkKey);
+    } else {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, "No network key configured yet: %s", keyErrorMessage.c_str());
     }
-    PrintNetworkKeyHash(networkKey);
 
     // Start worker threads
     if (StartClipboardNotification(OnClipboardNotification)) {
