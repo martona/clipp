@@ -190,9 +190,13 @@
     <ClInclude Include="NetworkDefs.h" />
     <ClInclude Include="Peer.h" />
     <ClInclude Include="PeerManager.h" />
+    <ClInclude Include="resource.h" />
     <ClInclude Include="ScopedTimer.h" />
     <ClInclude Include="Settings.h" />
     <ClInclude Include="utils.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="clipp-win32.rc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
