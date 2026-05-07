@@ -177,7 +177,9 @@ void OnMDNSNotification(const char* hostNameUtf8,
         }
 	}
 
-	g_logger.log(__FUNCTION__, Logger::Level::Debug, 
+    g_peerManager.CullPeers();
+    
+    g_logger.log(__FUNCTION__, Logger::Level::Debug,
         "mDNS notification received for host: %s / %s\n  from: %s:%hu\n  verb:    %s\n  queryID: %s\n  nonce:   %s", 
         hostNameUtf8, hostID, senderIp, port, verb, queryID, nonce);
 
@@ -193,8 +195,6 @@ void OnMDNSNotification(const char* hostNameUtf8,
         }
         g_peerManager.AddPeer(hostNameW.c_str(), rawHostID, Utf8ToWideString(senderIp).c_str(), port);
     }
-
-    g_peerManager.CullPeers();
 }
 
 void PrintNetworkKeyHash(const std::array<unsigned char, KeyManager::NetworkKeySize>& networkKey) {
