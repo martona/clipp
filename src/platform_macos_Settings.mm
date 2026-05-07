@@ -60,6 +60,22 @@ bool Settings::ReadUint32Value(const wchar_t* valueName, int& outValue) {
     return true;
 }
 
+bool Settings::ReadUint64Value(const wchar_t* valueName, uint64_t& outValue) {
+    NSString* key = ToNSString(valueName);
+    if (key == nil) {
+        return false;
+    }
+
+    NSUserDefaults* defaults = GetSettingsStore();
+    id value = [defaults objectForKey:key];
+    if (value == nil || ![value isKindOfClass:[NSNumber class]]) {
+        return false;
+    }
+
+    outValue = static_cast<uint64_t>([(NSNumber*)value unsignedLongLongValue]);
+    return true;
+}
+
 bool Settings::WriteStringValue(const wchar_t* valueName, const std::string& value) {
     NSString* key = ToNSString(valueName);
     if (key == nil) {
@@ -79,6 +95,18 @@ bool Settings::WriteUint32Value(const wchar_t* valueName, int value) {
 
     NSUserDefaults* defaults = GetSettingsStore();
     [defaults setInteger:value forKey:key];
+    return [defaults synchronize];
+}
+
+bool Settings::WriteUint64Value(const wchar_t* valueName, uint64_t value) {
+    NSString* key = ToNSString(valueName);
+    if (key == nil) {
+        return false;
+    }
+
+    NSUserDefaults* defaults = GetSettingsStore();
+    NSNumber* numberValue = [NSNumber numberWithUnsignedLongLong:value];
+    [defaults setObject:numberValue forKey:key];
     return [defaults synchronize];
 }
 

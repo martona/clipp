@@ -31,6 +31,7 @@ struct mdns_packet {
 	u_short version;
 	char hostName[256];
     char networkName[Settings::MaxNetworkNameLength + 1];
+	uint64_t networkNameTimestamp;
 	unsigned char hostID[32];
 	u_short port;
 	char verb[16];
@@ -101,6 +102,7 @@ static mdns_packet BuildMDNSPacket(const std::string& hostName, const std::strin
     strncpys(packet.hostName, hostName.c_str());
     strncpys(packet.networkName, g_settings.networkName().c_str());
     strncpys(packet.verb, verb.c_str());
+	packet.networkNameTimestamp = htonll(g_settings.networkNameTimestamp());
     packet.port = htons(static_cast<u_short>(g_settings.tcpPort()));
     std::memcpy(packet.hostID, g_hostID.data(), sizeof(packet.hostID));
     if (queryID) {
@@ -117,6 +119,7 @@ static bool ParseDiscoveryPacket(mdns_packet& pkt,
                                 std::string& hostName, 
                                 std::string& hostID, 
                                 std::string& networkName,
+	                            uint64_t& networkNameTimestamp,
                                 std::string& verb, 
                                 std::string& queryID, 
                                 std::string& nonce, 
@@ -149,6 +152,7 @@ static bool ParseDiscoveryPacket(mdns_packet& pkt,
         return false;
 
 	hostPort = ntohs(pkt.port);
+	networkNameTimestamp = ntohll(pkt.networkNameTimestamp);
 
     // Convert queryID and nonce to hex wstring
     std::ostringstream ossQueryID, ossNonce, ossHostID;
@@ -269,12 +273,14 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
 
             std::string discoveredHost, discoveredHostID, discoveredNetworkName, verb, discoveredQueryID, discoveredNonce;
 			unsigned short discoveredPort = 0;
+			uint64_t discoveredNetworkNameTimestamp = 0;
             const unsigned char* rawQueryID = nullptr;
             const unsigned char* rawHostID = nullptr;
             if (!ParseDiscoveryPacket(decryptedPacket,
                 discoveredHost,
                 discoveredHostID,
                 discoveredNetworkName,
+                discoveredNetworkNameTimestamp,
                 verb,
                 discoveredQueryID,
                 discoveredNonce,
@@ -304,6 +310,7 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
                     discoveredNonce.c_str(), 
                     verb.c_str(), 
                     discoveredNetworkName.c_str(),
+                    discoveredNetworkNameTimestamp,
                     discoveredPort, 
                     rawHostID);
             }

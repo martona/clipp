@@ -62,6 +62,27 @@ bool Settings::ReadUint32Value(const wchar_t* valueName, int& outValue) {
     return true;
 }
 
+bool Settings::ReadUint64Value(const wchar_t* valueName, uint64_t& outValue) {
+    HKEY keyHandle = nullptr;
+    LONG status = RegOpenKeyExW(HKEY_CURRENT_USER, kRegistryPath, 0, KEY_QUERY_VALUE, &keyHandle);
+    if (status != ERROR_SUCCESS) {
+        return false;
+    }
+
+    DWORD type = 0;
+    uint64_t value = 0;
+    DWORD size = sizeof(uint64_t);
+    status = RegQueryValueExW(keyHandle, valueName, nullptr, &type, reinterpret_cast<LPBYTE>(&value), &size);
+    RegCloseKey(keyHandle);
+
+    if (status != ERROR_SUCCESS || type != REG_DWORD || size != sizeof(uint64_t)) {
+        return false;
+    }
+
+    outValue = static_cast<int>(value);
+    return true;
+}
+
 bool Settings::WriteStringValue(const wchar_t* valueName, const std::string& value) {
     std::wstring wideValue(value.begin(), value.end());
 
@@ -86,6 +107,18 @@ bool Settings::WriteUint32Value(const wchar_t* valueName, int value) {
 
     DWORD dwordValue = static_cast<DWORD>(value);
     status = RegSetValueExW(keyHandle, valueName, 0, REG_DWORD, reinterpret_cast<const BYTE*>(&dwordValue), sizeof(dwordValue));
+    RegCloseKey(keyHandle);
+    return status == ERROR_SUCCESS;
+}
+
+bool Settings::WriteUint64Value(const wchar_t* valueName, uint64_t value) {
+    HKEY keyHandle = nullptr;
+    LONG status = RegCreateKeyExW(HKEY_CURRENT_USER, kRegistryPath, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &keyHandle, nullptr);
+    if (status != ERROR_SUCCESS) {
+        return false;
+    }
+
+    status = RegSetValueExW(keyHandle, valueName, 0, REG_QWORD, reinterpret_cast<const BYTE*>(&value), sizeof(value));
     RegCloseKey(keyHandle);
     return status == ERROR_SUCCESS;
 }

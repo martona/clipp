@@ -8,6 +8,7 @@ using MDNSCallback = void(*)(const char* hostNameUtf8,
 							const char* nonceHex, 
 							const char* verbUtf8, 
                             const char* networkNameUtf8,
+							uint64_t networkNameTimestamp,
 							unsigned short port, 
 							const unsigned char* rawHostID);
 

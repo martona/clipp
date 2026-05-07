@@ -88,6 +88,13 @@ bool InitializeConsoleOutput() {
 #endif
 }
 
+static std::string ReadLine(const std::string & prompt) {
+    std::cout << prompt.c_str();
+    std::string input;
+    std::getline(std::cin, input);
+    return input;
+}
+
 static std::string ReadHiddenLine(const std::string & prompt) {
     std::cout << prompt.c_str();
     std::string input;
@@ -164,6 +171,7 @@ void OnMDNSNotification(const char* hostNameUtf8,
                         const char* nonce, 
                         const char* verb, 
                         const char* networkName,
+	                    const uint64_t networkNameTimestamp,
                         u_short port, 
                         const unsigned char* rawHostID) 
 {
@@ -180,23 +188,26 @@ void OnMDNSNotification(const char* hostNameUtf8,
 
     g_peerManager.CullPeers();
 
-    const char* networkNameForLog = networkName ? networkName : "";
+    networkName = networkName ? networkName : "<unknown>";
     g_logger.log(__FUNCTION__, Logger::Level::Debug,
         "mDNS notification received for host: %s / %s\n  from: %s:%hu\n  verb:    %s\n  network: %s\n  queryID: %s\n  nonce:   %s",
-        hostNameUtf8, hostID, senderIp, port, verb, networkNameForLog, queryID, nonce);
+        hostNameUtf8, hostID, senderIp, port, verb, networkName, queryID, nonce);
 
     if (memcmp(ourHostId.data(), rawHostID, 32) == 0) {
         g_logger.log(__FUNCTION__, Logger::Level::Debug, "mDNS notification is from self; ignoring.");
         return;
 	}
 
-    const std::string receivedNetworkName = networkNameForLog;
-    const std::string localNetworkName = g_settings.networkName();
-    if (localNetworkName.empty() || localNetworkName < receivedNetworkName) {
-        if (g_settings.set_networkName(receivedNetworkName)) {
-            g_logger.log(__FUNCTION__, Logger::Level::Info, "Updated local network name to %s from mDNS notification.", receivedNetworkName.c_str());
+	if (networkNameTimestamp > g_settings.networkNameTimestamp()) {
+        if (g_settings.set_networkNameTimestamp(networkNameTimestamp)) {
+            g_logger.log(__FUNCTION__, Logger::Level::Info, "Updated local network name timestamp to %llu from mDNS notification.", networkNameTimestamp);
         } else {
-            g_logger.log(__FUNCTION__, Logger::Level::Warning, "Failed to save network name from mDNS notification: %s", receivedNetworkName.c_str());
+            g_logger.log(__FUNCTION__, Logger::Level::Warning, "Failed to save network name timestamp from mDNS notification: %llu", networkNameTimestamp);
+        }
+        if (g_settings.set_networkName(networkName)) {
+            g_logger.log(__FUNCTION__, Logger::Level::Info, "Updated local network name to %s from mDNS notification.", networkName);
+        } else {
+            g_logger.log(__FUNCTION__, Logger::Level::Warning, "Failed to save network name from mDNS notification: %s", networkName);
         }
     }
 
@@ -245,6 +256,28 @@ int main(int argc, char* argv[]) {
         }
 
         g_logger.log(__FUNCTION__, Logger::Level::Info, "Network key saved successfully.");
+        return 0;
+    }
+    if (argc > 1 && std::string(argv[1]) == "setname") {
+        std::string input = ReadLine("Enter network name: ");
+        if (input.empty()) {
+            g_logger.log(__FUNCTION__, Logger::Level::Error, "No input provided.");
+            return 1;
+        }
+
+        if (!g_settings.set_networkName(input)) {
+            g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to store network name.");
+            return 1;
+        }
+        auto now = std::chrono::system_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch());
+        uint64_t time_ms = static_cast<uint64_t>(duration.count());
+        if (!g_settings.set_networkNameTimestamp(time_ms)) {
+            g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to store network name timestamp.");
+            return 1;
+        }
+
+        g_logger.log(__FUNCTION__, Logger::Level::Info, "Network name saved successfully.");
         return 0;
     }
 

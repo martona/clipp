@@ -9,6 +9,7 @@ namespace {
     constexpr wchar_t kMdnsPortName[] = L"MdnsPort";
     constexpr wchar_t kTcpPortName[] = L"TcpPort";
     constexpr wchar_t kNetworkNameName[] = L"NetworkName";
+	constexpr wchar_t kNetworkNameTimestampName[] = L"NetworkNameTimestamp";
     constexpr wchar_t kEncryptedNetworkKeyName[] = L"EncryptedNetworkKey";
     constexpr wchar_t kHostIDName[] = L"HostID";
 }
@@ -18,6 +19,7 @@ Settings::Settings()
 	  listenerIp_(DefaultListenerIp),
       mdnsPort_(DefaultMdnsPort),
       tcpPort_(DefaultTcpPort),
+	  networkNameTimestamp_(0),
       networkName_(DefaultNetworkName) {
     LoadCache();
 }
@@ -27,6 +29,7 @@ const std::string& Settings::listenerIp() const { return listenerIp_; }
 int Settings::mdnsPort() const { return mdnsPort_; }
 int Settings::tcpPort() const { return tcpPort_; }
 const std::string& Settings::networkName() const { return networkName_; }
+const uint64_t Settings::networkNameTimestamp() const { return networkNameTimestamp_; }
 
 bool Settings::set_multicastIp(const std::string& value) {
     if (!WriteStringValue(kMulticastIpName, value)) {
@@ -69,6 +72,14 @@ bool Settings::set_networkName(const std::string& value) {
     return true;
 }
 
+bool Settings::set_networkNameTimestamp(uint64_t value) {
+    if (!WriteUint64Value(kNetworkNameTimestampName, value)) {
+        return false;
+    }
+    networkNameTimestamp_ = value;
+    return true;
+}
+
 bool Settings::setEncryptedNetworkKey(const std::vector<unsigned char>& value) {
     return WriteBinaryValue(kEncryptedNetworkKeyName, value.data(), value.size());
 }
@@ -104,6 +115,7 @@ bool Settings::LoadCache() {
     std::string networkName;
     int mdns = DefaultMdnsPort;
     int tcp = DefaultTcpPort;
+	uint64_t networkNameTimestamp = 0;
 
     if (ReadStringValue(kMulticastIpName, multicast) && !multicast.empty()) {
         multicastIp_ = multicast;
@@ -111,6 +123,9 @@ bool Settings::LoadCache() {
     if (ReadStringValue(kNetworkNameName, networkName)) {
         networkName_ = networkName.substr(0, MaxNetworkNameLength);
     }
+    if (ReadUint64Value(kNetworkNameTimestampName, networkNameTimestamp)) {
+        networkNameTimestamp_ = networkNameTimestamp;
+	}
     if (ReadUint32Value(kMdnsPortName, mdns)) {
         mdnsPort_ = mdns;
     }

@@ -21,12 +21,14 @@ public:
     int mdnsPort() const;
     int tcpPort() const;
     const std::string& networkName() const;
+	const uint64_t networkNameTimestamp() const;
 
     bool set_multicastIp(const std::string& value);
 	bool set_listenerIp(const std::string& value);
     bool set_mdnsPort(int value);
     bool set_tcpPort(int value);
     bool set_networkName(const std::string& value);
+	bool set_networkNameTimestamp(uint64_t value);
 
     bool setEncryptedNetworkKey(const std::vector<unsigned char>& value);
     bool getEncryptedNetworkKey(std::vector<unsigned char>& value) const;
@@ -37,8 +39,10 @@ private:
     bool LoadCache();
     static bool ReadStringValue(const wchar_t* valueName, std::string& outValue);
     static bool ReadUint32Value(const wchar_t* valueName, int& outValue);
+    static bool ReadUint64Value(const wchar_t* valueName, uint64_t& outValue);
     static bool WriteStringValue(const wchar_t* valueName, const std::string& value);
     static bool WriteUint32Value(const wchar_t* valueName, int value);
+    static bool WriteUint64Value(const wchar_t* valueName, uint64_t value);
     static bool WriteBinaryValue(const wchar_t* valueName, const unsigned char* data, size_t len);
     static bool ReadBinaryValue(const wchar_t* valueName, std::vector<unsigned char>& outValue);
 
@@ -47,6 +51,7 @@ private:
     int mdnsPort_;
     int tcpPort_;
     std::string networkName_;
+	uint64_t networkNameTimestamp_;
 };
 
 extern Settings g_settings;
