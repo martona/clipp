@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -27,16 +28,20 @@ public:
 	ConnType connType_;
 
 	using ClipboardReceivedCallback = std::function<void(const std::wstring&, const std::array<unsigned char, 32>&, ClipboardPayload&)>;
+	using VerifiedCallback = std::function<void(const std::wstring&, const std::array<unsigned char, 32>&, ConnType)>;
+	using TrafficCallback = std::function<void(const std::wstring&, const std::array<unsigned char, 32>&, uint64_t, uint64_t)>;
 
 	// peers we're connecting to
-	Peer(const wchar_t* hostName, const unsigned char* hostID, const wchar_t* ip, unsigned short port);
+	Peer(const wchar_t* hostName, const unsigned char* hostID, const wchar_t* ip, unsigned short port, VerifiedCallback verifiedCallback = nullptr, TrafficCallback trafficCallback = nullptr);
 	// peers that connected to us
-	Peer(SOCKET socket, ClipboardReceivedCallback clipboardReceivedCallback);
+	Peer(SOCKET socket, ClipboardReceivedCallback clipboardReceivedCallback, VerifiedCallback verifiedCallback = nullptr, TrafficCallback trafficCallback = nullptr);
 	~Peer();
 
 	void Start();
 	void Stop();
 	bool isRunning() const;
+	bool isDisplayRegistered() const;
+	void MarkDisplayRegistered();
 
 	std::wstring hostName() const;
 	std::array<unsigned char, 32> hostID() const;
@@ -52,6 +57,7 @@ private:
 	bool ConnectSocket();
 	void CloseSocket();
 	bool SendClipboardData(CryptoChannel& channel, const ClipboardPayload& payload);
+	void ReportTraffic(uint64_t bytesSent, uint64_t bytesReceived);
 	void InterruptibleSleep(std::chrono::milliseconds duration);
 	void log(const char* function, Logger::Level level, const wchar_t* message, ...) const;
 	void logV(const char* function, Logger::Level level, const wchar_t* message, va_list args) const;
@@ -67,11 +73,14 @@ private:
 	std::thread thread_;
 	std::atomic<bool> stopRequested_{ false };
 	std::atomic<bool> running_{ false };
+	std::atomic<bool> displayRegistered_{ false };
 	std::mutex stopMutex_;
 	std::condition_variable stopCV_;
 	
 	BlockingQueue<std::shared_ptr<const ClipboardPayload>> messageQueue_;
 	ClipboardReceivedCallback clipboardReceivedCallback_{};
+	VerifiedCallback verifiedCallback_{};
+	TrafficCallback trafficCallback_{};
 
 	SOCKET socket_{ INVALID_SOCKET };
 };

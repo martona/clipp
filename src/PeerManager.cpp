@@ -1,11 +1,14 @@
 #include "Logger.h"
 #include "PeerManager.h"
+#include "PeerDisplay.h"
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstring>
 #include <iostream>
+
+extern PeerDisplay g_peerDisplay;
 
 PeerManager::PeerManager() {
 }
@@ -27,14 +30,25 @@ void PeerManager::AddPeer(const wchar_t* hostName, const unsigned char* hostID, 
 		return;
 	}
 
-	auto peer = std::make_unique<Peer>(hostName, hostID, ip, port);
+	auto peer = std::make_unique<Peer>(hostName, hostID, ip, port, nullptr,
+		[](const std::wstring& hostName, const std::array<unsigned char, 32>& hostID, uint64_t bytesSent, uint64_t bytesReceived) {
+			g_peerDisplay.NotifyPeerBytes(hostName, hostID, bytesSent, bytesReceived);
+		});
+	peer->MarkDisplayRegistered();
+	g_peerDisplay.NotifyPeer(peer->hostName(), peer->hostID(), peer->connType_);
 	peer->Start();
 	peers_.emplace_back(std::move(peer));
 	g_logger.log(__FUNCTION__, Logger::Level::Debug, L"PeerManager: added new peer (outgoing).");
 }
 
 void PeerManager::AddPeer(SOCKET socket, Peer::ClipboardReceivedCallback clipboardReceivedCallback) {
-	auto peer = std::make_unique<Peer>(socket, std::move(clipboardReceivedCallback));
+	auto peer = std::make_unique<Peer>(socket, std::move(clipboardReceivedCallback),
+		[](const std::wstring& hostName, const std::array<unsigned char, 32>& hostID, Peer::ConnType connType) {
+			g_peerDisplay.NotifyPeer(hostName, hostID, connType);
+		},
+		[](const std::wstring& hostName, const std::array<unsigned char, 32>& hostID, uint64_t bytesSent, uint64_t bytesReceived) {
+			g_peerDisplay.NotifyPeerBytes(hostName, hostID, bytesSent, bytesReceived);
+		});
 	peer->Start();
 	std::lock_guard<std::mutex> lock(peersMutex_);
 	peers_.emplace_back(std::move(peer));
@@ -46,7 +60,11 @@ void PeerManager::RemovePeer(const unsigned char* hostID) {
 	peers_.erase(std::remove_if(peers_.begin(), peers_.end(),
 		[hostID](const std::unique_ptr<Peer>& peer) {
 			const auto peerHostID = peer->hostID();
-			return std::memcmp(peerHostID.data(), hostID, peerHostID.size()) == 0;
+			const bool matches = std::memcmp(peerHostID.data(), hostID, peerHostID.size()) == 0;
+			if (matches && peer->isDisplayRegistered()) {
+				g_peerDisplay.NotifyPeerRemoved(peer->hostName(), peerHostID, peer->connType_);
+			}
+			return matches;
 		}), peers_.end());
 }
 
@@ -55,6 +73,9 @@ void PeerManager::CullPeers() {
 	std::lock_guard<std::mutex> lock(peersMutex_);
 	peers_.erase(std::remove_if(peers_.begin(), peers_.end(), [now](std::unique_ptr<Peer>& peer) {
 		if (!peer->isRunning()) {
+			if (peer->isDisplayRegistered()) {
+				g_peerDisplay.NotifyPeerRemoved(peer->hostName(), peer->hostID(), peer->connType_);
+			}
 			g_logger.log(__FUNCTION__, Logger::Level::Debug, L"PeerManager: culled stopped peer.");
 			return true;
 		}
@@ -63,6 +84,9 @@ void PeerManager::CullPeers() {
 		const bool dead = age >= std::chrono::minutes(1) && silence >= std::chrono::minutes(1);
 		if (dead) {
 			peer->Stop();
+			if (peer->isDisplayRegistered()) {
+				g_peerDisplay.NotifyPeerRemoved(peer->hostName(), peer->hostID(), peer->connType_);
+			}
 			g_logger.log(__FUNCTION__, Logger::Level::Debug, L"PeerManager: culled dead peer.");
 		}
 		return dead;
@@ -74,6 +98,9 @@ void PeerManager::ClearPeers() {
 	for (const auto& peer : peers_) {
 		g_logger.log(__FUNCTION__, Logger::Level::Debug, L"PeerManager: clearing peer %ls", peer->hostName().c_str());
 		peer->Stop();
+		if (peer->isDisplayRegistered()) {
+			g_peerDisplay.NotifyPeerRemoved(peer->hostName(), peer->hostID(), peer->connType_);
+		}
 	}
 	peers_.clear();
 }

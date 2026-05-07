@@ -14,6 +14,7 @@
 #include "Listener.h"
 #include "Peer.h"
 #include "PeerManager.h"
+#include "PeerDisplay.h"
 #include "Clipboard.h"
 #include "utils.h"
 
@@ -29,6 +30,7 @@
 #endif
 
 Settings g_settings;
+PeerDisplay g_peerDisplay;
 PeerManager g_peerManager;
 
 #ifdef _WIN32

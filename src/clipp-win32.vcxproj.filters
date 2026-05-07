@@ -39,6 +39,9 @@
     <ClCompile Include="Peer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="PeerDisplay.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="PeerManager.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -90,6 +93,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Peer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="PeerDisplay.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="PeerManager.h">

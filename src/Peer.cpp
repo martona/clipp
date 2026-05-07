@@ -8,6 +8,7 @@
 #include <iostream>
 #include <limits>
 #include <thread>
+#include <utility>
 
 #include "Settings.h"
 #include "CryptoChannel.h"
@@ -15,20 +16,24 @@
 #include "utils.h"
 #include "utils_socket.h"
 
-Peer::Peer(const wchar_t* hostName, const unsigned char* hostID, const wchar_t* ip, u_short port)
+Peer::Peer(const wchar_t* hostName, const unsigned char* hostID, const wchar_t* ip, u_short port, VerifiedCallback verifiedCallback, TrafficCallback trafficCallback)
 	: hostName_(hostName), ip_(ip), port_(port),
 	createdAt_(std::chrono::steady_clock::now()),
-	lastPingReceivedAt_(createdAt_) {
+	lastPingReceivedAt_(createdAt_),
+	verifiedCallback_(std::move(verifiedCallback)),
+	trafficCallback_(std::move(trafficCallback)) {
 	std::memcpy(hostID_.data(), hostID, hostID_.size());
 	connType_ = ConnType::Outgoing;
 }
 
-Peer::Peer(SOCKET socket, ClipboardReceivedCallback clipboardReceivedCallback)
-	: clipboardReceivedCallback_(std::move(clipboardReceivedCallback)),
-	ip_(Utf8ToWideString(SocketPeerIp(socket))),
+Peer::Peer(SOCKET socket, ClipboardReceivedCallback clipboardReceivedCallback, VerifiedCallback verifiedCallback, TrafficCallback trafficCallback)
+	: ip_(Utf8ToWideString(SocketPeerIp(socket))),
 	port_(SocketPeerPort(socket)),
 	createdAt_(std::chrono::steady_clock::now()),
 	lastPingReceivedAt_(createdAt_),
+	clipboardReceivedCallback_(std::move(clipboardReceivedCallback)),
+	verifiedCallback_(std::move(verifiedCallback)),
+	trafficCallback_(std::move(trafficCallback)),
 	socket_(socket) {
 	connType_ = ConnType::Incoming;
 }
@@ -83,6 +88,14 @@ bool Peer::isRunning() const {
 	return running_.load();
 }
 
+bool Peer::isDisplayRegistered() const {
+	return displayRegistered_.load();
+}
+
+void Peer::MarkDisplayRegistered() {
+	displayRegistered_.store(true);
+}
+
 std::wstring Peer::hostName() const {
 	std::lock_guard<std::mutex> lock(dataMutex_);
 	return hostName_;
@@ -111,6 +124,19 @@ std::chrono::steady_clock::time_point Peer::lastPingReceivedAt() const {
 std::chrono::steady_clock::time_point Peer::createdAt() const {
 	std::lock_guard<std::mutex> lock(dataMutex_);
 	return createdAt_;
+}
+
+void Peer::ReportTraffic(uint64_t bytesSent, uint64_t bytesReceived) {
+	if (!trafficCallback_ || (bytesSent == 0 && bytesReceived == 0)) return;
+
+	std::wstring currentHostName;
+	std::array<unsigned char, 32> currentHostID{};
+	{
+		std::lock_guard<std::mutex> lock(dataMutex_);
+		currentHostName = hostName_;
+		currentHostID = hostID_;
+	}
+	trafficCallback_(currentHostName, currentHostID, bytesSent, bytesReceived);
 }
 
 void Peer::CloseSocket() {
@@ -168,6 +194,7 @@ bool Peer::SendClipboardData(CryptoChannel& channel, const ClipboardPayload& pay
 	if (!payloadToSend.rawData.empty())
 		if (!channel.SendMessage(socket_, payloadToSend.rawData.data(), static_cast<uint32_t>(payloadToSend.rawData.size()))) 
 			return false;
+	ReportTraffic(4 + sizeof(NetworkDefs::ClipboardMessage) + payloadToSend.rawData.size(), 0);
 	return true;
 }
 
@@ -212,12 +239,15 @@ void Peer::ThreadProcSend() {
 				log(__FUNCTION__, Logger::Level::Debug, L"Peer failed secure send");
 				break;
 			}
+			ReportTraffic(4, 0);
 
 			char packet[4] = {};
 			if (socket_ == INVALID_SOCKET || !channel.RecvTaggedMessage(socket_, packet)) {
 				log(__FUNCTION__, Logger::Level::Debug, L"Peer failed secure recv");
 				break;
 			}
+
+			ReportTraffic(0, 4);
 
 			if (std::memcmp(packet, "PONG", 4) != 0) {
 				log(__FUNCTION__, Logger::Level::Error, L"Peer: unexpected packet received.");
@@ -264,6 +294,11 @@ void Peer::ThreadProcRecv() {
 			hostID_ = remoteHostId;
 			hostName_ = Utf8ToWideString(remoteHostNameUtf8);
 		}
+		if (verifiedCallback_) {
+			verifiedCallback_(Utf8ToWideString(remoteHostNameUtf8), remoteHostId, connType_);
+			displayRegistered_.store(true);
+		}
+
 		log(__FUNCTION__, Logger::Level::Info, L"Client connected");
 
 		char packet[4] = {};
@@ -271,6 +306,7 @@ void Peer::ThreadProcRecv() {
 			if (!channel.RecvTaggedMessage(socket_, packet)) {
 				break;
 			}
+			ReportTraffic(0, 4);
 
 			if (std::memcmp(packet, "PING", 4) == 0) {
 				log(__FUNCTION__, Logger::Level::Debug, L"Client: PING");
@@ -281,6 +317,7 @@ void Peer::ThreadProcRecv() {
 				if (!channel.SendTaggedMessage(socket_, "PONG")) {
 					break;
 				}
+				ReportTraffic(4, 0);
 				continue;
 			}
 
@@ -289,6 +326,7 @@ void Peer::ThreadProcRecv() {
 				if (!channel.RecvMessage(socket_, headerMsg) || headerMsg.size() != sizeof(NetworkDefs::ClipboardMessage)) {
 					break;
 				}
+				ReportTraffic(0, headerMsg.size());
 				if (headerMsg.size() != sizeof(NetworkDefs::ClipboardMessage)) {
 					log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard message: header size mismatch (expected %zu bytes, actual %zu bytes)", sizeof(NetworkDefs::ClipboardMessage), headerMsg.size());
 					break;
@@ -304,6 +342,7 @@ void Peer::ThreadProcRecv() {
 				if (!channel.RecvMessage(socket_, payload.rawData)) {
 					break;
 				}
+				ReportTraffic(0, payload.rawData.size());
 
 				if (payload.rawData.size() != static_cast<size_t>(encodedDataSize)) {
 					log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard message: encoded size mismatch (header: %u bytes, body: %zu bytes)", encodedDataSize, payload.rawData.size());
