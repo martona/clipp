@@ -75,11 +75,11 @@ bool Settings::ReadUint64Value(const wchar_t* valueName, uint64_t& outValue) {
     status = RegQueryValueExW(keyHandle, valueName, nullptr, &type, reinterpret_cast<LPBYTE>(&value), &size);
     RegCloseKey(keyHandle);
 
-    if (status != ERROR_SUCCESS || type != REG_DWORD || size != sizeof(uint64_t)) {
+    if (status != ERROR_SUCCESS || type != REG_QWORD || size != sizeof(uint64_t)) {
         return false;
     }
 
-    outValue = static_cast<int>(value);
+    outValue = value;
     return true;
 }
 

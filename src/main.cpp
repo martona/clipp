@@ -189,16 +189,17 @@ void OnMDNSNotification(const char* hostNameUtf8,
     g_peerManager.CullPeers();
 
     networkName = networkName ? networkName : "<unknown>";
+    const uint64_t localNetworkNameTimestamp = g_settings.networkNameTimestamp();
     g_logger.log(__FUNCTION__, Logger::Level::Debug,
-        "mDNS notification received for host: %s / %s\n  from: %s:%hu\n  verb:    %s\n  network: %s\n  queryID: %s\n  nonce:   %s",
-        hostNameUtf8, hostID, senderIp, port, verb, networkName, queryID, nonce);
+        "mDNS notification received for host: %s / %s\n  from: %s:%hu\n  verb:    %s\n  network: %s\n  network timestamp: remote=%llu local=%llu\n  queryID: %s\n  nonce:   %s",
+        hostNameUtf8, hostID, senderIp, port, verb, networkName, networkNameTimestamp, localNetworkNameTimestamp, queryID, nonce);
 
     if (memcmp(ourHostId.data(), rawHostID, 32) == 0) {
-        g_logger.log(__FUNCTION__, Logger::Level::Debug, "mDNS notification is from self; ignoring.");
+        g_logger.log(__FUNCTION__, Logger::Level::Debug, "mDNS notification is from self; ignoring network name update.");
         return;
 	}
 
-	if (networkNameTimestamp > g_settings.networkNameTimestamp()) {
+	if (networkNameTimestamp > localNetworkNameTimestamp) {
         if (g_settings.set_networkNameTimestamp(networkNameTimestamp)) {
             g_logger.log(__FUNCTION__, Logger::Level::Info, "Updated local network name timestamp to %llu from mDNS notification.", networkNameTimestamp);
         } else {
@@ -209,6 +210,10 @@ void OnMDNSNotification(const char* hostNameUtf8,
         } else {
             g_logger.log(__FUNCTION__, Logger::Level::Warning, "Failed to save network name from mDNS notification: %s", networkName);
         }
+    } else {
+        g_logger.log(__FUNCTION__, Logger::Level::Debug,
+            "Skipping network name update because remote timestamp %llu is not newer than local timestamp %llu.",
+            networkNameTimestamp, localNetworkNameTimestamp);
     }
 
     if (rawHostID != nullptr) {
