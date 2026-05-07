@@ -234,8 +234,8 @@ int main(int argc, char* argv[]) {
                     int caughtSignal;
                     sigwait(&waitset, &caughtSignal);
                 #endif
-                g_peerManager.ClearPeers();
                 g_listener.Stop();
+                g_peerManager.ClearPeers();
 				g_logger.log(__FUNCTION__, Logger::Level::Info, "Listener stopped.");
             } else {
                 g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to start TCP listener thread!");

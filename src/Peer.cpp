@@ -19,6 +19,17 @@ Peer::Peer(const wchar_t* hostName, const unsigned char* hostID, const wchar_t* 
 	createdAt_(std::chrono::steady_clock::now()),
 	lastPingReceivedAt_(createdAt_) {
 	std::memcpy(hostID_.data(), hostID, hostID_.size());
+	connType_ = ConnType::Outgoing;
+}
+
+Peer::Peer(SOCKET socket, ClipboardReceivedCallback clipboardReceivedCallback)
+	: clipboardReceivedCallback_(std::move(clipboardReceivedCallback)),
+	ip_(Utf8ToWideString(SocketPeerIp(socket))),
+	port_(SocketPeerPort(socket)),
+	createdAt_(std::chrono::steady_clock::now()),
+	lastPingReceivedAt_(createdAt_),
+	socket_(socket) {
+	connType_ = ConnType::Incoming;
 }
 
 void Peer::log(const char* function, Logger::Level level, const wchar_t* message, ...) const {
@@ -48,7 +59,7 @@ Peer::~Peer() {
 
 void Peer::Start() {
 	running_.store(true);
-	thread_ = std::thread(&Peer::ThreadProc, this);
+	thread_ = std::thread(connType_ == ConnType::Outgoing ? &Peer::ThreadProcSend : &Peer::ThreadProcRecv, this);
 }
 
 void Peer::Stop() {
@@ -159,7 +170,7 @@ bool Peer::SendClipboardData(CryptoChannel& channel, const ClipboardPayload& pay
 	return true;
 }
 
-void Peer::ThreadProc() {
+void Peer::ThreadProcSend() {
 	while (!stopRequested_.load()) {
 		if (!ConnectSocket()) {
 			log(__FUNCTION__, Logger::Level::Error, L"Peer: failed to connect.");
@@ -236,5 +247,96 @@ void Peer::ThreadProc() {
 		if (!stopRequested_.load()) InterruptibleSleep(std::chrono::milliseconds(5000));
 	}
 	log(__FUNCTION__, Logger::Level::Info, L"Peer disconnected");
+	running_.store(false);
+}
+
+void Peer::ThreadProcRecv() {
+	CryptoChannel channel;
+	std::array<unsigned char, 32> remoteHostId{};
+	std::string remoteHostNameUtf8;
+	if (!channel.ServerHandshake(socket_, remoteHostId, remoteHostNameUtf8)) {
+		log(__FUNCTION__, Logger::Level::Error, L"Client secure handshake failed.");
+	}
+	else {
+		{
+			std::lock_guard<std::mutex> lock(dataMutex_);
+			hostID_ = remoteHostId;
+			hostName_ = Utf8ToWideString(remoteHostNameUtf8);
+		}
+		log(__FUNCTION__, Logger::Level::Info, L"Client connected");
+
+		char packet[4] = {};
+		while (!stopRequested_.load()) {
+			if (!channel.RecvTaggedMessage(socket_, packet)) {
+				break;
+			}
+
+			if (std::memcmp(packet, "PING", 4) == 0) {
+				log(__FUNCTION__, Logger::Level::Debug, L"Client: PING");
+				{
+					std::lock_guard<std::mutex> lock(dataMutex_);
+					lastPingReceivedAt_ = std::chrono::steady_clock::now();
+				}
+				if (!channel.SendTaggedMessage(socket_, "PONG")) {
+					break;
+				}
+				continue;
+			}
+
+			if (std::memcmp(packet, "CLIP", 4) == 0) {
+				std::vector<unsigned char> headerMsg;
+				if (!channel.RecvMessage(socket_, headerMsg) || headerMsg.size() != sizeof(NetworkDefs::ClipboardMessage)) {
+					break;
+				}
+				if (headerMsg.size() != sizeof(NetworkDefs::ClipboardMessage)) {
+					log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard message: header size mismatch (expected %zu bytes, actual %zu bytes)", sizeof(NetworkDefs::ClipboardMessage), headerMsg.size());
+					break;
+				}
+
+				auto* clipMessage = reinterpret_cast<NetworkDefs::ClipboardMessage*>(headerMsg.data());
+				ClipboardPayload payload{};
+				payload.formatId = ntohl(clipMessage->formatId);
+				payload.decodedDataSize = ntohl(clipMessage->decodedDataSize);
+				payload.isCompressed = clipMessage->isCompressed != 0;
+				uint32_t encodedDataSize = ntohl(clipMessage->encodedDataSize);
+
+				if (!channel.RecvMessage(socket_, payload.rawData)) {
+					break;
+				}
+
+				if (payload.rawData.size() != static_cast<size_t>(encodedDataSize)) {
+					log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard message: encoded size mismatch (header: %u bytes, body: %zu bytes)", encodedDataSize, payload.rawData.size());
+					break;
+				}
+
+				if (payload.decodedDataSize > ClipboardLimits::kMaxDecompressedClipboardBytes) {
+					log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard message: decoded size %u bytes exceeds limit %llu bytes", payload.decodedDataSize, ClipboardLimits::kMaxDecompressedClipboardBytes);
+					break;
+				}
+
+				if (!payload.isCompressed && encodedDataSize != payload.decodedDataSize) {
+					log(__FUNCTION__, Logger::Level::Warning, L"Rejecting uncompressed clipboard message: encoded size %u bytes does not equal decoded size %u bytes", encodedDataSize, payload.decodedDataSize);
+					break;
+				}
+
+				if (!payload.ZstdDecompress()) {
+					break;
+				}
+
+				if (clipboardReceivedCallback_) {
+					std::array<unsigned char, 32> remoteHostId;
+					std::wstring remoteHostName;
+					{
+						std::lock_guard<std::mutex> lock(dataMutex_);
+						remoteHostId = hostID_;
+						remoteHostName = hostName_;
+					}
+					clipboardReceivedCallback_(remoteHostName, remoteHostId, payload);
+				}
+			}
+		}
+		log(__FUNCTION__, Logger::Level::Info, L"Client disconnected");
+	}
+
 	running_.store(false);
 }

@@ -134,8 +134,6 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="Listener.cpp" />
-    <ClCompile Include="ClientManager.cpp" />
-    <ClCompile Include="Client.cpp" />
     <ClCompile Include="CryptoChannel.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="platform_win32_Clipboard.cpp" />
@@ -151,8 +149,6 @@
     <ClInclude Include="BlockingQueue.h" />
     <ClInclude Include="ClipboardData.h" />
     <ClInclude Include="Listener.h" />
-    <ClInclude Include="ClientManager.h" />
-    <ClInclude Include="Client.h" />
     <ClInclude Include="CryptoChannel.h" />
     <ClInclude Include="platform.h" />
     <ClInclude Include="MDNSThread.h" />

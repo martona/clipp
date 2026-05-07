@@ -5,16 +5,17 @@
 #include <iostream>
 #include <memory>
 
-//#include <ws2tcpip.h>
-
-#include "Client.h"
+#include "PeerManager.h"
 #include "Settings.h"
 
-#pragma comment(lib, "ws2_32.lib")
+extern PeerManager g_peerManager;
 
-Listener::Listener(ClipboardReceivedCallback clipboardReceivedCallback)
-    : clientManager_(clipboardReceivedCallback) {}
+Listener::Listener(ClipboardReceivedCallback clipboardReceivedCallback) { 
+	clipboardReceivedCallback_ = std::move(clipboardReceivedCallback);
+}
+
 Listener::~Listener() { Stop(); }
+
 
 bool Listener::Start() {
     if (running_.exchange(true)) {
@@ -41,7 +42,6 @@ void Listener::Stop() {
         thread_.join();
     }
 
-    clientManager_.Terminate();
     g_logger.log(__FUNCTION__, Logger::Level::Info, L"Listener stopped.");
 }
 
@@ -118,7 +118,6 @@ void Listener::ThreadProc() {
             timeval timeout{};
             timeout.tv_sec = 2;
             const int ready = select(static_cast<int>(listenSock) + 1, &readSet, nullptr, nullptr, &timeout);
-            clientManager_.Cleanup();
 
             if (!running_.load()) {
                 break;
@@ -138,7 +137,7 @@ void Listener::ThreadProc() {
                 continue;
             }
 
-            clientManager_.AddClient(clientSock);
+			g_peerManager.AddPeer(clientSock, clipboardReceivedCallback_);
             g_logger.log(__FUNCTION__, Logger::Level::Info, L"Accepted incoming TCP client.");
         }
 

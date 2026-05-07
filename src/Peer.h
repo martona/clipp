@@ -11,6 +11,7 @@
 #include <vector> 
 #include <memory> 
 #include <variant>
+#include <functional>
 #include "platform.h"
 #include "BlockingQueue.h"
 #include "ClipboardData.h"
@@ -19,7 +20,18 @@ class CryptoChannel;
 
 class Peer {
 public:
+	typedef enum class ConnType {
+		Outgoing,
+		Incoming,
+	} ConnType;
+	ConnType connType_;
+
+	using ClipboardReceivedCallback = std::function<void(const std::wstring&, const std::array<unsigned char, 32>&, ClipboardPayload&)>;
+
+	// peers we're connecting to
 	Peer(const wchar_t* hostName, const unsigned char* hostID, const wchar_t* ip, unsigned short port);
+	// peers that connected to us
+	Peer(SOCKET socket, ClipboardReceivedCallback clipboardReceivedCallback);
 	~Peer();
 
 	void Start();
@@ -35,7 +47,8 @@ public:
 	void PushMessage(std::shared_ptr<const ClipboardPayload> payload) { messageQueue_.Push(std::move(payload)); }
 
 private:
-	void ThreadProc();
+	void ThreadProcRecv();
+	void ThreadProcSend();
 	bool ConnectSocket();
 	void CloseSocket();
 	bool SendClipboardData(CryptoChannel& channel, const ClipboardPayload& payload);
@@ -58,6 +71,7 @@ private:
 	std::condition_variable stopCV_;
 	
 	BlockingQueue<std::shared_ptr<const ClipboardPayload>> messageQueue_;
+	ClipboardReceivedCallback clipboardReceivedCallback_{};
 
 	SOCKET socket_{ INVALID_SOCKET };
 };

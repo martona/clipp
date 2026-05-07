@@ -4,15 +4,13 @@
 #include <mutex>
 #include <thread>
 #include "platform.h"
-
-#include "ClientManager.h"
-#include "Client.h"
+#include "PeerManager.h"
 
 class Listener {
 public:
-    using ClipboardReceivedCallback = Client::ClipboardReceivedCallback;
+    using ClipboardReceivedCallback = Peer::ClipboardReceivedCallback;
 
-    explicit Listener(ClipboardReceivedCallback clipboardReceivedCallback = nullptr);
+    Listener(ClipboardReceivedCallback clipboardReceivedCallback = nullptr);
     ~Listener();
 
     bool Start();
@@ -26,7 +24,7 @@ private:
     std::mutex stopMutex_;
     std::condition_variable stopCV_;
     std::thread thread_;
-    ClientManager clientManager_;
     SOCKET listenSocket_{ INVALID_SOCKET };
     std::mutex listenSocketMutex_;
+	ClipboardReceivedCallback clipboardReceivedCallback_{};
 };

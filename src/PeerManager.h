@@ -11,6 +11,7 @@ public:
 	PeerManager();
 	~PeerManager();
 	void AddPeer(const wchar_t* hostName, const unsigned char* hostID, const wchar_t* ip, unsigned short port);
+	void AddPeer(SOCKET socket, Peer::ClipboardReceivedCallback clipboardReceivedCallback);
 	void RemovePeer(const unsigned char* hostID);
 	void CullPeers();
 	void ClearPeers();
