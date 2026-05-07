@@ -49,9 +49,12 @@ void PeerManager::AddPeer(SOCKET socket, Peer::ClipboardReceivedCallback clipboa
 		[](const std::wstring& hostName, const std::array<unsigned char, 32>& hostID, uint64_t bytesSent, uint64_t bytesReceived) {
 			g_peerDisplay.NotifyPeerBytes(hostName, hostID, bytesSent, bytesReceived);
 		});
-	peer->Start();
-	std::lock_guard<std::mutex> lock(peersMutex_);
-	peers_.emplace_back(std::move(peer));
+	Peer* peerPtr = peer.get();
+	{
+		std::lock_guard<std::mutex> lock(peersMutex_);
+		peers_.emplace_back(std::move(peer));
+	}
+	peerPtr->Start();
 	g_logger.log(__FUNCTION__, Logger::Level::Debug, L"PeerManager: added new peer (incoming).");
 }
 

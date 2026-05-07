@@ -17,7 +17,7 @@
 #include "utils_socket.h"
 #include "PeerManager.h"
 
-static PeerManager g_peerManager;
+extern PeerManager g_peerManager;
 
 Peer::Peer(const wchar_t* hostName, const unsigned char* hostID, const wchar_t* ip, u_short port, VerifiedCallback verifiedCallback, TrafficCallback trafficCallback)
 	: hostName_(hostName), ip_(ip), port_(port),
@@ -385,6 +385,10 @@ void Peer::ThreadProcRecv() {
 	}
 
 	running_.store(false);
-	g_peerManager.CullPeers();
+	std::thread([]() {
+			g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Lambda culling...");
+			g_peerManager.CullPeers();
+			g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Lambda culled");
+		}).detach();
 	log(__FUNCTION__, Logger::Level::Info, L"Thread exiting");
 }
