@@ -1,5 +1,7 @@
 #include <Windows.h>
 #include "Logger.h"
+#include "clipp-win32-darkmode32/DMSubclass.h"
+#pragma comment(lib, "darkmode32.lib")
 
 // Custom message ID for our tray icon events
 #define WM_TRAYICON (WM_USER + 1)
@@ -13,55 +15,60 @@ static HWND g_trayWindow = NULL;
 // The core event callback for the hidden window
 LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
-    case WM_TRAYICON:
-        // When the user right-clicks the tray icon...
-        if (LOWORD(lParam) == WM_RBUTTONUP) {
-            // 1. Create a native, Unicode context menu
-            HMENU hMenu = CreatePopupMenu();
-            AppendMenuW(hMenu, MF_STRING, ID_TRAY_ABOUT, L"About Clipp");
-            AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
-            AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, L"Exit");
+        case WM_CREATE:
+            DarkMode::setWindowEraseBgSubclass(hwnd);
+            DarkMode::setDarkWndNotifySafe(hwnd, true);
+			break;
+        case WM_TRAYICON:
+            // When the user right-clicks the tray icon...
+            if (LOWORD(lParam) == WM_RBUTTONUP) {
+                // 1. Create a native, Unicode context menu
+                HMENU hMenu = CreatePopupMenu();
+                AppendMenuW(hMenu, MF_STRING, ID_TRAY_ABOUT, L"About Clipp");
+                AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+                AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, L"Exit");
 
-            // 2. Windows bug workaround: You must bring the hidden window 
-            // to the foreground before showing the menu, or it won't disappear 
-            // when the user clicks away.
-            SetForegroundWindow(hwnd);
+                // 2. Windows bug workaround: You must bring the hidden window 
+                // to the foreground before showing the menu, or it won't disappear 
+                // when the user clicks away.
+                SetForegroundWindow(hwnd);
 
-            // 3. Get the mouse position to spawn the menu exactly on the cursor
-            POINT pt;
-            GetCursorPos(&pt);
-            TrackPopupMenu(hMenu, TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, pt.x, pt.y, 0, hwnd, NULL);
-            DestroyMenu(hMenu);
-        }
-        break;
-
-    case WM_COMMAND:
-        // Handle the menu clicks
-        switch (LOWORD(wParam)) {
-        case ID_TRAY_ABOUT:
-            MessageBoxW(NULL, L"Clipp v1.0\nSecure cross-platform clipboard sync.", L"About", MB_ICONINFORMATION | MB_OK);
+                // 3. Get the mouse position to spawn the menu exactly on the cursor
+                POINT pt;
+                GetCursorPos(&pt);
+                TrackPopupMenu(hMenu, TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, pt.x, pt.y, 0, hwnd, NULL);
+                DestroyMenu(hMenu);
+            }
             break;
-        case ID_TRAY_EXIT:
-            PostQuitMessage(0);
+
+        case WM_COMMAND:
+            // Handle the menu clicks
+            switch (LOWORD(wParam)) {
+            case ID_TRAY_ABOUT:
+                DarkMode::DarkMessageBox(NULL, L"Clipp v1.0\nSecure cross-platform clipboard sync.", L"About", MB_ICONINFORMATION | MB_OK);
+                break;
+            case ID_TRAY_EXIT:
+                PostQuitMessage(0);
+                break;
+            }
             break;
-        }
-        break;
 
-    case WM_CLOSE:
-		PostQuitMessage(0);
-		break;
+        case WM_CLOSE:
+		    PostQuitMessage(0);
+		    break;
 
-    case WM_DESTROY:
-        Shell_NotifyIconW(NIM_DELETE, &g_nid);
-        break;
+        case WM_DESTROY:
+            Shell_NotifyIconW(NIM_DELETE, &g_nid);
+            break;
 
-    default:
-        return DefWindowProcW(hwnd, msg, wParam, lParam);
+        default:
+            return DefWindowProcW(hwnd, msg, wParam, lParam);
     }
     return 0;
 }
 
 void TrayIconMessageLoop() {
+    DarkMode::initDarkMode();
     HINSTANCE hInstance = GetModuleHandleW(NULL);
 
     WNDCLASSW wc = {};
