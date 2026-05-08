@@ -1,17 +1,15 @@
 #include "PeerManager.h"
 #include "PeerDisplay.h"
 #include "platform_win32_xaml_dialog.h"
+#include "platform_win32_NetworkView.h"
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <cmath>
 #include <cstdint>
-#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
-#include <vector>
 
 #include <Windows.h>
 // winrt/Windows.UI.Xaml.Media.Animation.h has a GetCurrentTime method; Windows.h
@@ -68,9 +66,10 @@ std::wstring g_createError;
 
 winrt::Windows::UI::Xaml::Controls::TextBox g_networkNameField{ nullptr };
 winrt::Windows::UI::Xaml::Controls::PasswordBox g_passwordField{ nullptr };
-winrt::Windows::UI::Xaml::Controls::TextBox g_peerDisplayTextBox{ nullptr };
 winrt::Windows::System::DispatcherQueue g_uiDispatcher{ nullptr };
 std::unique_ptr<TerminalLogView> g_terminalLogView;
+std::unique_ptr<NetworkView> g_networkView;
+winrt::Windows::UI::Xaml::DispatcherTimer g_networkPollTimer{ nullptr };
 std::mutex g_terminalLogViewMutex;
 winrt::Windows::UI::Xaml::Controls::StackPanel g_passwordStatusPanel{ nullptr };
 winrt::Windows::UI::Xaml::Controls::TextBlock g_passwordHashText{ nullptr };
@@ -80,92 +79,30 @@ winrt::Windows::UI::Xaml::Controls::TextBlock g_passwordInfoText{ nullptr };
 KeyDerivationWorker g_keyDerivationWorker;
 UINT g_msgDerivedKey = RegisterWindowMessageW(L"ClippDerivedKeyNotification");
 UINT g_msgPeerDisplayUpdate = RegisterWindowMessageW(L"ClippPeerDisplayUpdate");
-bool g_ignoreDerivedKeys = true;
-std::array<unsigned char, KeyManager::NetworkKeySize> g_lastKnownNetworkKey;
-bool g_lastKnownNetworkKeyEmpty;
 
 std::size_t g_peerDisplayWatcherID{};
-std::vector<PeerDisplayItem> g_peerDisplayItems;
 
-constexpr std::size_t kPeerDisplayHostNameWidth = 24;
-constexpr std::size_t kPeerDisplayByteCounterWidth = 15; // 12 digits plus 3 thousand separators.
-constexpr uint64_t kPeerDisplayMaxByteCounter = 999'999'999'999;
-
-std::wstring PeerDisplayHostNameField(const std::wstring& hostName) {
-    std::wstring field = hostName.empty() ? L"(unknown)" : hostName;
-    if (field.size() > kPeerDisplayHostNameWidth) {
-        field.resize(kPeerDisplayHostNameWidth);
-    } else {
-        field.append(kPeerDisplayHostNameWidth - field.size(), L' ');
+void NetworkView_Poll() {
+    if (g_networkView) {
+        g_networkView->Poll();
     }
-    return field;
 }
 
-std::wstring PeerDisplayByteCounter(uint64_t bytes) {
-    if (bytes > kPeerDisplayMaxByteCounter) {
-        return L"+++,+++,+++,+++";
+void NetworkView_StartPollTimer() {
+    if (!g_networkPollTimer) {
+        g_networkPollTimer = winrt::Windows::UI::Xaml::DispatcherTimer();
+        g_networkPollTimer.Interval(std::chrono::seconds(1));
+        g_networkPollTimer.Tick([](auto const&, auto const&) {
+            NetworkView_Poll();
+        });
     }
-
-    std::wstring digits = std::to_wstring(bytes);
-    std::wstring counter;
-    counter.reserve(kPeerDisplayByteCounterWidth);
-    for (std::size_t i = 0; i < digits.size(); ++i) {
-        if (i > 0 && ((digits.size() - i) % 3) == 0) {
-            counter.push_back(L',');
-        }
-        counter.push_back(digits[i]);
-    }
-
-    if (counter.size() < kPeerDisplayByteCounterWidth) {
-        counter.insert(counter.begin(), kPeerDisplayByteCounterWidth - counter.size(), L' ');
-    }
-    return counter;
+    g_networkPollTimer.Start();
 }
 
-bool PeerDisplayItemLess(const PeerDisplayItem& left, const PeerDisplayItem& right) {
-    if (left.hostID != right.hostID) {
-        return std::lexicographical_compare(left.hostID.begin(), left.hostID.end(), right.hostID.begin(), right.hostID.end());
+void NetworkView_StopPollTimer() {
+    if (g_networkPollTimer) {
+        g_networkPollTimer.Stop();
     }
-    return left.hostName < right.hostName;
-}
-
-std::wstring PeerDisplayItemLine(const PeerDisplayItem& item) {
-    std::wstring line = PeerDisplayHostNameField(item.hostName);
-    line += L" [";
-    line += item.hasIncomingConnection ? L"in" : L"  ";
-    line += L"/";
-    line += item.hasOutgoingConnection ? L"out" : L"   ";
-    line += L"] sent=";
-    line += PeerDisplayByteCounter(item.bytesSent);
-    line += L" recv=";
-    line += PeerDisplayByteCounter(item.bytesReceived);
-    return line;
-}
-
-void PeerDisplay_Render() {
-    if (!g_peerDisplayTextBox) {
-        return;
-    }
-
-    if (g_peerDisplayItems.empty()) {
-        g_peerDisplayTextBox.Text(L"No peers connected.");
-        return;
-    }
-
-    std::wstring text;
-    for (const auto& item : g_peerDisplayItems) {
-        if (!text.empty()) {
-            text += L"\r\n";
-        }
-        text += PeerDisplayItemLine(item);
-    }
-    g_peerDisplayTextBox.Text(text);
-}
-
-void PeerDisplay_LoadSnapshot(std::vector<PeerDisplayItem> items) {
-    g_peerDisplayItems = std::move(items);
-    std::sort(g_peerDisplayItems.begin(), g_peerDisplayItems.end(), PeerDisplayItemLess);
-    PeerDisplay_Render();
 }
 
 void PeerDisplay_Watcher(const PeerDisplayUpdate&, void* userData) {
@@ -182,7 +119,7 @@ void PeerDisplay_BeginNotifications(HWND hwnd) {
 
     const auto registration = g_peerDisplay.QueryAndRegister(PeerDisplay_Watcher, hwnd);
     g_peerDisplayWatcherID = registration.watcherID;
-    PeerDisplay_LoadSnapshot(registration.items);
+    NetworkView_Poll();
 }
 
 void PeerDisplay_EndNotifications() {
@@ -197,78 +134,27 @@ void PeerDisplay_EndNotifications() {
 void PasswordFields_Setup() {
     using namespace winrt::Windows::UI::Xaml;
     std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
-    bool haveNetworkKey = false;
 
-    if (g_keyManager.GetNetworkKey(networkKey)) {
-        haveNetworkKey = true;
-        sodium_memzero(networkKey.data(), networkKey.size());
-    }
-
-    if (haveNetworkKey) {
+    if (g_keyManager.HaveNetworkKey()) {
         g_passwordField.Password(L"••••••••••••••••");
         g_passwordHashText.Text(g_keyManager.GetNetworkKeyHash());
         g_passwordStatusPanel.Visibility(Visibility::Visible);
         g_passwordInfoPanel.Visibility(Visibility::Collapsed);
     } else {
         g_passwordField.Password(L"");
-        g_passwordInfoText.Text(L"Enter network password to create or join a network.");
+        g_passwordInfoText.Text(L"Enter network secret to create or join a network.");
         g_passwordStatusPanel.Visibility(Visibility::Collapsed);
         g_passwordInfoPanel.Visibility(Visibility::Visible);
-        g_passwordField.Focus(FocusState::Programmatic);
     }
 }
 
 void PasswordFields_NewHashReceived() {
     using namespace winrt::Windows::UI::Xaml;
-    std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
-    bool haveNetworkKey = false;
-    if (g_keyManager.GetNetworkKey(networkKey)) {
-        sodium_memzero(networkKey.data(), networkKey.size());
+    if (g_keyManager.HaveNetworkKey()) {
         g_passwordHashText.Text(g_keyManager.GetNetworkKeyHash());
         g_passwordStatusPanel.Visibility(Visibility::Visible);
         g_passwordInfoPanel.Visibility(Visibility::Collapsed);
     }
-}
-
-void PasswordFields_BeginEdit() {
-    using namespace winrt::Windows::UI::Xaml;
-    g_passwordField.Visibility(Visibility::Visible);
-    g_passwordField.Focus(FocusState::Programmatic);
-    g_passwordField.SelectAll();
-
-    g_passwordInfoText.Text(L"Enter network password to create or join a network.");
-    g_passwordStatusPanel.Visibility(Visibility::Collapsed);
-    g_passwordInfoPanel.Visibility(Visibility::Visible);
-}
-
-void PasswordFields_CancelEdit() {
-    g_ignoreDerivedKeys = true;
-    if (!g_lastKnownNetworkKeyEmpty) {
-        g_keyManager.SetNetworkKey(g_lastKnownNetworkKey);
-        MDNSNotifyNetworkKeyChange();
-        g_peerManager.ClearPeers();
-    }
-    PasswordFields_Setup();
-}
-
-void PasswordFields_ApplyEdit() {
-    using namespace winrt::Windows::UI::Xaml;
-    winrt::hstring pwd = g_passwordField.Password();
-
-    g_passwordStatusPanel.Visibility(Visibility::Collapsed);
-    g_passwordInfoPanel.Visibility(Visibility::Visible);
-
-    if (pwd.size() < 8) {
-        g_passwordInfoText.Text(L"Password must be at least 8 characters.");
-        return; // Reject and wait for user to keep typing
-    }
-
-    g_passwordInfoText.Text(L"... working ...");
-
-    std::string newPassword = winrt::to_string(pwd);
-    g_keyDerivationWorker.RequestKeyDerivation(newPassword);
-    sodium_memzero(newPassword.data(), newPassword.capacity());
-    g_ignoreDerivedKeys = false;
 }
 
 void EnsureXamlInitialized() {
@@ -347,168 +233,6 @@ winrt::Windows::UI::Xaml::Controls::ScrollViewer CreateTerminalLikeScrollViewer(
     return view;
 }
 
-winrt::Windows::UI::Xaml::Controls::StackPanel CreateNetworkCard() {
-    using namespace winrt::Windows::UI::Xaml;
-    using namespace winrt::Windows::UI::Xaml::Controls;
-    using namespace winrt::Windows::UI::Xaml::Controls::Primitives;
-    using namespace winrt::Windows::UI::Xaml::Media;
-    using namespace winrt::Windows::UI::Text;
-    // 1. The Outer Card Container
-    StackPanel card;
-    // Optional: Give the card a subtle background to match Windows 11 settings
-    // card.Background(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(10, 255, 255, 255)));
-    card.CornerRadius(CornerRadius{ 4 });
-    card.BorderThickness(ThicknessHelper::FromLengths(1, 1, 1, 1));
-    // Use a subtle border color
-    card.BorderBrush(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(50, 150, 150, 150)));
-
-    // 2. The Header Row
-
-    // Helper to cleanly create columns
-    auto makeCol = [](double value, GridUnitType type) {
-        ColumnDefinition col;
-        col.Width(GridLength{ value, type });
-        return col;
-        };
-
-    Grid headerGrid;
-    headerGrid.Padding(ThicknessHelper::FromLengths(16, 12, 16, 12));
-    headerGrid.ColumnDefinitions().Append(makeCol(40, GridUnitType::Pixel)); // Main Icon
-    headerGrid.ColumnDefinitions().Append(makeCol(1, GridUnitType::Star));  // Text
-    headerGrid.ColumnDefinitions().Append(makeCol(45, GridUnitType::Pixel)); // IN/OUT ICONS
-    headerGrid.ColumnDefinitions().Append(makeCol(40, GridUnitType::Pixel)); // Chevron
-
-    // Network Icon (Using standard Windows 10/11 Segoe MDL2 Assets)
-    FontIcon netIcon;
-    netIcon.FontFamily(Media::FontFamily(L"Segoe MDL2 Assets"));
-    netIcon.Glyph(L"\xE839"); // E839 is a common network/Ethernet glyph
-    netIcon.FontSize(18);
-    netIcon.VerticalAlignment(VerticalAlignment::Center);
-    netIcon.HorizontalAlignment(HorizontalAlignment::Left);
-    Grid::SetColumn(netIcon, 0);
-
-    // Text Stack (Name and Details)
-    StackPanel textStack;
-    textStack.VerticalAlignment(VerticalAlignment::Center);
-    Grid::SetColumn(textStack, 1);
-
-    TextBlock title;
-    title.Text(L"MacMini.local");
-    title.FontSize(14);
-    // "Brighter" text by using SemiBold
-    title.FontWeight(FontWeights::SemiBold());
-
-    TextBlock subtitle;
-    subtitle.Text(L"Connected for 5 days, 14:23:43");
-    subtitle.FontSize(12);
-    // "Duller" text by dropping opacity
-    subtitle.Opacity(0.6);
-
-    textStack.Children().Append(title);
-    textStack.Children().Append(subtitle);
-
-    // Chevron Toggle Button
-    ToggleButton chevron;
-    chevron.FontFamily(Media::FontFamily(L"Segoe MDL2 Assets"));
-    chevron.Content(winrt::box_value(L"\xE70D")); // ChevronDown
-    chevron.Background(SolidColorBrush(winrt::Windows::UI::Colors::Transparent()));
-    chevron.BorderThickness(ThicknessHelper::FromLengths(0, 0, 0, 0));
-    chevron.VerticalAlignment(VerticalAlignment::Center);
-    chevron.HorizontalAlignment(HorizontalAlignment::Right);
-    Grid::SetColumn(chevron, 3);
-
-    StackPanel statusIcons;
-    statusIcons.Orientation(Orientation::Horizontal);
-    statusIcons.VerticalAlignment(VerticalAlignment::Center);
-    statusIcons.HorizontalAlignment(HorizontalAlignment::Right);
-    Grid::SetColumn(statusIcons, 2);
-
-    FontIcon inIcon;
-    inIcon.FontFamily(Media::FontFamily(L"Segoe MDL2 Assets"));
-    inIcon.Glyph(L"\xE118"); // Download/Incoming arrow
-    inIcon.FontSize(12);
-    inIcon.Width(20); // Fixed width so layout doesn't jump
-    inIcon.Foreground(SolidColorBrush(winrt::Windows::UI::Colors::LimeGreen()));
-    // inIcon.Visibility(Visibility::Collapsed); // Toggle this based on state
-
-    FontIcon outIcon;
-    outIcon.FontFamily(Media::FontFamily(L"Segoe MDL2 Assets"));
-    outIcon.Glyph(L"\xE11C"); // Upload/Outgoing arrow
-    outIcon.FontSize(12);
-    outIcon.Width(20);
-    outIcon.Foreground(SolidColorBrush(winrt::Windows::UI::Colors::DeepSkyBlue()));
-    // outIcon.Visibility(Visibility::Collapsed); // Toggle this based on state
-
-    statusIcons.Children().Append(inIcon);
-    statusIcons.Children().Append(outIcon);
-
-    headerGrid.Children().Append(netIcon);
-    headerGrid.Children().Append(textStack);
-    headerGrid.Children().Append(chevron);
-    headerGrid.Children().Append(statusIcons);
-
-    // 3. The Collapsible Content (Two-Column Layout)
-    Grid contentGrid;
-    contentGrid.Visibility(Visibility::Collapsed);
-    // Nice margins: pad the left to align with the text above, pad the bottom
-    contentGrid.Padding(ThicknessHelper::FromLengths(56, 0, 16, 16));
-    contentGrid.ColumnDefinitions().Append(makeCol(130, GridUnitType::Pixel)); // Headers
-    contentGrid.ColumnDefinitions().Append(makeCol(1, GridUnitType::Star));  // Values    Grid headerGrid;
-
-    // Helper lambda to easily add rows to our table
-    auto addRow = [&](int rowIndex, const wchar_t* labelText, const wchar_t* valueText) {
-        RowDefinition rowDef;
-        rowDef.Height(GridLength{ 1, GridUnitType::Auto });
-        contentGrid.RowDefinitions().Append(rowDef);
-
-        TextBlock label;
-        label.Text(labelText);
-        label.FontSize(13);
-        label.FontWeight(FontWeights::SemiBold()); // Brighter/heavier text for the left side
-        label.Margin(ThicknessHelper::FromLengths(0, 4, 0, 4));
-        Grid::SetColumn(label, 0);
-        Grid::SetRow(label, rowIndex);
-
-        TextBlock value;
-        value.Text(valueText);
-        value.FontSize(13);
-        value.Opacity(0.7); // Duller text for the right side
-        value.Margin(ThicknessHelper::FromLengths(0, 4, 0, 4));
-        Grid::SetColumn(value, 1);
-        Grid::SetRow(value, rowIndex);
-
-        contentGrid.Children().Append(label);
-        contentGrid.Children().Append(value);
-    };
-
-    // Populate the table
-    addRow(1, L"Bytes sent:", L"5,339,546,273");
-    addRow(2, L"Bytes received:", L"2,946,613,942");
-    addRow(3, L"Incoming connection:", L"Ok");
-    addRow(4, L"Outgoing connection:", L"Ok");
-    addRow(5, L"", L"");
-
-    // 4. The Interaction Logic
-    // When the chevron is clicked, toggle the content visibility and flip the arrow
-    chevron.Click([=](winrt::Windows::Foundation::IInspectable const& sender, RoutedEventArgs const&) {
-        auto toggle = sender.as<ToggleButton>();
-        if (toggle.IsChecked().GetBoolean()) {
-            contentGrid.Visibility(Visibility::Visible);
-            toggle.Content(winrt::box_value(L"\xE70E")); // ChevronUp
-        }
-        else {
-            contentGrid.Visibility(Visibility::Collapsed);
-            toggle.Content(winrt::box_value(L"\xE70D")); // ChevronDown
-        }
-        });
-
-    // Assemble the final card
-    card.Children().Append(headerGrid);
-    card.Children().Append(contentGrid);
-
-    return card;
-}
-
 winrt::Windows::UI::Xaml::Controls::Grid BuildPlaceholderContent() {
     using namespace winrt::Windows::UI::Xaml;
     using namespace winrt::Windows::UI::Xaml::Controls;
@@ -569,7 +293,10 @@ winrt::Windows::UI::Xaml::Controls::Grid BuildPlaceholderContent() {
                 auto now = std::chrono::system_clock::now();
                 auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch());
                 g_settings.set_networkNameTimestamp(static_cast<uint64_t>(duration.count()));
+				g_keyManager.ClearNetworkKey(); // Clear the key to force re-derivation with the new name
                 MDNSNotifyNetworkKeyChange();
+                g_peerManager.ClearPeers();
+				PasswordFields_Setup();
             }
         });
 
@@ -578,8 +305,25 @@ winrt::Windows::UI::Xaml::Controls::Grid BuildPlaceholderContent() {
     debounceTimer.Interval(std::chrono::milliseconds(500));
     debounceTimer.Stop();
     debounceTimer.Tick([=](auto const&, auto const&) {
-        debounceTimer.Stop();
-        PasswordFields_ApplyEdit();
+            debounceTimer.Stop();
+            winrt::hstring pwd = g_passwordField.Password();
+
+            g_passwordStatusPanel.Visibility(Visibility::Collapsed);
+            g_passwordInfoPanel.Visibility(Visibility::Visible);
+
+            if (pwd.size() < 8) {
+                g_passwordInfoText.Text(L"Password must be at least 8 characters.");
+                return; // Reject and wait for user to keep typing
+            }
+
+            g_passwordInfoText.Text(L"... working ...");
+
+            std::string newPassword = winrt::to_string(pwd);
+            std::string netNameAndPassword = g_settings.networkName() + "|";
+            netNameAndPassword += newPassword;
+            g_keyDerivationWorker.RequestKeyDerivation(netNameAndPassword);
+            sodium_memzero(newPassword.data(), newPassword.capacity());
+            sodium_memzero(netNameAndPassword.data(), netNameAndPassword.capacity());
         });
 
     g_passwordField = PasswordBox();
@@ -587,18 +331,16 @@ winrt::Windows::UI::Xaml::Controls::Grid BuildPlaceholderContent() {
     g_passwordField.MinWidth(200);
     g_passwordField.Tag(winrt::box_value(false));
     g_passwordField.GotFocus([](auto const& sender, auto const&) {
-		    PasswordFields_BeginEdit();
             g_passwordField.Password(L"");
         });
     g_passwordField.LostFocus([](auto const& sender, auto const&) {
-        g_passwordField.Password(L"••••••••••••••••");
+            PasswordFields_Setup();
         });
     g_passwordField.KeyDown([](auto const& sender, auto const& e) {
-            if (e.Key() == winrt::Windows::System::VirtualKey::Escape) {
-                PasswordFields_CancelEdit();
-                e.Handled(true);
-                g_peerDisplayTextBox.Focus(winrt::Windows::UI::Xaml::FocusState::Programmatic);
-            }
+            //if (e.Key() == winrt::Windows::System::VirtualKey::Escape) {
+            //    PasswordFields_CancelEdit();
+            //    e.Handled(true);
+            //}
         });
     g_passwordField.PasswordChanged([=](auto const& sender, auto const&) {
             debounceTimer.Stop();
@@ -672,7 +414,7 @@ winrt::Windows::UI::Xaml::Controls::Grid BuildPlaceholderContent() {
     g_passwordHashText.TextWrapping(TextWrapping::Wrap);
 
     TextBlock hashExplainer;
-    hashExplainer.Text(L"Not your actual network key; this is the SHA256 of Argon2id. Used only on this screen.");
+    hashExplainer.Text(L"Network key fingerprint. Used only on this screen; not in itself a secret.");
     hashExplainer.Opacity(0.6); // Muted/darker text style
     hashExplainer.TextWrapping(TextWrapping::Wrap);
 
@@ -713,63 +455,17 @@ winrt::Windows::UI::Xaml::Controls::Grid BuildPlaceholderContent() {
     outerContainer.Children().Append(g_passwordStatusPanel);
     outerContainer.Children().Append(g_passwordInfoPanel);
 
-    TextBlock peerDisplayLabel;
-    peerDisplayLabel.Text(L"Peers");
-    peerDisplayLabel.FontSize(16);
-    peerDisplayLabel.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
-    outerContainer.Children().Append(peerDisplayLabel);
-
-    g_peerDisplayTextBox = TextBox();
-    g_peerDisplayTextBox.AcceptsReturn(true);
-    g_peerDisplayTextBox.IsReadOnly(true);
-    g_peerDisplayTextBox.MinHeight(120);
-    g_peerDisplayTextBox.TextWrapping(TextWrapping::NoWrap);
-    g_peerDisplayTextBox.FontFamily(FontFamily(L"Consolas"));
-    g_peerDisplayTextBox.Text(L"No peers connected.");
-    outerContainer.Children().Append(g_peerDisplayTextBox);
-
     content.Children().Append(outerContainer);
-    content.Children().Append(CreateNetworkCard());
+
+    g_networkView = std::make_unique<NetworkView>(g_peerDisplay);
+    content.Children().Append(g_networkView->View());
+    NetworkView_Poll();
+
     content.Children().Append(CreateTerminalLikeScrollViewer());
 
-    /*
-    TextBlock listHeading;
-    listHeading.Text(L"Placeholder activity");
-    listHeading.FontSize(16);
-    listHeading.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
-    content.Children().Append(listHeading);
-
-    ListView listView;
-    listView.MinHeight(140);
-    listView.MaxHeight(220);
-    listView.Items().Append(winrt::box_value(L"Clipboard sync status placeholder"));
-    listView.Items().Append(winrt::box_value(L"Known peers placeholder"));
-    listView.Items().Append(winrt::box_value(L"Recent clipboard item placeholder"));
-    content.Children().Append(listView);
-
-    StackPanel actions;
-    actions.Orientation(Orientation::Horizontal);
-    actions.Spacing(8);
-
-    Button primaryButton;
-    primaryButton.Content(winrt::box_value(L"Primary action"));
-    actions.Children().Append(primaryButton);
-
-    Button secondaryButton;
-    secondaryButton.Content(winrt::box_value(L"Secondary action"));
-    actions.Children().Append(secondaryButton);
-
-    ToggleSwitch toggle;
-    toggle.Header(winrt::box_value(L"Sample toggle"));
-    toggle.IsOn(true);
-    actions.Children().Append(toggle);
-
-    content.Children().Append(actions);
-    root.Children().Append(content);
-    */
     winrt::Windows::UI::Xaml::Controls::ScrollViewer mainScroll;
     mainScroll.VerticalScrollBarVisibility(winrt::Windows::UI::Xaml::Controls::ScrollBarVisibility::Auto);
-    mainScroll.Content(content); // Put the whole StackPanel inside the ScrollViewer
+    mainScroll.Content(content); 
     root.Children().Append(mainScroll);
 
     g_uiDispatcher = winrt::Windows::System::DispatcherQueue::GetForCurrentThread();
@@ -946,15 +642,16 @@ LRESULT CALLBACK MainDialogWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     case WM_SHOWWINDOW:
         if (wParam) {
             PeerDisplay_BeginNotifications(hwnd);
+            NetworkView_StartPollTimer();
             g_logger.AddLogReflector(LogReflectorCallback);
             if (g_uiDispatcher) {
                 g_uiDispatcher.TryEnqueue([]() {
                         PasswordFields_Setup();
                     });
             }
-            g_lastKnownNetworkKeyEmpty = !g_keyManager.GetNetworkKey(g_lastKnownNetworkKey);
         } else {
             PeerDisplay_EndNotifications();
+            NetworkView_StopPollTimer();
             g_logger.RemoveLogReflector(LogReflectorCallback);
         }
         return 0;
@@ -981,11 +678,14 @@ LRESULT CALLBACK MainDialogWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 
     case WM_DESTROY: {
         PeerDisplay_EndNotifications();
+        NetworkView_StopPollTimer();
         g_logger.RemoveLogReflector(LogReflectorCallback);
         {
             std::lock_guard<std::mutex> lock(g_terminalLogViewMutex);
             g_terminalLogView.reset();
         }
+        g_networkView.reset();
+        g_networkPollTimer = nullptr;
 
         auto* state = reinterpret_cast<XamlDialogState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
@@ -999,26 +699,24 @@ LRESULT CALLBACK MainDialogWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 
     default:
         if (msg == g_msgDerivedKey) {
-            if (!g_ignoreDerivedKeys) {
-                KeyDerivationWorker::KeyDerivationResult* result = reinterpret_cast<KeyDerivationWorker::KeyDerivationResult*>(wParam);
+            KeyDerivationWorker::KeyDerivationResult* result = reinterpret_cast<KeyDerivationWorker::KeyDerivationResult*>(wParam);
 
-                g_keyManager.SetNetworkKey(result->derivedKey);
-                MDNSNotifyNetworkKeyChange();
-                g_peerManager.ClearPeers();
+            g_keyManager.SetNetworkKey(result->derivedKey);
+            MDNSNotifyNetworkKeyChange();
+            g_peerManager.ClearPeers();
 
-                // Refresh the UI safely to show the status panel and hide the info panel
-                if (g_uiDispatcher) {
-                    g_uiDispatcher.TryEnqueue([]() {
-                        PasswordFields_NewHashReceived();
-                        });
-                }
+            // Refresh the UI safely to show the status panel and hide the info panel
+            if (g_uiDispatcher) {
+                g_uiDispatcher.TryEnqueue([]() {
+					    PasswordFields_NewHashReceived();
+                    });
             }
             return 0;
 		}
 
         if (msg == g_msgPeerDisplayUpdate) {
             if (g_peerDisplayWatcherID != 0) {
-                PeerDisplay_LoadSnapshot(g_peerDisplay.Query());
+                NetworkView_Poll();
             }
             return 0;
         }

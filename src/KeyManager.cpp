@@ -91,6 +91,12 @@ KeyManager::KeyManager(Settings& settings)
     : settings_(settings) {
 }
 
+void KeyManager::ClearNetworkKey() {
+    cacheValid_ = false;
+    cachedNetworkKey_.fill(0);
+    settings_.setEncryptedNetworkKey(std::vector<unsigned char>{});
+}
+
 bool KeyManager::SetNetworkKey(const std::array<unsigned char, NetworkKeySize>& networkKey, std::string* errorMessage) {
 #ifdef _WIN32
     DATA_BLOB plainData{};
@@ -210,6 +216,16 @@ bool KeyManager::SetNetworkKey(const std::array<unsigned char, NetworkKeySize>& 
     return true;
 }
 
+bool KeyManager::HaveNetworkKey() {
+    if (cacheValid_) {
+        return true;
+    }
+    std::array<unsigned char, NetworkKeySize> networkKey{};
+    bool haveKey = GetNetworkKey(networkKey);
+    sodium_memzero(networkKey.data(), networkKey.size());
+    return haveKey;
+}
+
 bool KeyManager::GetNetworkKey(std::array<unsigned char, NetworkKeySize>& networkKey, std::string* errorMessage) {
     if (cacheValid_) {
         networkKey = cachedNetworkKey_;
@@ -317,6 +333,20 @@ bool KeyManager::DeriveNetworkKey(const std::string& password, std::array<unsign
     return true;
 }
 
+static std::wstring FormatHash(const unsigned char* hash, size_t hashLen) {
+    constexpr wchar_t digits[] = L"0123456789abcdef";
+    std::wstring text;
+    text.reserve(hashLen * 2 + hashLen / 4);
+    for (std::size_t i = 0; i < hashLen; ++i) {
+        if (i > 0 && (i % 4) == 0) {
+            text.push_back(L'-');
+        }
+        text.push_back(digits[(hash[i] >> 4) & 0x0F]);
+        text.push_back(digits[hash[i] & 0x0F]);
+    }
+    return text;
+}
+
 std::wstring KeyManager::GetNetworkKeyHash(const std::array<unsigned char, NetworkKeySize>* networkKey) {
     if (networkKey == nullptr) {
         if (cacheValid_) {
@@ -325,10 +355,7 @@ std::wstring KeyManager::GetNetworkKeyHash(const std::array<unsigned char, Netwo
             return L"";
         }
     }
-    unsigned char keyHash[crypto_hash_sha256_BYTES];
-    crypto_hash_sha256(keyHash, networkKey->data(), networkKey->size());
-    std::string keyHashUtf8;
-    keyHashUtf8.resize(crypto_hash_sha256_BYTES * 2 + 1);
-    sodium_bin2hex(keyHashUtf8.data(), keyHashUtf8.size(), keyHash, sizeof(keyHash));
-    return Utf8ToWideString(keyHashUtf8);
+    unsigned char keyHash[16];
+    crypto_generichash(keyHash, sizeof(keyHash), networkKey->data(), networkKey->size(), nullptr, 0);
+    return FormatHash(keyHash, sizeof(keyHash));
 }

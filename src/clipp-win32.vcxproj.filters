@@ -51,6 +51,12 @@
     <ClCompile Include="platform_win32_Settings.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="platform_win32_NetworkItem.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="platform_win32_NetworkView.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="platform_win32_TerminalLogView.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -114,6 +120,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="platform_win32_KeyDerivationWorker.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="platform_win32_NetworkItem.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="platform_win32_NetworkView.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="platform_win32_TerminalLogView.h">

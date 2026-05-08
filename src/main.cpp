@@ -212,7 +212,7 @@ void OnMDNSNotification(const char* hostNameUtf8,
 }
 
 void PrintNetworkKeyHash(const std::array<unsigned char, KeyManager::NetworkKeySize>& networkKey) {
-    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Network Key SHA256: %s", g_keyManager.GetNetworkKeyHash(&networkKey).c_str());
+    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Network Key hash: %s", g_keyManager.GetNetworkKeyHash(&networkKey).c_str());
 }
 
 int main(int argc, char* argv[]) {
@@ -226,8 +226,12 @@ int main(int argc, char* argv[]) {
             g_logger.log(__FUNCTION__, Logger::Level::Error, "No input provided.");
             return 1;
         }
-		bool keyDerived = g_keyManager.DeriveNetworkKey(keyInput, networkKey);
+        std::string netNameAndPassword = g_settings.networkName();
+        netNameAndPassword += "|";
+        netNameAndPassword += keyInput;
+		bool keyDerived = g_keyManager.DeriveNetworkKey(netNameAndPassword, networkKey);
         sodium_memzero(keyInput.data(), keyInput.capacity());
+        sodium_memzero(netNameAndPassword.data(), netNameAndPassword.capacity());
         if (!keyDerived) {
             g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to derive network key from password.");
             return 1;
