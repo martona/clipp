@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -29,7 +30,6 @@
 #include <winrt/Windows.UI.Xaml.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
 #include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
-#include <winrt/Windows.UI.Xaml.Documents.h>
 #include <winrt/Windows.UI.Xaml.Hosting.h>
 #include <winrt/Windows.UI.Xaml.Input.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
@@ -37,6 +37,7 @@
 #include <winrt/base.h>
 
 #include "Logger.h"
+#include "platform_win32_TerminalLogView.h"
 #include "MDNSThread.h"
 #include "clipp-win32-darkmode32/DMSubclass.h"
 #include "platform_win32_KeyDerivationWorker.h"
@@ -71,8 +72,8 @@ winrt::Windows::UI::Xaml::Controls::TextBlock g_readOnlyText{ nullptr };
 winrt::Windows::UI::Xaml::Controls::TextBlock g_hashDisplay{ nullptr };
 winrt::Windows::UI::Xaml::Controls::TextBox g_peerDisplayTextBox{ nullptr };
 winrt::Windows::System::DispatcherQueue g_uiDispatcher{ nullptr };
-winrt::Windows::UI::Xaml::Documents::Paragraph g_logParagraph{ nullptr };
-winrt::Windows::UI::Xaml::Controls::ScrollViewer g_logScrollViewer{ nullptr };
+std::unique_ptr<TerminalLogView> g_terminalLogView;
+std::mutex g_terminalLogViewMutex;
 
 KeyDerivationWorker g_keyDerivationWorker;
 UINT g_msgDerivedKey = RegisterWindowMessageW(L"ClippDerivedKeyNotification");
@@ -311,91 +312,15 @@ winrt::Windows::UI::Xaml::Media::Brush GetThemeBackgroundBrush() {
 }
 
 winrt::Windows::UI::Xaml::Controls::ScrollViewer CreateTerminalLikeScrollViewer() {
-    using namespace winrt::Windows::UI::Xaml::Controls;
-    using namespace winrt::Windows::UI::Xaml::Media;
-    using namespace winrt::Windows::UI::Xaml::Documents;
+    auto terminalLogView = std::make_unique<TerminalLogView>();
+    auto view = terminalLogView->View();
 
-    winrt::Windows::UI::Xaml::Controls::ScrollViewer logScroll;
-    logScroll.Background(winrt::Windows::UI::Xaml::Media::SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(255, 12, 12, 12)));
-    logScroll.Padding(winrt::Windows::UI::Xaml::ThicknessHelper::FromUniformLength(10));
-    logScroll.VerticalScrollBarVisibility(winrt::Windows::UI::Xaml::Controls::ScrollBarVisibility::Auto);
-
-    winrt::Windows::UI::Xaml::Controls::RichTextBlock terminalBlock;
-    terminalBlock.FontFamily(winrt::Windows::UI::Xaml::Media::FontFamily(L"Consolas"));
-    terminalBlock.FontSize(13);
-    terminalBlock.TextWrapping(winrt::Windows::UI::Xaml::TextWrapping::Wrap);
-
-    // Instantiate the Paragraph object, then append it
-    g_logParagraph = winrt::Windows::UI::Xaml::Documents::Paragraph();
-    terminalBlock.Blocks().Append(g_logParagraph);
-
-    logScroll.Content(terminalBlock);
-    logScroll.MinHeight(150);
-    logScroll.MaxHeight(450);
-	
-    g_logScrollViewer = logScroll;
-
-	return logScroll;
-}
-
-void AppendAnsiLogLine(winrt::Windows::UI::Xaml::Documents::Paragraph const& paragraph, const std::wstring& logLine) {
-    using namespace winrt::Windows::UI::Xaml::Media;
-    using namespace winrt::Windows::UI::Xaml::Documents;
-
-    static auto brushDefault = SolidColorBrush(winrt::Windows::UI::Colors::LightGray());
-    static auto brushGray    = SolidColorBrush(winrt::Windows::UI::Colors::Gray());
-    static auto brushCyan    = SolidColorBrush(winrt::Windows::UI::Colors::Cyan());
-    static auto brushGreen   = SolidColorBrush(winrt::Windows::UI::Colors::LimeGreen());
-    static auto brushYellow  = SolidColorBrush(winrt::Windows::UI::Colors::Gold());
-    static auto brushRed     = SolidColorBrush(winrt::Windows::UI::Colors::OrangeRed());
-
-    auto currentBrush = brushDefault;
-    std::wstring currentText = L"";
-
-    auto flushText = [&]() {
-            if (!currentText.empty()) {
-                Run run;
-                run.Text(currentText);
-                run.Foreground(currentBrush);
-                paragraph.Inlines().Append(run);
-                currentText.clear();
-            }
-        };
-
-    size_t i = 0;
-    while (i < logLine.length()) {
-        if (logLine[i] == L'\x1b' && i + 1 < logLine.length() && logLine[i + 1] == L'[') {
-            flushText();
-
-            i += 2;
-            std::wstring code = L"";
-
-            while (i < logLine.length() && logLine[i] != L'm') {
-                code += logLine[i];
-                i++;
-            }
-            if (i < logLine.length() && logLine[i] == L'm') i++;
-
-            if (code == L"0") currentBrush = brushDefault;
-            else if (code == L"90") currentBrush = brushGray;
-            else if (code == L"36") currentBrush = brushCyan;
-            else if (code == L"1;32") currentBrush = brushGreen;
-            else if (code == L"1;33") currentBrush = brushYellow;
-            else if (code == L"1;31") currentBrush = brushRed;
-        } else {
-            currentText += logLine[i];
-            i++;
-        }
+    {
+        std::lock_guard<std::mutex> lock(g_terminalLogViewMutex);
+        g_terminalLogView = std::move(terminalLogView);
     }
 
-    flushText();
-    g_logScrollViewer.UpdateLayout();
-    g_logScrollViewer.ChangeView(nullptr, g_logScrollViewer.ScrollableHeight(), nullptr);
-
-    constexpr uint32_t MAX_TERMINAL_RUNS = 4000;
-    while (paragraph.Inlines().Size() > MAX_TERMINAL_RUNS) {
-        paragraph.Inlines().RemoveAt(0);
-    }
+    return view;
 }
 
 winrt::Windows::UI::Xaml::Controls::StackPanel CreateNetworkCard() {
@@ -537,6 +462,7 @@ winrt::Windows::UI::Xaml::Controls::StackPanel CreateNetworkCard() {
     addRow(2, L"Bytes received:", L"2,946,613,942");
     addRow(3, L"Incoming connection:", L"Ok");
     addRow(4, L"Outgoing connection:", L"Ok");
+    addRow(5, L"", L"");
 
     // 4. The Interaction Logic
     // When the chevron is clicked, toggle the content visibility and flip the arrow
@@ -849,11 +775,16 @@ void InitializeXamlIsland(HWND hwnd) {
 }
 
 void LogReflectorCallback(const std::wstring& line) {
-    if (g_logParagraph) {
-        g_uiDispatcher.TryEnqueue([=]() {
-            AppendAnsiLogLine(g_logParagraph, line);
-        });
-	}
+    if (!g_uiDispatcher) {
+        return;
+    }
+
+    g_uiDispatcher.TryEnqueue([line]() {
+        std::lock_guard<std::mutex> lock(g_terminalLogViewMutex);
+        if (g_terminalLogView) {
+            g_terminalLogView->AppendAnsiLogText(line);
+        }
+    });
 }
 
 LRESULT CALLBACK MainDialogWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -918,6 +849,11 @@ LRESULT CALLBACK MainDialogWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 
     case WM_DESTROY: {
         PeerDisplay_EndNotifications();
+        g_logger.RemoveLogReflector(LogReflectorCallback);
+        {
+            std::lock_guard<std::mutex> lock(g_terminalLogViewMutex);
+            g_terminalLogView.reset();
+        }
 
         auto* state = reinterpret_cast<XamlDialogState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);

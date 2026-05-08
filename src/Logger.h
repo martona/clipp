@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdarg>
 #include <mutex>
 #include <string>
@@ -17,7 +18,9 @@ public:
     using LogReflectorCallback = void(*)(const std::wstring& line);
     void AddLogReflector(LogReflectorCallback callback) {
         std::lock_guard<std::mutex> lock(mutex_);
-		logReflectors_.push_back(callback);
+        if (std::find(logReflectors_.begin(), logReflectors_.end(), callback) == logReflectors_.end()) {
+            logReflectors_.push_back(callback);
+        }
     }
     void RemoveLogReflector(LogReflectorCallback callback) {
 		std::lock_guard<std::mutex> lock(mutex_);

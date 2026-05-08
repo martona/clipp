@@ -188,6 +188,7 @@
     <ClCompile Include="PeerDisplay.cpp" />
     <ClCompile Include="PeerManager.cpp" />
     <ClCompile Include="platform_win32_Settings.cpp" />
+    <ClCompile Include="platform_win32_TerminalLogView.cpp" />
     <ClCompile Include="platform_win32_tray.cpp" />
     <ClCompile Include="platform_win32_xaml_dialog.cpp" />
     <ClCompile Include="Settings.cpp" />
@@ -199,6 +200,7 @@
     <ClInclude Include="CryptoChannel.h" />
     <ClInclude Include="platform.h" />
     <ClInclude Include="platform_win32_KeyDerivationWorker.h" />
+    <ClInclude Include="platform_win32_TerminalLogView.h" />
     <ClInclude Include="platform_win32_xaml_dialog.h" />
     <ClInclude Include="MDNSThread.h" />
     <ClInclude Include="KeyManager.h" />

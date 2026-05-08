@@ -51,6 +51,9 @@
     <ClCompile Include="platform_win32_Settings.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="platform_win32_TerminalLogView.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="platform_win32_tray.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -111,6 +114,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="platform_win32_KeyDerivationWorker.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="platform_win32_TerminalLogView.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="utils_socket.h">

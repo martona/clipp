@@ -1,0 +1,144 @@
+#include "platform_win32_TerminalLogView.h"
+
+#include <cstdint>
+
+#include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.UI.h>
+#include <winrt/Windows.UI.Xaml.h>
+#include <winrt/Windows.UI.Xaml.Documents.h>
+#include <winrt/Windows.UI.Xaml.Media.h>
+
+// this should be 1000 (or a lot more) but RichTextBlock is incredibly
+// memory hungry and slow. there's just not much to be done about it - 
+// this stays but i hate it.
+static constexpr uint32_t kMaxTerminalLogLines = 10;
+
+TerminalLogView::TerminalLogView() {
+    using namespace winrt::Windows::UI::Xaml;
+    using namespace winrt::Windows::UI::Xaml::Controls;
+    using namespace winrt::Windows::UI::Xaml::Media;
+
+    defaultBrush_ = SolidColorBrush(winrt::Windows::UI::Colors::LightGray());
+    grayBrush_    = SolidColorBrush(winrt::Windows::UI::Colors::Gray());
+    cyanBrush_    = SolidColorBrush(winrt::Windows::UI::Colors::Cyan());
+    greenBrush_   = SolidColorBrush(winrt::Windows::UI::Colors::LimeGreen());
+    yellowBrush_  = SolidColorBrush(winrt::Windows::UI::Colors::Gold());
+    redBrush_     = SolidColorBrush(winrt::Windows::UI::Colors::OrangeRed());
+
+    scrollViewer_ = ScrollViewer{};
+    scrollViewer_.Background(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(255, 12, 12, 12)));
+    scrollViewer_.Padding(ThicknessHelper::FromUniformLength(10));
+    scrollViewer_.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);
+    scrollViewer_.MinHeight(150);
+    scrollViewer_.MaxHeight(450);
+
+    richTextBlock_ = RichTextBlock{};
+    richTextBlock_.FontFamily(FontFamily(L"Consolas"));
+    richTextBlock_.FontSize(13);
+    richTextBlock_.TextWrapping(TextWrapping::Wrap);
+
+    scrollViewer_.Content(richTextBlock_);
+}
+
+winrt::Windows::UI::Xaml::Controls::ScrollViewer TerminalLogView::View() const {
+    return scrollViewer_;
+}
+
+void TerminalLogView::AppendAnsiLogText(const std::wstring& text) {
+    std::wstring trimmedText = text;
+    while (!trimmedText.empty() && (trimmedText.back() == L'\r' || trimmedText.back() == L'\n')) {
+        trimmedText.pop_back();
+    }
+
+    if (trimmedText.empty()) {
+        return;
+    }
+
+    std::size_t lineStart = 0;
+    while (lineStart <= trimmedText.size()) {
+        const std::size_t lineEnd = trimmedText.find_first_of(L"\r\n", lineStart);
+        const std::wstring line = lineEnd == std::wstring::npos
+            ? trimmedText.substr(lineStart)
+            : trimmedText.substr(lineStart, lineEnd - lineStart);
+
+        richTextBlock_.Blocks().Append(CreateParagraphForAnsiLine(line));
+
+        if (lineEnd == std::wstring::npos) {
+            break;
+        }
+
+        lineStart = lineEnd + 1;
+        if (trimmedText[lineEnd] == L'\r' && lineStart < trimmedText.size() && trimmedText[lineStart] == L'\n') {
+            ++lineStart;
+        }
+    }
+
+    TrimOldLines();
+    ScrollToBottom();
+}
+
+winrt::Windows::UI::Xaml::Documents::Paragraph TerminalLogView::CreateParagraphForAnsiLine(const std::wstring& line) const {
+    using namespace winrt::Windows::UI::Xaml::Documents;
+
+    Paragraph paragraph;
+    auto currentBrush = defaultBrush_;
+    std::wstring currentText;
+
+    auto flushText = [&]() {
+        if (!currentText.empty()) {
+            Run run;
+            run.Text(currentText);
+            run.Foreground(currentBrush);
+            paragraph.Inlines().Append(run);
+            currentText.clear();
+        }
+    };
+
+    std::size_t i = 0;
+    while (i < line.length()) {
+        if (line[i] == L'\x1b' && i + 1 < line.length() && line[i + 1] == L'[') {
+            flushText();
+
+            i += 2;
+            std::wstring code;
+
+            while (i < line.length() && line[i] != L'm') {
+                code += line[i];
+                ++i;
+            }
+            if (i < line.length() && line[i] == L'm') {
+                ++i;
+            }
+
+            currentBrush = BrushForAnsiCode(code);
+        } else {
+            currentText += line[i];
+            ++i;
+        }
+    }
+
+    flushText();
+    return paragraph;
+}
+
+winrt::Windows::UI::Xaml::Media::Brush TerminalLogView::BrushForAnsiCode(const std::wstring& code) const {
+    if (code == L"0") return defaultBrush_;
+    if (code == L"90") return grayBrush_;
+    if (code == L"36") return cyanBrush_;
+    if (code == L"1;32") return greenBrush_;
+    if (code == L"1;33") return yellowBrush_;
+    if (code == L"1;31") return redBrush_;
+    return defaultBrush_;
+}
+
+void TerminalLogView::TrimOldLines() {
+    auto blocks = richTextBlock_.Blocks();
+    while (blocks.Size() > kMaxTerminalLogLines) {
+        blocks.RemoveAt(0);
+    }
+}
+
+void TerminalLogView::ScrollToBottom() {
+    scrollViewer_.UpdateLayout();
+    scrollViewer_.ChangeView(nullptr, scrollViewer_.ScrollableHeight(), nullptr);
+}
