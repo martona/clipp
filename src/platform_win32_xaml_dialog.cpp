@@ -69,11 +69,15 @@ std::wstring g_createError;
 winrt::Windows::UI::Xaml::Controls::Button g_changeBtn{ nullptr };
 winrt::Windows::UI::Xaml::Controls::PasswordBox g_passwordField{ nullptr };
 winrt::Windows::UI::Xaml::Controls::TextBlock g_readOnlyText{ nullptr };
-winrt::Windows::UI::Xaml::Controls::TextBlock g_hashDisplay{ nullptr };
+//winrt::Windows::UI::Xaml::Controls::TextBlock g_hashDisplay{ nullptr };
 winrt::Windows::UI::Xaml::Controls::TextBox g_peerDisplayTextBox{ nullptr };
 winrt::Windows::System::DispatcherQueue g_uiDispatcher{ nullptr };
 std::unique_ptr<TerminalLogView> g_terminalLogView;
 std::mutex g_terminalLogViewMutex;
+winrt::Windows::UI::Xaml::Controls::StackPanel g_passwordStatusPanel{ nullptr };
+winrt::Windows::UI::Xaml::Controls::TextBlock g_passwordHashText{ nullptr };
+winrt::Windows::UI::Xaml::Controls::StackPanel g_passwordInfoPanel{ nullptr };
+winrt::Windows::UI::Xaml::Controls::TextBlock g_passwordInfoText{ nullptr };
 
 KeyDerivationWorker g_keyDerivationWorker;
 UINT g_msgDerivedKey = RegisterWindowMessageW(L"ClippDerivedKeyNotification");
@@ -194,37 +198,67 @@ void PeerDisplay_EndNotifications() {
 
 void PasswordFields_Setup() {
     using namespace winrt::Windows::UI::Xaml;
-    using namespace winrt::Windows::UI::Xaml::Controls;
-	std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
+    std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
     bool haveNetworkKey = false;
-	if (g_keyManager.GetNetworkKey(networkKey)) {
-		haveNetworkKey = true;
+
+    if (g_keyManager.GetNetworkKey(networkKey)) {
+        haveNetworkKey = true;
         sodium_memzero(networkKey.data(), networkKey.size());
     }
+
     if (haveNetworkKey) {
         g_readOnlyText.Text(L"••••••••••••••••");
         g_passwordField.Visibility(Visibility::Collapsed);
         g_readOnlyText.Visibility(Visibility::Visible);
         g_changeBtn.Content(winrt::box_value(L"Change"));
-        g_hashDisplay.Text(L"SHA256 of Argon2id: " + g_keyManager.GetNetworkKeyHash());
+
+        if (g_passwordStatusPanel) {
+            g_passwordHashText.Text(g_keyManager.GetNetworkKeyHash());
+            g_passwordStatusPanel.Visibility(Visibility::Visible);
+            g_passwordInfoPanel.Visibility(Visibility::Collapsed);
+        }
     } else {
         g_passwordField.Visibility(Visibility::Visible);
         g_readOnlyText.Visibility(Visibility::Collapsed);
-		g_passwordField.Password(L"");
+        g_passwordField.Password(L"");
         g_changeBtn.Content(winrt::box_value(L"Cancel"));
-        g_hashDisplay.Text(L"Please enter a password to derive the network key from.");
+
+        if (g_passwordStatusPanel) {
+            g_passwordInfoText.Text(L"Enter network password to create or join a network.");
+            g_passwordStatusPanel.Visibility(Visibility::Collapsed);
+            g_passwordInfoPanel.Visibility(Visibility::Visible);
+        }
+    }
+}
+
+void PasswordFields_NewHashReceived() {
+    using namespace winrt::Windows::UI::Xaml;
+    std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
+    bool haveNetworkKey = false;
+    if (g_keyManager.GetNetworkKey(networkKey)) {
+        sodium_memzero(networkKey.data(), networkKey.size());
+        if (g_passwordStatusPanel) {
+            g_passwordHashText.Text(g_keyManager.GetNetworkKeyHash());
+            g_passwordStatusPanel.Visibility(Visibility::Visible);
+            g_passwordInfoPanel.Visibility(Visibility::Collapsed);
+        }
     }
 }
 
 void PasswordFields_BeginEdit() {
     using namespace winrt::Windows::UI::Xaml;
-    using namespace winrt::Windows::UI::Xaml::Controls;
     g_readOnlyText.Visibility(Visibility::Collapsed);
     g_changeBtn.Content(winrt::box_value(L"Cancel"));
     g_passwordField.Password(L"••••••••••••••••");
     g_passwordField.Visibility(Visibility::Visible);
     g_passwordField.Focus(FocusState::Programmatic);
     g_passwordField.SelectAll();
+
+    if (g_passwordStatusPanel) {
+        g_passwordInfoText.Text(L"Enter network password to create or join a network.");
+        g_passwordStatusPanel.Visibility(Visibility::Collapsed);
+        g_passwordInfoPanel.Visibility(Visibility::Visible);
+    }
 }
 
 void PasswordFields_CancelEdit() {
@@ -238,10 +272,20 @@ void PasswordFields_CancelEdit() {
 }
 
 void PasswordFields_ApplyEdit() {
-    using namespace winrt::Windows::UI::Xaml;
-    using namespace winrt::Windows::UI::Xaml::Controls;
-    g_hashDisplay.Text(L"... working ...");
-    std::string newPassword = winrt::to_string(g_passwordField.Password());
+    winrt::hstring pwd = g_passwordField.Password();
+
+    if (pwd.size() < 8) {
+        if (g_passwordInfoText) {
+            g_passwordInfoText.Text(L"Password must be at least 8 characters.");
+        }
+        return; // Reject and wait for user to keep typing
+    }
+
+    if (g_passwordInfoText) {
+        g_passwordInfoText.Text(L"... working ...");
+    }
+
+    std::string newPassword = winrt::to_string(pwd);
     g_keyDerivationWorker.RequestKeyDerivation(newPassword);
     sodium_memzero(newPassword.data(), newPassword.capacity());
     g_ignoreDerivedKeys = false;
@@ -512,72 +556,152 @@ winrt::Windows::UI::Xaml::Controls::Grid BuildPlaceholderContent() {
     intro.TextWrapping(TextWrapping::WrapWholeWords);
     content.Children().Append(intro);
 
-    // the Read-Only Text
+
+    // --- 1. Password Header ---
+    TextBlock passwordHeader;
+    passwordHeader.Text(L"Network");
+    passwordHeader.FontSize(16);
+    passwordHeader.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+
     TextBlock passwordLabel;
-	passwordLabel.Text(L"Password: ");
+    passwordLabel.Text(L"Network secret");
     passwordLabel.VerticalAlignment(VerticalAlignment::Center);
 
-	g_readOnlyText = TextBlock();
+    g_readOnlyText = TextBlock();
     g_readOnlyText.VerticalAlignment(VerticalAlignment::Center);
 
-    // Editable Input (Hidden by default)
+    // Editable Input
     winrt::Windows::UI::Xaml::DispatcherTimer debounceTimer;
     debounceTimer.Interval(std::chrono::milliseconds(500));
     debounceTimer.Tick([=](winrt::Windows::Foundation::IInspectable const&, winrt::Windows::Foundation::IInspectable const&) {
         debounceTimer.Stop();
-		PasswordFields_ApplyEdit();
+        PasswordFields_ApplyEdit();
         });
 
-	g_passwordField = PasswordBox();
+    g_passwordField = PasswordBox();
     g_passwordField.VerticalAlignment(VerticalAlignment::Center);
     g_passwordField.Visibility(Visibility::Collapsed);
     g_passwordField.MinWidth(200);
     g_passwordField.KeyDown([](auto&& sender, winrt::Windows::UI::Xaml::Input::KeyRoutedEventArgs const& e) {
-            if (e.Key() == winrt::Windows::System::VirtualKey::Escape) {
-                PasswordFields_CancelEdit();
-                e.Handled(true);
-            }
+        if (e.Key() == winrt::Windows::System::VirtualKey::Escape) {
+            PasswordFields_CancelEdit();
+            e.Handled(true);
+        }
         });
     g_passwordField.PasswordChanged([=](winrt::Windows::Foundation::IInspectable const&, winrt::Windows::UI::Xaml::RoutedEventArgs const&) {
-            debounceTimer.Stop();
-            debounceTimer.Start();
+        debounceTimer.Stop();
+        debounceTimer.Start();
         });
 
     // The Action Button
     g_changeBtn = Button();
     g_changeBtn.Content(winrt::box_value(L"Change"));
     g_changeBtn.VerticalAlignment(VerticalAlignment::Center);
+    g_changeBtn.HorizontalAlignment(HorizontalAlignment::Right); // Right aligned!
 
-    // The Event Handler
     g_changeBtn.Click([=](winrt::Windows::Foundation::IInspectable const&, RoutedEventArgs const&) {
-            if (g_passwordField.Visibility() == Visibility::Visible) {
-                PasswordFields_CancelEdit();
-		    } else {
-			    PasswordFields_BeginEdit();
-		    }
+        if (g_passwordField.Visibility() == Visibility::Visible) {
+            PasswordFields_CancelEdit();
+        }
+        else {
+            PasswordFields_BeginEdit();
+        }
         });
 
-    g_hashDisplay = TextBlock();
-    g_hashDisplay.Text(L"Argon2id");
-    g_hashDisplay.VerticalAlignment(VerticalAlignment::Center);
-    g_hashDisplay.Visibility(Visibility::Visible);
+    // --- 2. Input Row Grid ---
+    Grid inputGrid;
+    inputGrid.CornerRadius(CornerRadius{ 4 });
+    inputGrid.BorderThickness(ThicknessHelper::FromLengths(1, 1, 1, 1));
+    inputGrid.BorderBrush(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(50, 150, 150, 150)));
+    inputGrid.Padding(ThicknessHelper::FromLengths(16, 12, 16, 12));
+    ColumnDefinition col1, col2;
+    col1.Width(GridLength{ 1, GridUnitType::Star });
+    col2.Width(GridLength{ 1, GridUnitType::Auto });
+    inputGrid.ColumnDefinitions().Append(col1);
+    inputGrid.ColumnDefinitions().Append(col2);
 
-    // Create the containers
-    StackPanel container, outerContainer;
+    StackPanel inputLeft;
+    inputLeft.Orientation(Orientation::Horizontal);
+    inputLeft.Spacing(10);
+    inputLeft.VerticalAlignment(VerticalAlignment::Center);
+    inputLeft.Children().Append(passwordLabel);
+    inputLeft.Children().Append(g_readOnlyText);
+    inputLeft.Children().Append(g_passwordField);
+
+    Grid::SetColumn(inputLeft, 0);
+    Grid::SetColumn(g_changeBtn, 1);
+    inputGrid.Children().Append(inputLeft);
+    inputGrid.Children().Append(g_changeBtn);
+
+    // --- 3. Status Panel (Key Icon, Bold Hash, Explainer) ---
+    g_passwordStatusPanel = StackPanel();
+    g_passwordStatusPanel.CornerRadius(CornerRadius{ 4 });
+    g_passwordStatusPanel.BorderThickness(ThicknessHelper::FromLengths(1, 1, 1, 1));
+    g_passwordStatusPanel.BorderBrush(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(50, 150, 150, 150)));
+    g_passwordStatusPanel.Padding(ThicknessHelper::FromLengths(16, 12, 16, 12));
+    g_passwordStatusPanel.Orientation(Orientation::Horizontal);
+    g_passwordStatusPanel.Spacing(12);
+
+    FontIcon keyIcon;
+    keyIcon.FontFamily(Media::FontFamily(L"Segoe MDL2 Assets"));
+    keyIcon.Glyph(L"\xE8D7"); // Key icon
+    keyIcon.FontSize(18);
+    keyIcon.VerticalAlignment(VerticalAlignment::Center);
+
+    StackPanel statusTextStack;
+    statusTextStack.Orientation(Orientation::Vertical);
+    statusTextStack.Spacing(2);
+    statusTextStack.VerticalAlignment(VerticalAlignment::Center);
+
+    g_passwordHashText = TextBlock();
+    g_passwordHashText.FontWeight(winrt::Windows::UI::Text::FontWeights::Bold());
+    g_passwordHashText.TextWrapping(TextWrapping::Wrap);
+
+    TextBlock hashExplainer;
+    hashExplainer.Text(L"Not your actual network key; this is the SHA256 of Argon2id. Used only on this screen.");
+    hashExplainer.Opacity(0.6); // Muted/darker text style
+    hashExplainer.TextWrapping(TextWrapping::Wrap);
+
+    statusTextStack.Children().Append(g_passwordHashText);
+    statusTextStack.Children().Append(hashExplainer);
+
+    g_passwordStatusPanel.Children().Append(keyIcon);
+    g_passwordStatusPanel.Children().Append(statusTextStack);
+
+    // --- 4. Info Panel (Info Icon, Notification Text) ---
+    g_passwordInfoPanel = StackPanel();
+    g_passwordInfoPanel.CornerRadius(CornerRadius{ 4 });
+    g_passwordInfoPanel.BorderThickness(ThicknessHelper::FromLengths(1, 1, 1, 1));
+    g_passwordInfoPanel.BorderBrush(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(50, 150, 150, 150)));
+    g_passwordInfoPanel.Padding(ThicknessHelper::FromLengths(16, 12, 16, 12));
+    g_passwordInfoPanel.Orientation(Orientation::Horizontal);
+    g_passwordInfoPanel.Spacing(12);
+
+    FontIcon infoIcon;
+    infoIcon.FontFamily(Media::FontFamily(L"Segoe MDL2 Assets"));
+    infoIcon.Glyph(L"\xE946"); // Info icon
+    infoIcon.FontSize(18);
+    infoIcon.VerticalAlignment(VerticalAlignment::Center);
+
+    g_passwordInfoText = TextBlock();
+    g_passwordInfoText.VerticalAlignment(VerticalAlignment::Center);
+
+    g_passwordInfoPanel.Children().Append(infoIcon);
+    g_passwordInfoPanel.Children().Append(g_passwordInfoText);
+
+    // --- Container Assembly ---
+    StackPanel outerContainer;
     outerContainer.Orientation(Orientation::Vertical);
     outerContainer.Spacing(10);
-    container.Orientation(Orientation::Horizontal);
-    container.Spacing(10);
 
-    container.Children().Append(passwordLabel);
-    container.Children().Append(g_readOnlyText);
-    container.Children().Append(g_passwordField);
-    container.Children().Append(g_changeBtn);
-	outerContainer.Children().Append(container);
-    outerContainer.Children().Append(g_hashDisplay);
+    outerContainer.Children().Append(passwordHeader);
+    outerContainer.Children().Append(inputGrid);
+    outerContainer.Children().Append(g_passwordStatusPanel);
+    outerContainer.Children().Append(g_passwordInfoPanel);
 
     TextBlock peerDisplayLabel;
-    peerDisplayLabel.Text(L"Peers:");
+    peerDisplayLabel.Text(L"Peers");
+    peerDisplayLabel.FontSize(16);
     peerDisplayLabel.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
     outerContainer.Children().Append(peerDisplayLabel);
 
@@ -869,10 +993,17 @@ LRESULT CALLBACK MainDialogWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         if (msg == g_msgDerivedKey) {
             if (!g_ignoreDerivedKeys) {
                 KeyDerivationWorker::KeyDerivationResult* result = reinterpret_cast<KeyDerivationWorker::KeyDerivationResult*>(wParam);
-                g_hashDisplay.Text(L"SHA256 of Argon2id: " + result->derivedKeyHash);
-				g_keyManager.SetNetworkKey(result->derivedKey);
-				MDNSNotifyNetworkKeyChange();
-				g_peerManager.ClearPeers();
+
+                g_keyManager.SetNetworkKey(result->derivedKey);
+                MDNSNotifyNetworkKeyChange();
+                g_peerManager.ClearPeers();
+
+                // Refresh the UI safely to show the status panel and hide the info panel
+                if (g_uiDispatcher) {
+                    g_uiDispatcher.TryEnqueue([]() {
+                        PasswordFields_NewHashReceived();
+                        });
+                }
             }
             return 0;
 		}
