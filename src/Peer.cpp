@@ -300,7 +300,7 @@ void Peer::ThreadProcRecv() {
 			hostName_ = Utf8ToWideString(remoteHostNameUtf8);
 		}
 		if (verifiedCallback_) {
-			verifiedCallback_(Utf8ToWideString(remoteHostNameUtf8), remoteHostId, connType_);
+			verifiedCallback_(Utf8ToWideString(remoteHostNameUtf8), remoteHostId, connType_, createdAt_);
 			displayRegistered_.store(true);
 		}
 

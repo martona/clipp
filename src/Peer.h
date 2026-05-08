@@ -28,7 +28,7 @@ public:
 	ConnType connType_;
 
 	using ClipboardReceivedCallback = std::function<void(const std::wstring&, const std::array<unsigned char, 32>&, ClipboardPayload&)>;
-	using VerifiedCallback = std::function<void(const std::wstring&, const std::array<unsigned char, 32>&, ConnType)>;
+	using VerifiedCallback = std::function<void(const std::wstring&, const std::array<unsigned char, 32>&, ConnType, std::chrono::steady_clock::time_point)>;
 	using TrafficCallback = std::function<void(const std::wstring&, const std::array<unsigned char, 32>&, uint64_t, uint64_t)>;
 
 	// peers we're connecting to

@@ -35,7 +35,7 @@ void PeerManager::AddPeer(const wchar_t* hostName, const unsigned char* hostID, 
 			g_peerDisplay.NotifyPeerBytes(hostName, hostID, bytesSent, bytesReceived);
 		});
 	peer->MarkDisplayRegistered();
-	g_peerDisplay.NotifyPeer(peer->hostName(), peer->hostID(), peer->connType_);
+	g_peerDisplay.NotifyPeer(peer->hostName(), peer->hostID(), peer->connType_, peer->createdAt());
 	peer->Start();
 	peers_.emplace_back(std::move(peer));
 	g_logger.log(__FUNCTION__, Logger::Level::Debug, L"PeerManager: added new peer (outgoing).");
@@ -43,8 +43,8 @@ void PeerManager::AddPeer(const wchar_t* hostName, const unsigned char* hostID, 
 
 void PeerManager::AddPeer(SOCKET socket, Peer::ClipboardReceivedCallback clipboardReceivedCallback) {
 	auto peer = std::make_unique<Peer>(socket, std::move(clipboardReceivedCallback),
-		[](const std::wstring& hostName, const std::array<unsigned char, 32>& hostID, Peer::ConnType connType) {
-			g_peerDisplay.NotifyPeer(hostName, hostID, connType);
+		[](const std::wstring& hostName, const std::array<unsigned char, 32>& hostID, Peer::ConnType connType, std::chrono::steady_clock::time_point connectedSince) {
+			g_peerDisplay.NotifyPeer(hostName, hostID, connType, connectedSince);
 		},
 		[](const std::wstring& hostName, const std::array<unsigned char, 32>& hostID, uint64_t bytesSent, uint64_t bytesReceived) {
 			g_peerDisplay.NotifyPeerBytes(hostName, hostID, bytesSent, bytesReceived);

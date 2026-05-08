@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -18,6 +19,7 @@ struct PeerDisplayItem {
 	bool hasOutgoingConnection{ false };
 	uint64_t bytesSent{};
 	uint64_t bytesReceived{};
+	std::chrono::steady_clock::time_point connectedSince{};
 };
 
 struct PeerDisplayUpdate {
@@ -39,7 +41,7 @@ class PeerDisplay {
 public:
 	using Watcher = std::function<void(const PeerDisplayUpdate&, void*)>;
 
-	void NotifyPeer(const std::wstring& hostName, const std::array<unsigned char, 32>& hostID, Peer::ConnType connType);
+	void NotifyPeer(const std::wstring& hostName, const std::array<unsigned char, 32>& hostID, Peer::ConnType connType, std::chrono::steady_clock::time_point connectedSince);
 	void NotifyPeerRemoved(const std::wstring& hostName, const std::array<unsigned char, 32>& hostID, Peer::ConnType connType);
 	void NotifyPeerBytes(const std::wstring& hostName, const std::array<unsigned char, 32>& hostID, uint64_t bytesSent, uint64_t bytesReceived);
 	std::vector<PeerDisplayItem> Query() const;

@@ -23,7 +23,7 @@ std::vector<PeerDisplayItem> PeerDisplay::SnapshotLocked() const {
 	return snapshot;
 }
 
-void PeerDisplay::NotifyPeer(const std::wstring& hostName, const std::array<unsigned char, 32>& hostID, Peer::ConnType connType) {
+void PeerDisplay::NotifyPeer(const std::wstring& hostName, const std::array<unsigned char, 32>& hostID, Peer::ConnType connType, std::chrono::steady_clock::time_point connectedSince) {
 	PeerDisplayUpdate update;
 	std::vector<WatcherRegistration> watchers;
 
@@ -50,6 +50,9 @@ void PeerDisplay::NotifyPeer(const std::wstring& hostName, const std::array<unsi
 		}
 		found->item.hasIncomingConnection = found->incomingConnectionCount > 0;
 		found->item.hasOutgoingConnection = found->outgoingConnectionCount > 0;
+		if (found->item.connectedSince == std::chrono::steady_clock::time_point{} || connectedSince < found->item.connectedSince) {
+			found->item.connectedSince = connectedSince;
+		}
 
 		update.type = PeerDisplayUpdate::Type::Updated;
 		update.item = found->item;
@@ -101,6 +104,7 @@ void PeerDisplay::NotifyPeerRemoved(const std::wstring& hostName, const std::arr
 			update.item = found->item;
 			update.item.hasIncomingConnection = false;
 			update.item.hasOutgoingConnection = false;
+			update.item.connectedSince = std::chrono::steady_clock::time_point{};
 			entries_.erase(found);
 		}
 
