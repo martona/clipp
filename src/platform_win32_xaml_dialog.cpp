@@ -66,10 +66,8 @@ HWND g_dialogWindow = nullptr;
 winrt::Windows::UI::Xaml::Hosting::WindowsXamlManager g_xamlManager{ nullptr };
 std::wstring g_createError;
 
-winrt::Windows::UI::Xaml::Controls::Button g_changeBtn{ nullptr };
+winrt::Windows::UI::Xaml::Controls::TextBox g_networkNameField{ nullptr };
 winrt::Windows::UI::Xaml::Controls::PasswordBox g_passwordField{ nullptr };
-winrt::Windows::UI::Xaml::Controls::TextBlock g_readOnlyText{ nullptr };
-//winrt::Windows::UI::Xaml::Controls::TextBlock g_hashDisplay{ nullptr };
 winrt::Windows::UI::Xaml::Controls::TextBox g_peerDisplayTextBox{ nullptr };
 winrt::Windows::System::DispatcherQueue g_uiDispatcher{ nullptr };
 std::unique_ptr<TerminalLogView> g_terminalLogView;
@@ -207,27 +205,16 @@ void PasswordFields_Setup() {
     }
 
     if (haveNetworkKey) {
-        g_readOnlyText.Text(L"••••••••••••••••");
-        g_passwordField.Visibility(Visibility::Collapsed);
-        g_readOnlyText.Visibility(Visibility::Visible);
-        g_changeBtn.Content(winrt::box_value(L"Change"));
-
-        if (g_passwordStatusPanel) {
-            g_passwordHashText.Text(g_keyManager.GetNetworkKeyHash());
-            g_passwordStatusPanel.Visibility(Visibility::Visible);
-            g_passwordInfoPanel.Visibility(Visibility::Collapsed);
-        }
+        g_passwordField.Password(L"••••••••••••••••");
+        g_passwordHashText.Text(g_keyManager.GetNetworkKeyHash());
+        g_passwordStatusPanel.Visibility(Visibility::Visible);
+        g_passwordInfoPanel.Visibility(Visibility::Collapsed);
     } else {
-        g_passwordField.Visibility(Visibility::Visible);
-        g_readOnlyText.Visibility(Visibility::Collapsed);
         g_passwordField.Password(L"");
-        g_changeBtn.Content(winrt::box_value(L"Cancel"));
-
-        if (g_passwordStatusPanel) {
-            g_passwordInfoText.Text(L"Enter network password to create or join a network.");
-            g_passwordStatusPanel.Visibility(Visibility::Collapsed);
-            g_passwordInfoPanel.Visibility(Visibility::Visible);
-        }
+        g_passwordInfoText.Text(L"Enter network password to create or join a network.");
+        g_passwordStatusPanel.Visibility(Visibility::Collapsed);
+        g_passwordInfoPanel.Visibility(Visibility::Visible);
+        g_passwordField.Focus(FocusState::Programmatic);
     }
 }
 
@@ -237,28 +224,21 @@ void PasswordFields_NewHashReceived() {
     bool haveNetworkKey = false;
     if (g_keyManager.GetNetworkKey(networkKey)) {
         sodium_memzero(networkKey.data(), networkKey.size());
-        if (g_passwordStatusPanel) {
-            g_passwordHashText.Text(g_keyManager.GetNetworkKeyHash());
-            g_passwordStatusPanel.Visibility(Visibility::Visible);
-            g_passwordInfoPanel.Visibility(Visibility::Collapsed);
-        }
+        g_passwordHashText.Text(g_keyManager.GetNetworkKeyHash());
+        g_passwordStatusPanel.Visibility(Visibility::Visible);
+        g_passwordInfoPanel.Visibility(Visibility::Collapsed);
     }
 }
 
 void PasswordFields_BeginEdit() {
     using namespace winrt::Windows::UI::Xaml;
-    g_readOnlyText.Visibility(Visibility::Collapsed);
-    g_changeBtn.Content(winrt::box_value(L"Cancel"));
-    g_passwordField.Password(L"••••••••••••••••");
     g_passwordField.Visibility(Visibility::Visible);
     g_passwordField.Focus(FocusState::Programmatic);
     g_passwordField.SelectAll();
 
-    if (g_passwordStatusPanel) {
-        g_passwordInfoText.Text(L"Enter network password to create or join a network.");
-        g_passwordStatusPanel.Visibility(Visibility::Collapsed);
-        g_passwordInfoPanel.Visibility(Visibility::Visible);
-    }
+    g_passwordInfoText.Text(L"Enter network password to create or join a network.");
+    g_passwordStatusPanel.Visibility(Visibility::Collapsed);
+    g_passwordInfoPanel.Visibility(Visibility::Visible);
 }
 
 void PasswordFields_CancelEdit() {
@@ -272,18 +252,18 @@ void PasswordFields_CancelEdit() {
 }
 
 void PasswordFields_ApplyEdit() {
+    using namespace winrt::Windows::UI::Xaml;
     winrt::hstring pwd = g_passwordField.Password();
 
+    g_passwordStatusPanel.Visibility(Visibility::Collapsed);
+    g_passwordInfoPanel.Visibility(Visibility::Visible);
+
     if (pwd.size() < 8) {
-        if (g_passwordInfoText) {
-            g_passwordInfoText.Text(L"Password must be at least 8 characters.");
-        }
+        g_passwordInfoText.Text(L"Password must be at least 8 characters.");
         return; // Reject and wait for user to keep typing
     }
 
-    if (g_passwordInfoText) {
-        g_passwordInfoText.Text(L"... working ...");
-    }
+    g_passwordInfoText.Text(L"... working ...");
 
     std::string newPassword = winrt::to_string(pwd);
     g_keyDerivationWorker.RequestKeyDerivation(newPassword);
@@ -563,49 +543,69 @@ winrt::Windows::UI::Xaml::Controls::Grid BuildPlaceholderContent() {
     passwordHeader.FontSize(16);
     passwordHeader.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
 
+    TextBlock networkNameLabel;
+    networkNameLabel.Text(L"Name");
+    networkNameLabel.VerticalAlignment(VerticalAlignment::Center);
+
     TextBlock passwordLabel;
-    passwordLabel.Text(L"Network secret");
+    passwordLabel.Text(L"Secret");
     passwordLabel.VerticalAlignment(VerticalAlignment::Center);
 
-    g_readOnlyText = TextBlock();
-    g_readOnlyText.VerticalAlignment(VerticalAlignment::Center);
+    g_networkNameField = TextBox();
+    g_networkNameField.VerticalAlignment(VerticalAlignment::Center);
+
+    std::string currentName = g_settings.networkName();
+    size_t size_needed = utf8_to_utf16(currentName.c_str(), currentName.length(), nullptr, 0);
+    std::wstring wCurrentName(size_needed, 0);
+    utf8_to_utf16(currentName.c_str(), currentName.length(), &wCurrentName[0], size_needed);
+    g_networkNameField.Text(wCurrentName);
+
+    g_networkNameField.LostFocus([](auto const& sender, auto const&) {
+            auto tb = sender.as<winrt::Windows::UI::Xaml::Controls::TextBox>();
+            std::string newName = winrt::to_string(tb.Text());
+
+            if (newName != g_settings.networkName() && !newName.empty()) {
+                g_settings.set_networkName(newName);
+                auto now = std::chrono::system_clock::now();
+                auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch());
+                g_settings.set_networkNameTimestamp(static_cast<uint64_t>(duration.count()));
+                MDNSNotifyNetworkKeyChange();
+            }
+        });
 
     // Editable Input
     winrt::Windows::UI::Xaml::DispatcherTimer debounceTimer;
     debounceTimer.Interval(std::chrono::milliseconds(500));
-    debounceTimer.Tick([=](winrt::Windows::Foundation::IInspectable const&, winrt::Windows::Foundation::IInspectable const&) {
+    debounceTimer.Stop();
+    debounceTimer.Tick([=](auto const&, auto const&) {
         debounceTimer.Stop();
         PasswordFields_ApplyEdit();
         });
 
     g_passwordField = PasswordBox();
     g_passwordField.VerticalAlignment(VerticalAlignment::Center);
-    g_passwordField.Visibility(Visibility::Collapsed);
     g_passwordField.MinWidth(200);
-    g_passwordField.KeyDown([](auto&& sender, winrt::Windows::UI::Xaml::Input::KeyRoutedEventArgs const& e) {
-        if (e.Key() == winrt::Windows::System::VirtualKey::Escape) {
-            PasswordFields_CancelEdit();
-            e.Handled(true);
-        }
+    g_passwordField.Tag(winrt::box_value(false));
+    g_passwordField.GotFocus([](auto const& sender, auto const&) {
+		    PasswordFields_BeginEdit();
+            g_passwordField.Password(L"");
         });
-    g_passwordField.PasswordChanged([=](winrt::Windows::Foundation::IInspectable const&, winrt::Windows::UI::Xaml::RoutedEventArgs const&) {
-        debounceTimer.Stop();
-        debounceTimer.Start();
+    g_passwordField.LostFocus([](auto const& sender, auto const&) {
+        g_passwordField.Password(L"••••••••••••••••");
         });
-
-    // The Action Button
-    g_changeBtn = Button();
-    g_changeBtn.Content(winrt::box_value(L"Change"));
-    g_changeBtn.VerticalAlignment(VerticalAlignment::Center);
-    g_changeBtn.HorizontalAlignment(HorizontalAlignment::Right); // Right aligned!
-
-    g_changeBtn.Click([=](winrt::Windows::Foundation::IInspectable const&, RoutedEventArgs const&) {
-        if (g_passwordField.Visibility() == Visibility::Visible) {
-            PasswordFields_CancelEdit();
-        }
-        else {
-            PasswordFields_BeginEdit();
-        }
+    g_passwordField.KeyDown([](auto const& sender, auto const& e) {
+            if (e.Key() == winrt::Windows::System::VirtualKey::Escape) {
+                PasswordFields_CancelEdit();
+                e.Handled(true);
+                g_peerDisplayTextBox.Focus(winrt::Windows::UI::Xaml::FocusState::Programmatic);
+            }
+        });
+    g_passwordField.PasswordChanged([=](auto const& sender, auto const&) {
+            debounceTimer.Stop();
+            if (g_passwordField.Password() != L"" &&
+                g_passwordField.Password() != L"••••••••••••••••") {
+                debounceTimer.Start();
+            }
         });
 
     // --- 2. Input Row Grid ---
@@ -614,24 +614,38 @@ winrt::Windows::UI::Xaml::Controls::Grid BuildPlaceholderContent() {
     inputGrid.BorderThickness(ThicknessHelper::FromLengths(1, 1, 1, 1));
     inputGrid.BorderBrush(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(50, 150, 150, 150)));
     inputGrid.Padding(ThicknessHelper::FromLengths(16, 12, 16, 12));
+
+    inputGrid.RowSpacing(12);
+    inputGrid.ColumnSpacing(16);
+
     ColumnDefinition col1, col2;
-    col1.Width(GridLength{ 1, GridUnitType::Star });
-    col2.Width(GridLength{ 1, GridUnitType::Auto });
+    col1.Width(GridLength{ 1, GridUnitType::Auto });
+    col2.Width(GridLength{ 1, GridUnitType::Star });
     inputGrid.ColumnDefinitions().Append(col1);
     inputGrid.ColumnDefinitions().Append(col2);
 
-    StackPanel inputLeft;
-    inputLeft.Orientation(Orientation::Horizontal);
-    inputLeft.Spacing(10);
-    inputLeft.VerticalAlignment(VerticalAlignment::Center);
-    inputLeft.Children().Append(passwordLabel);
-    inputLeft.Children().Append(g_readOnlyText);
-    inputLeft.Children().Append(g_passwordField);
+    RowDefinition row1, row2;
+    row1.Height(GridLength{ 1, GridUnitType::Auto });
+    row2.Height(GridLength{ 1, GridUnitType::Auto });
+    inputGrid.RowDefinitions().Append(row1);
+    inputGrid.RowDefinitions().Append(row2);
 
-    Grid::SetColumn(inputLeft, 0);
-    Grid::SetColumn(g_changeBtn, 1);
-    inputGrid.Children().Append(inputLeft);
-    inputGrid.Children().Append(g_changeBtn);
+    // Row 0: Network Name
+    Grid::SetRow(networkNameLabel, 0);
+    Grid::SetColumn(networkNameLabel, 0);
+    Grid::SetRow(g_networkNameField, 0);
+    Grid::SetColumn(g_networkNameField, 1);
+
+    // Row 1: Network Secret
+    Grid::SetRow(passwordLabel, 1);
+    Grid::SetColumn(passwordLabel, 0);
+    Grid::SetRow(g_passwordField, 1);
+    Grid::SetColumn(g_passwordField, 1);
+
+    inputGrid.Children().Append(networkNameLabel);
+    inputGrid.Children().Append(g_networkNameField);
+    inputGrid.Children().Append(passwordLabel);
+    inputGrid.Children().Append(g_passwordField);
 
     // --- 3. Status Panel (Key Icon, Bold Hash, Explainer) ---
     g_passwordStatusPanel = StackPanel();
@@ -933,6 +947,12 @@ LRESULT CALLBACK MainDialogWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         if (wParam) {
             PeerDisplay_BeginNotifications(hwnd);
             g_logger.AddLogReflector(LogReflectorCallback);
+            if (g_uiDispatcher) {
+                g_uiDispatcher.TryEnqueue([]() {
+                        PasswordFields_Setup();
+                    });
+            }
+            g_lastKnownNetworkKeyEmpty = !g_keyManager.GetNetworkKey(g_lastKnownNetworkKey);
         } else {
             PeerDisplay_EndNotifications();
             g_logger.RemoveLogReflector(LogReflectorCallback);
@@ -954,18 +974,6 @@ LRESULT CALLBACK MainDialogWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         minMaxInfo->ptMinTrackSize.y = minWindowRect.bottom - minWindowRect.top;
         return 0;
     }
-
-    case WM_ACTIVATE:
-        if (wParam != WA_INACTIVE) {
-            SetForegroundWindow(hwnd);
-            if (g_uiDispatcher) {
-                g_uiDispatcher.TryEnqueue([]() {
-                    PasswordFields_Setup();
-                });
-            }
-            g_lastKnownNetworkKeyEmpty = !g_keyManager.GetNetworkKey(g_lastKnownNetworkKey);
-        }
-		return 0;
 
     case WM_CLOSE:
         ShowWindow(hwnd, SW_HIDE);
