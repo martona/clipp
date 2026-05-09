@@ -43,10 +43,6 @@ SettingsPage::SettingsPage()
     : PlaceholderPage(L"Settings", L"Settings controls will be added here in a future update.") {
 }
 
-LogsPage::LogsPage()
-    : PlaceholderPage(L"Logs", L"Detailed log viewing and filtering will be added here in a future update.") {
-}
-
 AboutPage::AboutPage()
     : PlaceholderPage(L"About", L"About Clipp details, version information, and credits will be added here in a future update.") {
 }

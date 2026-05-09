@@ -17,11 +17,6 @@ public:
     SettingsPage();
 };
 
-class LogsPage : public PlaceholderPage {
-public:
-    LogsPage();
-};
-
 class AboutPage : public PlaceholderPage {
 public:
     AboutPage();

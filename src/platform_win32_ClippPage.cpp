@@ -21,7 +21,6 @@ extern Logger g_logger;
 
 namespace {
 constexpr wchar_t kMaskedPassword[] = L"••••••••••••••••";
-ClippPage* g_logReflectorTarget = nullptr;
 }
 
 ClippPage::ClippPage(HWND notificationTarget, UINT derivedKeyMessage, UINT peerDisplayUpdateMessage, PeerDisplay& peerDisplay, PeerManager& peerManager)
@@ -73,8 +72,6 @@ void ClippPage::BuildView() {
     networkView_ = std::make_unique<NetworkView>(peerDisplay_);
     content.Children().Append(networkView_->View());
     PollNetworkView();
-
-    content.Children().Append(CreateTerminalLikeScrollViewer());
 
     ScrollViewer mainScroll;
     mainScroll.HorizontalAlignment(HorizontalAlignment::Stretch);
@@ -269,26 +266,9 @@ void ClippPage::BuildNetworkSecretSection(winrt::Windows::UI::Xaml::Controls::St
     SetupPasswordFields();
 }
 
-winrt::Windows::UI::Xaml::Controls::ScrollViewer ClippPage::CreateTerminalLikeScrollViewer() {
-    auto terminalLogView = std::make_unique<TerminalLogView>();
-    auto view = terminalLogView->View();
-
-    {
-        std::lock_guard<std::mutex> lock(terminalLogViewMutex_);
-        terminalLogView_ = std::move(terminalLogView);
-    }
-
-    return view;
-}
-
 void ClippPage::OnShown() {
     BeginPeerNotifications();
     StartNetworkPollTimer();
-    if (!logReflectorRegistered_) {
-        g_logReflectorTarget = this;
-        g_logger.AddLogReflector(LogReflectorCallback);
-        logReflectorRegistered_ = true;
-    }
     if (uiDispatcher_) {
         uiDispatcher_.TryEnqueue([this]() {
             SetupPasswordFields();
@@ -299,21 +279,10 @@ void ClippPage::OnShown() {
 void ClippPage::OnHidden() {
     EndPeerNotifications();
     StopNetworkPollTimer();
-    if (logReflectorRegistered_) {
-        g_logger.RemoveLogReflector(LogReflectorCallback);
-        if (g_logReflectorTarget == this) {
-            g_logReflectorTarget = nullptr;
-        }
-        logReflectorRegistered_ = false;
-    }
 }
 
 void ClippPage::OnDestroy() {
     OnHidden();
-    {
-        std::lock_guard<std::mutex> lock(terminalLogViewMutex_);
-        terminalLogView_.reset();
-    }
     networkView_.reset();
     networkPollTimer_ = nullptr;
 }
@@ -413,28 +382,9 @@ void ClippPage::NewPasswordHashReceived() {
     }
 }
 
-void ClippPage::ReflectLogLine(const std::wstring& line) {
-    if (!uiDispatcher_) {
-        return;
-    }
-
-    uiDispatcher_.TryEnqueue([this, line]() {
-        std::lock_guard<std::mutex> lock(terminalLogViewMutex_);
-        if (terminalLogView_) {
-            terminalLogView_->AppendAnsiLogText(line);
-        }
-    });
-}
-
 void ClippPage::PeerDisplayWatcher(const PeerDisplayUpdate&, void* userData) {
     auto* page = reinterpret_cast<ClippPage*>(userData);
     if (page && page->notificationTarget_ && IsWindow(page->notificationTarget_)) {
         PostMessageW(page->notificationTarget_, page->peerDisplayUpdateMessage_, 0, 0);
-    }
-}
-
-void ClippPage::LogReflectorCallback(const std::wstring& line) {
-    if (g_logReflectorTarget) {
-        g_logReflectorTarget->ReflectLogLine(line);
     }
 }

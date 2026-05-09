@@ -8,10 +8,7 @@
 #include <winrt/Windows.UI.Xaml.Documents.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
 
-// this should be 1000 (or a lot more) but RichTextBlock is incredibly
-// memory hungry and slow. there's just not much to be done about it - 
-// this stays but i hate it.
-static constexpr uint32_t kMaxTerminalLogLines = 10;
+static constexpr uint32_t kMaxTerminalLogLines = 5000;
 
 TerminalLogView::TerminalLogView() {
     using namespace winrt::Windows::UI::Xaml;

@@ -192,6 +192,7 @@
     <ClCompile Include="platform_win32_NetworkView.cpp" />
     <ClCompile Include="platform_win32_TerminalLogView.cpp" />
     <ClCompile Include="platform_win32_ClippPage.cpp" />
+    <ClCompile Include="platform_win32_LogsPage.cpp" />
     <ClCompile Include="platform_win32_PlaceholderPage.cpp" />
     <ClCompile Include="platform_win32_tray.cpp" />
     <ClCompile Include="platform_win32_xaml_dialog.cpp" />
@@ -208,6 +209,7 @@
     <ClInclude Include="platform_win32_NetworkView.h" />
     <ClInclude Include="platform_win32_TerminalLogView.h" />
     <ClInclude Include="platform_win32_ClippPage.h" />
+    <ClInclude Include="platform_win32_LogsPage.h" />
     <ClInclude Include="platform_win32_PlaceholderPage.h" />
     <ClInclude Include="platform_win32_xaml_dialog.h" />
     <ClInclude Include="MDNSThread.h" />

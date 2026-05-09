@@ -3,6 +3,7 @@
 #include "PeerManager.h"
 #include "clipp-win32-darkmode32/DMSubclass.h"
 #include "platform_win32_ClippPage.h"
+#include "platform_win32_LogsPage.h"
 #include "platform_win32_PlaceholderPage.h"
 
 #include <algorithm>
@@ -228,11 +229,19 @@ private:
             return 0;
 
         case WM_SHOWWINDOW:
-            if (clippPage_) {
-                if (wParam) {
+            if (wParam) {
+                if (clippPage_) {
                     clippPage_->OnShown();
-                } else {
+                }
+                if (logsPage_) {
+                    logsPage_->OnShown();
+                }
+            } else {
+                if (clippPage_) {
                     clippPage_->OnHidden();
+                }
+                if (logsPage_) {
+                    logsPage_->OnHidden();
                 }
             }
             return 0;
@@ -259,6 +268,9 @@ private:
         case WM_DESTROY:
             if (clippPage_) {
                 clippPage_->OnDestroy();
+            }
+            if (logsPage_) {
+                logsPage_->OnDestroy();
             }
             clippPage_.reset();
             settingsPage_.reset();

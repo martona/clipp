@@ -4,10 +4,8 @@
 #include "PeerManager.h"
 #include "platform_win32_KeyDerivationWorker.h"
 #include "platform_win32_NetworkView.h"
-#include "platform_win32_TerminalLogView.h"
 
 #include <memory>
-#include <mutex>
 
 #include <Windows.h>
 #ifdef GetCurrentTime
@@ -37,7 +35,6 @@ public:
 private:
     void BuildView();
     void BuildNetworkSecretSection(winrt::Windows::UI::Xaml::Controls::StackPanel const& content);
-    winrt::Windows::UI::Xaml::Controls::ScrollViewer CreateTerminalLikeScrollViewer();
 
     void PollNetworkView();
     void StartNetworkPollTimer();
@@ -46,10 +43,8 @@ private:
     void EndPeerNotifications();
     void SetupPasswordFields();
     void NewPasswordHashReceived();
-    void ReflectLogLine(const std::wstring& line);
 
     static void PeerDisplayWatcher(const PeerDisplayUpdate& update, void* userData);
-    static void LogReflectorCallback(const std::wstring& line);
 
     HWND notificationTarget_ = nullptr;
     UINT derivedKeyMessage_ = 0;
@@ -67,10 +62,7 @@ private:
     winrt::Windows::System::DispatcherQueue uiDispatcher_{ nullptr };
     winrt::Windows::UI::Xaml::DispatcherTimer networkPollTimer_{ nullptr };
 
-    std::unique_ptr<TerminalLogView> terminalLogView_;
     std::unique_ptr<NetworkView> networkView_;
-    std::mutex terminalLogViewMutex_;
     KeyDerivationWorker keyDerivationWorker_;
     std::size_t peerDisplayWatcherID_ = 0;
-    bool logReflectorRegistered_ = false;
 };
