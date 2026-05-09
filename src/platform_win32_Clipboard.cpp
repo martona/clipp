@@ -68,6 +68,36 @@ static uint32_t ReadLe32(const unsigned char* data) {
         (static_cast<uint32_t>(data[3]) << 24);
 }
 
+static bool IsStandard32BppBgra(uint32_t redMask, uint32_t greenMask, uint32_t blueMask, uint32_t alphaMask) {
+    return redMask == 0x00ff0000u
+        && greenMask == 0x0000ff00u
+        && blueMask == 0x000000ffu
+        && (alphaMask == 0u || alphaMask == 0xff000000u);
+}
+
+static void ConvertBgraToRgbaRow(const unsigned char* src, unsigned char* dst, size_t width, bool preserveAlpha) {
+    if (preserveAlpha) {
+        for (size_t x = 0; x < width; ++x) {
+            dst[0] = src[2];
+            dst[1] = src[1];
+            dst[2] = src[0];
+            dst[3] = src[3];
+            src += 4;
+            dst += 4;
+        }
+    }
+    else {
+        for (size_t x = 0; x < width; ++x) {
+            dst[0] = src[2];
+            dst[1] = src[1];
+            dst[2] = src[0];
+            dst[3] = 255;
+            src += 4;
+            dst += 4;
+        }
+    }
+}
+
 static size_t DIBColorTableEntries(const BITMAPINFOHEADER& header) {
     if (header.biClrUsed != 0) return header.biClrUsed;
     if (header.biBitCount <= 8) return size_t{ 1 } << header.biBitCount;
@@ -186,70 +216,71 @@ static bool DIBToPNG(const unsigned char* dibData, size_t dibSize, std::vector<u
     }
     std::vector<unsigned char> rgba(rgbaBytes);
 
-    bool anyAlpha = false;
-    if (bitCount == 32 && alphaMask != 0) {
-        for (size_t y = 0; y < height && !anyAlpha; ++y) {
-            const unsigned char* srcRow = dibData + pixelOffset + y * rowStride;
-            for (size_t x = 0; x < width; ++x) {
-                if (ScaleMaskComponent(ReadLe32(srcRow + x * 4), alphaMask) != 0) {
-                    anyAlpha = true;
-                    break;
-                }
-            }
+    const unsigned char* pixels = dibData + pixelOffset;
+    const bool standard32BppBgra = bitCount == 32 && IsStandard32BppBgra(redMask, greenMask, blueMask, alphaMask);
+    const bool preserveAlpha = header->biCompression == BI_ALPHABITFIELDS && alphaMask != 0;
+
+    if (standard32BppBgra) {
+        for (size_t y = 0; y < height; ++y) {
+            const size_t srcY = bottomUp ? (height - 1u - y) : y;
+            const unsigned char* srcRow = pixels + srcY * rowStride;
+            unsigned char* dst = rgba.data() + (y * width * 4u);
+            ConvertBgraToRgbaRow(srcRow, dst, width, preserveAlpha);
         }
     }
+    else {
+        for (size_t y = 0; y < height; ++y) {
+            const size_t srcY = bottomUp ? (height - 1u - y) : y;
+            const unsigned char* srcRow = pixels + srcY * rowStride;
+            unsigned char* dst = rgba.data() + (y * width * 4u);
 
-    for (size_t y = 0; y < height; ++y) {
-        const size_t srcY = bottomUp ? (height - 1u - y) : y;
-        const unsigned char* srcRow = dibData + pixelOffset + srcY * rowStride;
-        unsigned char* dst = rgba.data() + (y * width * 4u);
+            for (size_t x = 0; x < width; ++x) {
+                unsigned char r = 0;
+                unsigned char g = 0;
+                unsigned char b = 0;
+                unsigned char a = 255;
 
-        for (size_t x = 0; x < width; ++x) {
-            unsigned char r = 0;
-            unsigned char g = 0;
-            unsigned char b = 0;
-            unsigned char a = 255;
+                if (bitCount == 24) {
+                    const unsigned char* px = srcRow + x * 3u;
+                    b = px[0];
+                    g = px[1];
+                    r = px[2];
+                }
+                else if (bitCount == 32 || bitCount == 16) {
+                    const uint32_t pixel = bitCount == 32 ? ReadLe32(srcRow + x * 4u) : ReadLe16(srcRow + x * 2u);
+                    r = ScaleMaskComponent(pixel, redMask);
+                    g = ScaleMaskComponent(pixel, greenMask);
+                    b = ScaleMaskComponent(pixel, blueMask);
+                    if (preserveAlpha) a = ScaleMaskComponent(pixel, alphaMask);
+                } else {
+                    uint32_t index = 0;
+                    if (bitCount == 8) {
+                        index = srcRow[x];
+                    }
+                    else if (bitCount == 4) {
+                        const unsigned char packed = srcRow[x / 2u];
+                        index = (x % 2u == 0) ? (packed >> 4) : (packed & 0x0f);
+                    }
+                    else {
+                        const unsigned char packed = srcRow[x / 8u];
+                        index = (packed >> (7u - (x % 8u))) & 0x01;
+                    }
 
-            if (bitCount == 24) {
-                const unsigned char* px = srcRow + x * 3u;
-                b = px[0];
-                g = px[1];
-                r = px[2];
+                    if (index >= paletteEntries) {
+                        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot encode clipboard DIB as PNG: palette index %u exceeds %zu entries", index, paletteEntries);
+                        return false;
+                    }
+                    const unsigned char* entry = palette + index * sizeof(RGBQUAD);
+                    b = entry[0];
+                    g = entry[1];
+                    r = entry[2];
+                }
+
+                dst[x * 4u + 0u] = r;
+                dst[x * 4u + 1u] = g;
+                dst[x * 4u + 2u] = b;
+                dst[x * 4u + 3u] = a;
             }
-            else if (bitCount == 32 || bitCount == 16) {
-                const uint32_t pixel = bitCount == 32 ? ReadLe32(srcRow + x * 4u) : ReadLe16(srcRow + x * 2u);
-                r = ScaleMaskComponent(pixel, redMask);
-                g = ScaleMaskComponent(pixel, greenMask);
-                b = ScaleMaskComponent(pixel, blueMask);
-                if (alphaMask != 0 && anyAlpha) a = ScaleMaskComponent(pixel, alphaMask);
-            } else {
-                uint32_t index = 0;
-                if (bitCount == 8) {
-                    index = srcRow[x];
-                }
-                else if (bitCount == 4) {
-                    const unsigned char packed = srcRow[x / 2u];
-                    index = (x % 2u == 0) ? (packed >> 4) : (packed & 0x0f);
-                }
-                else {
-                    const unsigned char packed = srcRow[x / 8u];
-                    index = (packed >> (7u - (x % 8u))) & 0x01;
-                }
-
-                if (index >= paletteEntries) {
-                    g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot encode clipboard DIB as PNG: palette index %u exceeds %zu entries", index, paletteEntries);
-                    return false;
-                }
-                const unsigned char* entry = palette + index * sizeof(RGBQUAD);
-                b = entry[0];
-                g = entry[1];
-                r = entry[2];
-            }
-
-            dst[x * 4u + 0u] = r;
-            dst[x * 4u + 1u] = g;
-            dst[x * 4u + 2u] = b;
-            dst[x * 4u + 3u] = a;
         }
     }
 
