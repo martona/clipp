@@ -34,13 +34,12 @@ bool CryptoChannel::LoadNetworkKey(std::array<unsigned char, crypto_secretbox_KE
     return true;
 }
 
-bool CryptoChannel::ClientHandshake(SOCKET socket, 
+bool CryptoChannel::ClientHandshake(const SocketIoContext& io,
                                     const std::array<unsigned char, 
                                     HostIdSize>& localHostId, 
                                     const std::string& localHostNameUtf8, 
                                     std::array<unsigned char, HostIdSize>& remoteHostId, 
-                                    std::string& remoteHostNameUtf8,
-                                    const SocketWakeEvent* wakeEvent)
+                                    std::string& remoteHostNameUtf8)
 {
     std::array<unsigned char, crypto_secretbox_KEYBYTES> networkKey{};
     if (!LoadNetworkKey(networkKey)) return false;
@@ -55,10 +54,10 @@ bool CryptoChannel::ClientHandshake(SOCKET socket,
 
     HandshakeFrame tx{}; randombytes_buf(tx.nonce, sizeof(tx.nonce));
     crypto_secretbox_easy(tx.ciphertext, reinterpret_cast<const unsigned char*>(&plain), sizeof(plain), tx.nonce, networkKey.data());
-    if (!SendAll(socket, reinterpret_cast<const char*>(&tx), sizeof(tx), wakeEvent)) return false;
+    if (!SendAll(io, reinterpret_cast<const char*>(&tx), sizeof(tx))) return false;
 
     HandshakeFrame rx{};
-    if (!RecvAll(socket, reinterpret_cast<char*>(&rx), sizeof(rx), wakeEvent)) return false;
+    if (!RecvAll(io, reinterpret_cast<char*>(&rx), sizeof(rx))) return false;
     HandshakePlaintext remotePlain{};
     if (crypto_secretbox_open_easy(reinterpret_cast<unsigned char*>(&remotePlain), rx.ciphertext, sizeof(rx.ciphertext), rx.nonce, networkKey.data()) != 0) return false;
 
@@ -72,24 +71,23 @@ bool CryptoChannel::ClientHandshake(SOCKET socket,
 
     unsigned char txHeader[crypto_secretstream_xchacha20poly1305_HEADERBYTES]{};
     if (crypto_secretstream_xchacha20poly1305_init_push(&txState_, txHeader, txKey) != 0) return false;
-    if (!SendAll(socket, reinterpret_cast<const char*>(txHeader), sizeof(txHeader), wakeEvent)) return false;
+    if (!SendAll(io, reinterpret_cast<const char*>(txHeader), sizeof(txHeader))) return false;
     unsigned char rxHeader[crypto_secretstream_xchacha20poly1305_HEADERBYTES]{};
-    if (!RecvAll(socket, reinterpret_cast<char*>(rxHeader), sizeof(rxHeader), wakeEvent)) return false;
+    if (!RecvAll(io, reinterpret_cast<char*>(rxHeader), sizeof(rxHeader))) return false;
     if (crypto_secretstream_xchacha20poly1305_init_pull(&rxState_, rxHeader, rxKey) != 0) return false;
     return true;
 }
 
-bool CryptoChannel::ServerHandshake(SOCKET socket, 
+bool CryptoChannel::ServerHandshake(const SocketIoContext& io,
                                     std::array<unsigned char, 
                                     HostIdSize>& remoteHostId, 
-                                    std::string& remoteHostNameUtf8,
-                                    const SocketWakeEvent* wakeEvent)
+                                    std::string& remoteHostNameUtf8)
 {
     std::array<unsigned char, crypto_secretbox_KEYBYTES> networkKey{};
     if (!LoadNetworkKey(networkKey)) return false;
 
     HandshakeFrame rx{};
-    if (!RecvAll(socket, reinterpret_cast<char*>(&rx), sizeof(rx), wakeEvent)) return false;
+    if (!RecvAll(io, reinterpret_cast<char*>(&rx), sizeof(rx))) return false;
     HandshakePlaintext remotePlain{};
     if (crypto_secretbox_open_easy(reinterpret_cast<unsigned char*>(&remotePlain), rx.ciphertext, sizeof(rx.ciphertext), rx.nonce, networkKey.data()) != 0) return false;
 
@@ -110,16 +108,16 @@ bool CryptoChannel::ServerHandshake(SOCKET socket,
     strncpys(plain.hostNameUTF8, localHostNameUtf8);
     HandshakeFrame tx{}; randombytes_buf(tx.nonce, sizeof(tx.nonce));
     crypto_secretbox_easy(tx.ciphertext, reinterpret_cast<const unsigned char*>(&plain), sizeof(plain), tx.nonce, networkKey.data());
-    if (!SendAll(socket, reinterpret_cast<const char*>(&tx), sizeof(tx), wakeEvent)) return false;
+    if (!SendAll(io, reinterpret_cast<const char*>(&tx), sizeof(tx))) return false;
 
     unsigned char rxKey[crypto_kx_SESSIONKEYBYTES]{}; unsigned char txKey[crypto_kx_SESSIONKEYBYTES]{};
     if (crypto_kx_server_session_keys(rxKey, txKey, serverPk, serverSk, clientPk) != 0) return false;
     unsigned char rxHeader[crypto_secretstream_xchacha20poly1305_HEADERBYTES]{};
-    if (!RecvAll(socket, reinterpret_cast<char*>(rxHeader), sizeof(rxHeader), wakeEvent)) return false;
+    if (!RecvAll(io, reinterpret_cast<char*>(rxHeader), sizeof(rxHeader))) return false;
     if (crypto_secretstream_xchacha20poly1305_init_pull(&rxState_, rxHeader, rxKey) != 0) return false;
     unsigned char txHeader[crypto_secretstream_xchacha20poly1305_HEADERBYTES]{};
     if (crypto_secretstream_xchacha20poly1305_init_push(&txState_, txHeader, txKey) != 0) return false;
-    if (!SendAll(socket, reinterpret_cast<const char*>(txHeader), sizeof(txHeader), wakeEvent)) return false;
+    if (!SendAll(io, reinterpret_cast<const char*>(txHeader), sizeof(txHeader))) return false;
     return true;
 }
 
@@ -127,23 +125,23 @@ namespace {
     constexpr uint32_t kMaxCiphertextMessageBytes = 64u * 1024u * 1024u; // 64 MiB
 }
 
-bool CryptoChannel::SendMessage(SOCKET socket, const unsigned char* data, uint32_t dataSize, const SocketWakeEvent* wakeEvent) {
+bool CryptoChannel::SendMessage(const SocketIoContext& io, const unsigned char* data, uint32_t dataSize) {
     if (dataSize > (kMaxCiphertextMessageBytes - crypto_secretstream_xchacha20poly1305_ABYTES)) return false;
     unsigned long long clen = 0; unsigned char tag = 0;
     std::vector<unsigned char> c(dataSize + crypto_secretstream_xchacha20poly1305_ABYTES);
     if (crypto_secretstream_xchacha20poly1305_push(&txState_, c.data(), &clen, data, dataSize, nullptr, 0, tag) != 0) return false;
     if (clen > kMaxCiphertextMessageBytes) return false;
     const uint32_t n = htonl(static_cast<uint32_t>(clen));
-    return SendAll(socket, reinterpret_cast<const char*>(&n), sizeof(n), wakeEvent) && SendAll(socket, reinterpret_cast<const char*>(c.data()), static_cast<int>(clen), wakeEvent);
+    return SendAll(io, reinterpret_cast<const char*>(&n), sizeof(n)) && SendAll(io, reinterpret_cast<const char*>(c.data()), static_cast<int>(clen));
 }
 
-bool CryptoChannel::RecvMessage(SOCKET socket, std::vector<unsigned char>& outData, const SocketWakeEvent* wakeEvent) {
+bool CryptoChannel::RecvMessage(const SocketIoContext& io, std::vector<unsigned char>& outData) {
     uint32_t n = 0;
-    if (!RecvAll(socket, reinterpret_cast<char*>(&n), sizeof(n), wakeEvent)) return false;
+    if (!RecvAll(io, reinterpret_cast<char*>(&n), sizeof(n))) return false;
     const uint32_t clen = ntohl(n);
     if (clen <= crypto_secretstream_xchacha20poly1305_ABYTES || clen > kMaxCiphertextMessageBytes) return false;
     std::vector<unsigned char> c(clen);
-    if (!RecvAll(socket, reinterpret_cast<char*>(c.data()), static_cast<int>(clen), wakeEvent)) return false;
+    if (!RecvAll(io, reinterpret_cast<char*>(c.data()), static_cast<int>(clen))) return false;
     unsigned long long mlen = 0; unsigned char tag = 0;
     outData.assign(static_cast<size_t>(clen), 0);
     if (crypto_secretstream_xchacha20poly1305_pull(&rxState_, outData.data(), &mlen, &tag, c.data(), c.size(), nullptr, 0) != 0) return false;
@@ -151,13 +149,13 @@ bool CryptoChannel::RecvMessage(SOCKET socket, std::vector<unsigned char>& outDa
     return true;
 }
 
-bool CryptoChannel::SendTaggedMessage(SOCKET socket, const char* tag4, const SocketWakeEvent* wakeEvent) {
-    return SendMessage(socket, reinterpret_cast<const unsigned char*>(tag4), 4, wakeEvent);
+bool CryptoChannel::SendTaggedMessage(const SocketIoContext& io, const char* tag4) {
+    return SendMessage(io, reinterpret_cast<const unsigned char*>(tag4), 4);
 }
 
-bool CryptoChannel::RecvTaggedMessage(SOCKET socket, char* outTag4, const SocketWakeEvent* wakeEvent) {
+bool CryptoChannel::RecvTaggedMessage(const SocketIoContext& io, char* outTag4) {
     std::vector<unsigned char> message;
-    if (!RecvMessage(socket, message, wakeEvent) || message.size() != 4) return false;
+    if (!RecvMessage(io, message) || message.size() != 4) return false;
     std::memcpy(outTag4, message.data(), 4);
     return true;
 }

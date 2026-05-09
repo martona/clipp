@@ -57,8 +57,8 @@ private:
 	void ThreadProcSend();
 	bool ConnectSocket();
 	void CloseSocket();
-	bool SendClipboardData(CryptoChannel& channel, SOCKET socket, const ClipboardPayload& payload);
-	bool DrainOutboundMessages(CryptoChannel& channel, SOCKET socket);
+	bool SendClipboardData(CryptoChannel& channel, const SocketIoContext& io, const ClipboardPayload& payload);
+	bool DrainOutboundMessages(CryptoChannel& channel, const SocketIoContext& io);
 	void ReportTraffic(uint64_t bytesSent, uint64_t bytesReceived);
 	SOCKET CurrentSocket() const;
 	void SetSocket(SOCKET socket);

@@ -320,7 +320,7 @@ bool Peer::ConnectSocket() {
 	return true;
 }
 
-bool Peer::SendClipboardData(CryptoChannel& channel, SOCKET socket, const ClipboardPayload& payload) {
+bool Peer::SendClipboardData(CryptoChannel& channel, const SocketIoContext& io, const ClipboardPayload& payload) {
 	ClipboardPayload payloadToSend = payload;
 	const size_t maxEncodedPayloadBytes = (64u * 1024u * 1024u) - sizeof(NetworkDefs::ClipboardMessage) - crypto_secretstream_xchacha20poly1305_ABYTES;
 	if (payloadToSend.rawData.size() > maxEncodedPayloadBytes) return false;
@@ -336,16 +336,16 @@ bool Peer::SendClipboardData(CryptoChannel& channel, SOCKET socket, const Clipbo
 	msg.isCompressed = payloadToSend.isCompressed ? 1 : 0;
 	msg.decodedDataSize = htonl(payloadToSend.decodedDataSize);
 	msg.encodedDataSize = htonl(encodedDataSize);
-	if (socket == INVALID_SOCKET || !channel.SendTaggedMessage(socket, "CLIP", &wakeEvent_)) return false;
-	if (!channel.SendMessage(socket, reinterpret_cast<unsigned char*>(& msg), sizeof(msg), &wakeEvent_)) return false;
+	if (io.socket == INVALID_SOCKET || !channel.SendTaggedMessage(io, "CLIP")) return false;
+	if (!channel.SendMessage(io, reinterpret_cast<unsigned char*>(& msg), sizeof(msg))) return false;
 	if (!payloadToSend.rawData.empty())
-		if (!channel.SendMessage(socket, payloadToSend.rawData.data(), static_cast<uint32_t>(payloadToSend.rawData.size()), &wakeEvent_))
+		if (!channel.SendMessage(io, payloadToSend.rawData.data(), static_cast<uint32_t>(payloadToSend.rawData.size())))
 			return false;
 	ReportTraffic(4 + sizeof(NetworkDefs::ClipboardMessage) + payloadToSend.rawData.size(), 0);
 	return true;
 }
 
-bool Peer::DrainOutboundMessages(CryptoChannel& channel, SOCKET socket) {
+bool Peer::DrainOutboundMessages(CryptoChannel& channel, const SocketIoContext& io) {
 	for (;;) {
 		std::optional<std::shared_ptr<const ClipboardPayload>> msg = messageQueue_.TryPop();
 		if (!msg.has_value()) {
@@ -354,7 +354,7 @@ bool Peer::DrainOutboundMessages(CryptoChannel& channel, SOCKET socket) {
 
 		const std::shared_ptr<const ClipboardPayload>& payload = msg.value();
 		log(__FUNCTION__, Logger::Level::Debug, L"Clipboard payload to be sent: format ID %u, encoded size %zu bytes, decoded size %u bytes", payload->formatId, payload->rawData.size(), payload->decodedDataSize);
-		if (!SendClipboardData(channel, socket, *payload)) {
+		if (!SendClipboardData(channel, io, *payload)) {
 			log(__FUNCTION__, Logger::Level::Debug, L"Peer failed to send clipboard payload.");
 			return false;
 		}
@@ -375,7 +375,8 @@ void Peer::ThreadProcSend() {
 		char localHostNameA[256] = {};
 		if (gethostname(localHostNameA, sizeof(localHostNameA)) != 0) { break; }
 		SOCKET socket = CurrentSocket();
-		if (socket == INVALID_SOCKET || !channel.ClientHandshake(socket, localHostId, localHostNameA, remoteHostId, remoteHostNameUtf8, &wakeEvent_)) {
+		const SocketIoContext io{ socket, wakeEvent_, stopRequested_ };
+		if (socket == INVALID_SOCKET || !channel.ClientHandshake(io, localHostId, localHostNameA, remoteHostId, remoteHostNameUtf8)) {
 			log(__FUNCTION__, Logger::Level::Debug, L"Peer: secure handshake failed.");
 			break;
 		}
@@ -406,7 +407,7 @@ void Peer::ThreadProcSend() {
 		while (!stopRequested_.load()) {
 			const auto now = std::chrono::steady_clock::now();
 			if (now >= nextPingTime) {
-				if (socket == INVALID_SOCKET || !channel.SendTaggedMessage(socket, "PING", &wakeEvent_)) {
+				if (io.socket == INVALID_SOCKET || !channel.SendTaggedMessage(io, "PING")) {
 					log(__FUNCTION__, Logger::Level::Debug, L"Peer failed secure send");
 					break;
 				}
@@ -415,7 +416,7 @@ void Peer::ThreadProcSend() {
 				nextPingTime = now + std::chrono::seconds(30);
 			}
 
-			if (!DrainOutboundMessages(channel, socket)) {
+			if (!DrainOutboundMessages(channel, io)) {
 				break;
 			}
 
@@ -451,7 +452,7 @@ void Peer::ThreadProcSend() {
 
 			if (FD_ISSET(socket, &readSet)) {
 				char packet[4] = {};
-				if (!channel.RecvTaggedMessage(socket, packet, &wakeEvent_)) {
+				if (!channel.RecvTaggedMessage(io, packet)) {
 					log(__FUNCTION__, Logger::Level::Debug, L"Peer failed secure recv");
 					break;
 				}
@@ -464,7 +465,7 @@ void Peer::ThreadProcSend() {
 					}
 					log(__FUNCTION__, Logger::Level::Debug, L"PONG");
 				} else if (std::memcmp(packet, "PING", 4) == 0) {
-					if (!channel.SendTaggedMessage(socket, "PONG", &wakeEvent_)) {
+					if (!channel.SendTaggedMessage(io, "PONG")) {
 						break;
 					}
 					ReportTraffic(4, 0);
@@ -487,7 +488,8 @@ void Peer::ThreadProcRecv() {
 	std::array<unsigned char, 32> remoteHostId{};
 	std::string remoteHostNameUtf8;
 	SOCKET socket = CurrentSocket();
-	if (socket == INVALID_SOCKET || !SetSocketBlockingMode(socket, false) || !channel.ServerHandshake(socket, remoteHostId, remoteHostNameUtf8, &wakeEvent_)) {
+	const SocketIoContext io{ socket, wakeEvent_, stopRequested_ };
+	if (socket == INVALID_SOCKET || !SetSocketBlockingMode(socket, false) || !channel.ServerHandshake(io, remoteHostId, remoteHostNameUtf8)) {
 		log(__FUNCTION__, Logger::Level::Error, L"Client secure handshake failed.");
 	}
 	else {
@@ -505,7 +507,7 @@ void Peer::ThreadProcRecv() {
 
 		char packet[4] = {};
 		while (!stopRequested_.load()) {
-			if (socket == INVALID_SOCKET || !channel.RecvTaggedMessage(socket, packet, &wakeEvent_)) {
+			if (io.socket == INVALID_SOCKET || !channel.RecvTaggedMessage(io, packet)) {
 				break;
 			}
 			ReportTraffic(0, 4);
@@ -516,7 +518,7 @@ void Peer::ThreadProcRecv() {
 					std::lock_guard<std::mutex> lock(dataMutex_);
 					lastPingReceivedAt_ = std::chrono::steady_clock::now();
 				}
-				if (!channel.SendTaggedMessage(socket, "PONG", &wakeEvent_)) {
+				if (!channel.SendTaggedMessage(io, "PONG")) {
 					break;
 				}
 				log(__FUNCTION__, Logger::Level::Debug, L"PONG!");
@@ -526,7 +528,7 @@ void Peer::ThreadProcRecv() {
 
 			if (std::memcmp(packet, "CLIP", 4) == 0) {
 				std::vector<unsigned char> headerMsg;
-				if (!channel.RecvMessage(socket, headerMsg, &wakeEvent_) || headerMsg.size() != sizeof(NetworkDefs::ClipboardMessage)) {
+				if (!channel.RecvMessage(io, headerMsg) || headerMsg.size() != sizeof(NetworkDefs::ClipboardMessage)) {
 					break;
 				}
 				ReportTraffic(0, headerMsg.size());
@@ -542,7 +544,7 @@ void Peer::ThreadProcRecv() {
 				payload.isCompressed = clipMessage->isCompressed != 0;
 				uint32_t encodedDataSize = ntohl(clipMessage->encodedDataSize);
 
-				if (!channel.RecvMessage(socket, payload.rawData, &wakeEvent_)) {
+				if (!channel.RecvMessage(io, payload.rawData)) {
 					break;
 				}
 				ReportTraffic(0, payload.rawData.size());

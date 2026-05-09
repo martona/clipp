@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <string>
 
@@ -98,6 +99,15 @@ public:
 private:
 	SOCKET socket_{ INVALID_SOCKET };
 	sockaddr_in address_{};
+};
+
+struct SocketIoContext {
+	SocketIoContext(SOCKET socketIn, const SocketWakeEvent& wakeEventIn, const std::atomic<bool>& stopRequestedIn)
+		: socket(socketIn), wakeEvent(wakeEventIn), stopRequested(stopRequestedIn) {}
+
+	SOCKET socket;
+	const SocketWakeEvent& wakeEvent;
+	const std::atomic<bool>& stopRequested;
 };
 
 enum class SocketWaitResult {
@@ -213,15 +223,18 @@ static std::string SocketPeerIp(SOCKET socket) {
 	return ip;
 }
 
-static bool RecvAll(SOCKET sock, char* buffer, int length, const SocketWakeEvent* wakeEvent = nullptr) {
+static bool RecvAll(const SocketIoContext& io, char* buffer, int length) {
 	long total = 0;
 	while (total < length) {
-		if (wakeEvent != nullptr) {
-			const SocketWaitResult waitResult = WaitForSocket(sock, wakeEvent, true, false);
-			if (waitResult != SocketWaitResult::Ready)
-				return false;
-		}
-		const int received = recv(sock, buffer + total, (int)(length - total), 0);
+		if (io.stopRequested.load())
+			return false;
+		const SocketWaitResult waitResult = WaitForSocket(io.socket, &io.wakeEvent, true, false);
+		if (waitResult == SocketWaitResult::Failed)
+			return false;
+		if (waitResult == SocketWaitResult::Woken)
+			continue;
+
+		const int received = recv(io.socket, buffer + total, (int)(length - total), 0);
 		if (received > 0) {
 			total += received;
 			continue;
@@ -238,16 +251,19 @@ static bool RecvAll(SOCKET sock, char* buffer, int length, const SocketWakeEvent
 	return true;
 }
 
-static bool SendAll(SOCKET sock, const char* buffer, int length, const SocketWakeEvent* wakeEvent = nullptr) {
+static bool SendAll(const SocketIoContext& io, const char* buffer, int length) {
 	long total = 0;
 	while (total < length) {
-		if (wakeEvent != nullptr) {
-			const SocketWaitResult waitResult = WaitForSocket(sock, wakeEvent, false, true);
-			if (waitResult != SocketWaitResult::Ready)
-				return false;
-		}
+		if (io.stopRequested.load())
+			return false;
+		const SocketWaitResult waitResult = WaitForSocket(io.socket, &io.wakeEvent, false, true);
+		if (waitResult == SocketWaitResult::Failed)
+			return false;
+		if (waitResult == SocketWaitResult::Woken)
+			continue;
+
 		const int chunkLength = (std::min)(length - static_cast<int>(total), 64 * 1024);
-		const int sent = send(sock, buffer + total, chunkLength, 0);
+		const int sent = send(io.socket, buffer + total, chunkLength, 0);
 		if (sent > 0) {
 			total += sent;
 			continue;
