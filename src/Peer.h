@@ -65,6 +65,7 @@ private:
 	void InterruptibleSleep(std::chrono::milliseconds duration);
 	void log(const char* function, Logger::Level level, const wchar_t* message, ...) const;
 	void logV(const char* function, Logger::Level level, const wchar_t* message, va_list args) const;
+	const wchar_t* ConnTypeString() const;
 
 	mutable std::mutex dataMutex_;
 	std::wstring hostName_;

@@ -88,14 +88,26 @@ void Peer::log(const char* function, Logger::Level level, const wchar_t* message
 	va_end(args);
 }
 
+const wchar_t* Peer::ConnTypeString() const {
+	switch (connType_) {
+	case ConnType::Outgoing:
+		return L"Out";
+	case ConnType::Incoming:
+		return L"Inc";
+	default:
+		return L"Unk";
+	}
+}
+
 void Peer::logV(const char* function, Logger::Level level, const wchar_t* message, va_list args) const {
 	wchar_t formattedMessage[1024];
 	int bufferSize = cntof(formattedMessage);
 	{
 		std::lock_guard<std::mutex> lock(dataMutex_);
-		int prefixlen = snwprintf_truncate(formattedMessage, bufferSize, L"[%ls %ls] ",
+		int prefixlen = snwprintf_truncate(formattedMessage, bufferSize, L"[%ls %ls %ls] ",
 			hostName_.empty() ? L"<unknown>" : hostName_.c_str(),
-			ip_.empty() ? L"<unknown>" : ip_.c_str());
+			ip_.empty() ? L"<unknown>" : ip_.c_str(),
+			ConnTypeString());
 		if (prefixlen < 0) return;
 		vsnwprintf_truncate(formattedMessage + prefixlen, bufferSize - prefixlen, message != nullptr ? message : L"", args);
 	}
