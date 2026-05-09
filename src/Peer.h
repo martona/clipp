@@ -50,7 +50,7 @@ public:
 	unsigned short port() const;
 	std::chrono::steady_clock::time_point lastPingReceivedAt() const;
 	std::chrono::steady_clock::time_point createdAt() const;
-	void PushMessage(std::shared_ptr<const ClipboardPayload> payload) { messageQueue_.Push(std::move(payload)); }
+	void PushMessage(std::shared_ptr<const ClipboardPayload> payload);
 
 private:
 	void ThreadProcRecv();
@@ -58,6 +58,7 @@ private:
 	bool ConnectSocket();
 	void CloseSocket();
 	bool SendClipboardData(CryptoChannel& channel, SOCKET socket, const ClipboardPayload& payload);
+	bool DrainOutboundMessages(CryptoChannel& channel, SOCKET socket);
 	void ReportTraffic(uint64_t bytesSent, uint64_t bytesReceived);
 	SOCKET CurrentSocket() const;
 	void SetSocket(SOCKET socket);

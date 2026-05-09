@@ -34,6 +34,17 @@ public:
         return item;
     }
 
+    std::optional<T> TryPop() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (queue_.empty()) {
+            return std::nullopt;
+        }
+
+        T item = std::move(queue_.front());
+        queue_.pop();
+        return item;
+    }
+
     void WakeAll() {
         cv_.notify_all();
     }

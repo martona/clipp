@@ -8,6 +8,7 @@
 #include <cstring>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <thread>
 #include <utility>
 
@@ -199,6 +200,11 @@ std::chrono::steady_clock::time_point Peer::createdAt() const {
 	return createdAt_;
 }
 
+void Peer::PushMessage(std::shared_ptr<const ClipboardPayload> payload) {
+	messageQueue_.Push(std::move(payload));
+	wakeEvent_.Signal();
+}
+
 void Peer::ReportTraffic(uint64_t bytesSent, uint64_t bytesReceived) {
 	if (!trafficCallback_ || (bytesSent == 0 && bytesReceived == 0)) return;
 
@@ -339,6 +345,22 @@ bool Peer::SendClipboardData(CryptoChannel& channel, SOCKET socket, const Clipbo
 	return true;
 }
 
+bool Peer::DrainOutboundMessages(CryptoChannel& channel, SOCKET socket) {
+	for (;;) {
+		std::optional<std::shared_ptr<const ClipboardPayload>> msg = messageQueue_.TryPop();
+		if (!msg.has_value()) {
+			return true;
+		}
+
+		const std::shared_ptr<const ClipboardPayload>& payload = msg.value();
+		log(__FUNCTION__, Logger::Level::Debug, L"Clipboard payload to be sent: format ID %u, encoded size %zu bytes, decoded size %u bytes", payload->formatId, payload->rawData.size(), payload->decodedDataSize);
+		if (!SendClipboardData(channel, socket, *payload)) {
+			log(__FUNCTION__, Logger::Level::Debug, L"Peer failed to send clipboard payload.");
+			return false;
+		}
+	}
+}
+
 void Peer::ThreadProcSend() {
 	do {
 		if (!ConnectSocket()) {
@@ -380,43 +402,74 @@ void Peer::ThreadProcSend() {
 		}
 
 		log(__FUNCTION__, Logger::Level::Info, L"Peer connected and authenticated.");
+		auto nextPingTime = std::chrono::steady_clock::now();
 		while (!stopRequested_.load()) {
-			if (socket == INVALID_SOCKET || !channel.SendTaggedMessage(socket, "PING", &wakeEvent_)) {
-				log(__FUNCTION__, Logger::Level::Debug, L"Peer failed secure send");
-				break;
-			}
-			ReportTraffic(4, 0);
-			log(__FUNCTION__, Logger::Level::Debug, L"PING?");
-
-			char packet[4] = {};
-			if (socket == INVALID_SOCKET || !channel.RecvTaggedMessage(socket, packet, &wakeEvent_)) {
-				log(__FUNCTION__, Logger::Level::Debug, L"Peer failed secure recv");
-				break;
+			const auto now = std::chrono::steady_clock::now();
+			if (now >= nextPingTime) {
+				if (socket == INVALID_SOCKET || !channel.SendTaggedMessage(socket, "PING", &wakeEvent_)) {
+					log(__FUNCTION__, Logger::Level::Debug, L"Peer failed secure send");
+					break;
+				}
+				ReportTraffic(4, 0);
+				log(__FUNCTION__, Logger::Level::Debug, L"PING?");
+				nextPingTime = now + std::chrono::seconds(30);
 			}
 
-			ReportTraffic(0, 4);
-
-			if (std::memcmp(packet, "PONG", 4) != 0) {
-				log(__FUNCTION__, Logger::Level::Error, L"Peer: unexpected packet received.");
+			if (!DrainOutboundMessages(channel, socket)) {
 				break;
 			}
 
-			{
-				std::lock_guard<std::mutex> lock(dataMutex_);
-				lastPingReceivedAt_ = std::chrono::steady_clock::now();
+			fd_set readSet;
+			FD_ZERO(&readSet);
+			FD_SET(socket, &readSet);
+			FD_SET(wakeEvent_.Socket(), &readSet);
+
+			timeval timeout{};
+			const auto timeoutDuration = nextPingTime - std::chrono::steady_clock::now();
+			if (timeoutDuration > std::chrono::steady_clock::duration::zero()) {
+				const auto timeoutMs = std::chrono::duration_cast<std::chrono::milliseconds>(timeoutDuration);
+				timeout.tv_sec = static_cast<long>(timeoutMs.count() / 1000);
+				timeout.tv_usec = static_cast<long>((timeoutMs.count() % 1000) * 1000);
 			}
-			log(__FUNCTION__, Logger::Level::Debug, L"PONG");
 
-			auto msg = messageQueue_.WaitFor(std::chrono::seconds(30), stopRequested_);
+			const SOCKET maxSock = (std::max)(socket, wakeEvent_.Socket());
+			const int selected = select(static_cast<int>(maxSock) + 1, &readSet, nullptr, nullptr, &timeout);
+			if (selected == SOCKET_ERROR) {
+				break;
+			}
+			if (selected == 0) {
+				continue;
+			}
 
-			if (!msg.has_value()) {
-				// TIMEOUT or explicit wake: just roll over
-			} else {
-				// A message was pulled from the queue
-				std::shared_ptr<const ClipboardPayload> payload = msg.value();
-				log(__FUNCTION__, Logger::Level::Debug, L"Clipboard payload to be sent: format ID %u, encoded size %zu bytes, decoded size %u bytes", payload->formatId, payload->rawData.size(), payload->decodedDataSize);
-				if (!SendClipboardData(channel, socket, *payload)) {
-					log(__FUNCTION__, Logger::Level::Debug, L"Peer failed to send clipboard payload.");
+			if (FD_ISSET(wakeEvent_.Socket(), &readSet)) {
+				wakeEvent_.Drain();
+				if (stopRequested_.load()) {
+					break;
+				}
+				continue;
+			}
+
+			if (FD_ISSET(socket, &readSet)) {
+				char packet[4] = {};
+				if (!channel.RecvTaggedMessage(socket, packet, &wakeEvent_)) {
+					log(__FUNCTION__, Logger::Level::Debug, L"Peer failed secure recv");
+					break;
+				}
+				ReportTraffic(0, 4);
+
+				if (std::memcmp(packet, "PONG", 4) == 0) {
+					{
+						std::lock_guard<std::mutex> lock(dataMutex_);
+						lastPingReceivedAt_ = std::chrono::steady_clock::now();
+					}
+					log(__FUNCTION__, Logger::Level::Debug, L"PONG");
+				} else if (std::memcmp(packet, "PING", 4) == 0) {
+					if (!channel.SendTaggedMessage(socket, "PONG", &wakeEvent_)) {
+						break;
+					}
+					ReportTraffic(4, 0);
+				} else {
+					log(__FUNCTION__, Logger::Level::Error, L"Peer: unexpected packet received.");
 					break;
 				}
 			}
