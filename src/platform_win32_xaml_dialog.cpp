@@ -315,8 +315,10 @@ winrt::Windows::UI::Xaml::Controls::Grid BuildPlaceholderContent() {
 
             g_passwordInfoText.Text(L"... working ...");
 
+            std::string networkName = g_settings.networkName();
+            g_logger.log(__FUNCTION__, Logger::Level::Debug, "Generating key with secret (network name: %s)", networkName.c_str());
             std::string newPassword = winrt::to_string(pwd);
-            std::string netNameAndPassword = g_settings.networkName() + "|";
+            std::string netNameAndPassword = networkName + "|";
             netNameAndPassword += newPassword;
             g_keyDerivationWorker.RequestKeyDerivation(netNameAndPassword);
             sodium_memzero(newPassword.data(), newPassword.capacity());
