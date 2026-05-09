@@ -378,6 +378,10 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
             }
 
             if (verb == "query" && rawQueryID != nullptr) {
+				// ignore our own queries
+                if (memcmp(rawHostID, g_hostID.data(), sizeof(g_hostID)) == 0) {
+                    continue;
+                }
                 mdns_packet responsePacket = BuildMDNSPacket(localHostName, "response", rawQueryID);
                 encrypted_mdns_packet encryptedResponse{};
                 if (EncryptPacket(responsePacket, encryptedResponse)) {

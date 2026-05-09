@@ -176,18 +176,16 @@ void OnMDNSNotification(const char* hostNameUtf8,
         hostNameUtf8, hostID, senderIp, port, verb, queryID, nonce);
 
     if (memcmp(ourHostId.data(), rawHostID, 32) == 0) {
-        g_logger.log(__FUNCTION__, Logger::Level::Debug, "mDNS notification is from self; ignoring network name update.");
+        g_logger.log(__FUNCTION__, Logger::Level::Debug, "mDNS notification is from self; ignoring");
         return;
 	}
 
-    if (rawHostID != nullptr) {
-        size_t hostNameWLen = utf8_to_utf16(hostNameUtf8, strlen(hostNameUtf8), nullptr, 0);
-        std::wstring hostNameW(hostNameWLen, L'\0');
-        if (hostNameWLen > 0) {
-            utf8_to_utf16(hostNameUtf8, strlen(hostNameUtf8), hostNameW.data(), hostNameW.size());
-        }
-        g_peerManager.AddPeer(hostNameW.c_str(), rawHostID, Utf8ToWideString(senderIp).c_str(), port);
+    size_t hostNameWLen = utf8_to_utf16(hostNameUtf8, strlen(hostNameUtf8), nullptr, 0);
+    std::wstring hostNameW(hostNameWLen, L'\0');
+    if (hostNameWLen > 0) {
+        utf8_to_utf16(hostNameUtf8, strlen(hostNameUtf8), hostNameW.data(), hostNameW.size());
     }
+    g_peerManager.AddPeer(hostNameW.c_str(), rawHostID, Utf8ToWideString(senderIp).c_str(), port);
 }
 
 void PrintNetworkKeyHash(const std::array<unsigned char, KeyManager::NetworkKeySize>& networkKey) {
