@@ -140,6 +140,7 @@ public:
 
     void Show(HWND owner) {
         try {
+            owner_ = owner;
             RegisterDialogClass(GetModuleHandleW(nullptr));
             if (!hwnd_) {
                 createError_.clear();
@@ -363,17 +364,63 @@ private:
         contentPresenter_.VerticalContentAlignment(VerticalAlignment::Stretch);
         contentPresenter_.Content(clippPage_->View());
 
+        StackPanel sidebarActions;
+        sidebarActions.Orientation(Orientation::Vertical);
+        sidebarActions.Padding(ThicknessHelper::FromLengths(8, 0, 8, 16));
+        sidebarActions.Spacing(8);
+
+        Button minimizeButton = CreateSidebarButton(L"Minimize to Tray");
+        minimizeButton.Click([this](auto const&, auto const&) {
+            MinimizeToTray();
+        });
+
+        Button exitButton = CreateSidebarButton(L"Exit Application");
+        exitButton.Click([this](auto const&, auto const&) {
+            ExitApplication();
+        });
+
+        sidebarActions.Children().Append(minimizeButton);
+        sidebarActions.Children().Append(exitButton);
+
+        Grid sidebar;
+        sidebar.HorizontalAlignment(HorizontalAlignment::Stretch);
+        sidebar.VerticalAlignment(VerticalAlignment::Stretch);
+        sidebar.Background(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(24, 127, 127, 127)));
+        RowDefinition menuRow;
+        menuRow.Height(GridLength{ 1, GridUnitType::Star });
+        RowDefinition actionsRow;
+        actionsRow.Height(GridLength{ 1, GridUnitType::Auto });
+        sidebar.RowDefinitions().Append(menuRow);
+        sidebar.RowDefinitions().Append(actionsRow);
+
+        Grid::SetRow(menu, 0);
+        Grid::SetRow(sidebarActions, 1);
+        sidebar.Children().Append(menu);
+        sidebar.Children().Append(sidebarActions);
+
         menu.SelectionChanged([this](auto const& sender, auto const&) {
             auto menu = sender.as<ListBox>();
             ShowPage(static_cast<PageID>(menu.SelectedIndex()));
         });
         menu.SelectedIndex(0);
 
-        Grid::SetColumn(menu, 0);
+        Grid::SetColumn(sidebar, 0);
         Grid::SetColumn(contentPresenter_, 1);
-        root.Children().Append(menu);
+        root.Children().Append(sidebar);
         root.Children().Append(contentPresenter_);
         return root;
+    }
+
+    winrt::Windows::UI::Xaml::Controls::Button CreateSidebarButton(const wchar_t* label) {
+        using namespace winrt::Windows::UI::Xaml;
+        using namespace winrt::Windows::UI::Xaml::Controls;
+
+        Button button;
+        button.Content(winrt::box_value(winrt::hstring{ label }));
+        button.HorizontalAlignment(HorizontalAlignment::Stretch);
+        button.HorizontalContentAlignment(HorizontalAlignment::Center);
+        button.Padding(ThicknessHelper::FromLengths(8, 6, 8, 6));
+        return button;
     }
 
     winrt::Windows::UI::Xaml::Controls::ListBoxItem CreateMenuItem(const MenuItemDefinition& menuItem) {
@@ -424,6 +471,22 @@ private:
             contentPresenter_.Content(aboutPage_->View());
             break;
         }
+    }
+
+    void MinimizeToTray() {
+        if (hwnd_) {
+            ShowWindow(hwnd_, SW_HIDE);
+        }
+    }
+
+    void ExitApplication() {
+        if (owner_ && IsWindow(owner_)) {
+            PostMessageW(owner_, WM_CLOSE, 0, 0);
+            return;
+        }
+
+        Destroy();
+        PostQuitMessage(0);
     }
 
     RECT WindowRectForClientSize(int clientWidth, int clientHeight) const {
@@ -569,6 +632,7 @@ private:
     }
 
     HWND hwnd_ = nullptr;
+    HWND owner_ = nullptr;
     HWND xamlHost_ = nullptr;
     std::wstring createError_;
     winrt::Windows::UI::Xaml::Hosting::WindowsXamlManager xamlManager_{ nullptr };

@@ -11,6 +11,21 @@
 
 Logger g_logger;
 
+static constexpr size_t kMaxRetainedLogLines = 5000;
+
+Logger::LogHistory Logger::AddLogReflector(LogReflectorCallback callback) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (callback != nullptr && std::find(logReflectors_.begin(), logReflectors_.end(), callback) == logReflectors_.end()) {
+        logReflectors_.push_back(callback);
+    }
+    return LogHistory(recentLogLines_.begin(), recentLogLines_.end());
+}
+
+void Logger::RemoveLogReflector(LogReflectorCallback callback) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    logReflectors_.erase(std::remove(logReflectors_.begin(), logReflectors_.end(), callback), logReflectors_.end());
+}
+
 void Logger::log(const wchar_t* function, Level level, const wchar_t* message, ...) {
     va_list args;
     va_start(args, message);
@@ -89,6 +104,11 @@ void Logger::writeLine(const wchar_t* function, Level level, const wchar_t* mess
         << L"\x1b[90m" << L"[" << fnStr << L"] "
         << ResetColor() << msgStr << std::endl;
 	std::wstring wstr = wstrstr.str();
+
+    recentLogLines_.push_back(wstr);
+    while (recentLogLines_.size() > kMaxRetainedLogLines) {
+        recentLogLines_.pop_front();
+    }
 
     std::wcout << wstr;
     for (const auto& reflector : logReflectors_) {

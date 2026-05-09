@@ -21,6 +21,7 @@
 #ifdef _WIN32
     #include <io.h>
     #include <fcntl.h>
+    #include <Windows.h>
 #else
     #include <termios.h>
     #include <unistd.h>
@@ -34,6 +35,52 @@ PeerDisplay g_peerDisplay;
 PeerManager g_peerManager;
 
 #ifdef _WIN32
+    namespace {
+    constexpr wchar_t kSingleInstanceMutexName[] = L"Local\\ClippSingleInstanceMutex";
+    constexpr wchar_t kTrayWindowClassName[] = L"ClippHiddenTrayWindow";
+    constexpr wchar_t kShowMainWindowMessageName[] = L"ClippShowMainWindow";
+
+    enum class SingleInstanceResult {
+        Continue,
+        ExitSuccess,
+        ExitFailure,
+    };
+    }
+
+    static void RequestRunningInstanceToShowWindow() {
+        const UINT showMainWindowMessage = RegisterWindowMessageW(kShowMainWindowMessageName);
+        if (showMainWindowMessage == 0) {
+            return;
+        }
+
+        constexpr DWORD kTotalWaitMillis = 2000;
+        constexpr DWORD kPollIntervalMillis = 50;
+        for (DWORD waitedMillis = 0; waitedMillis <= kTotalWaitMillis; waitedMillis += kPollIntervalMillis) {
+            HWND trayWindow = FindWindowExW(HWND_MESSAGE, nullptr, kTrayWindowClassName, nullptr);
+            if (trayWindow) {
+                PostMessageW(trayWindow, showMainWindowMessage, 0, 0);
+                return;
+            }
+            Sleep(kPollIntervalMillis);
+        }
+    }
+
+    static SingleInstanceResult EnsureSingleInstance() {
+        HANDLE newMutex = CreateMutexW(nullptr, TRUE, kSingleInstanceMutexName);
+        if (!newMutex) {
+            g_logger.log(__FUNCTION__, Logger::Level::Error, L"CreateMutexW failed while creating the single-instance mutex (GetLastError=%lu).", GetLastError());
+            return SingleInstanceResult::ExitFailure;
+        }
+
+        if (GetLastError() == ERROR_ALREADY_EXISTS) {
+            CloseHandle(newMutex);
+            RequestRunningInstanceToShowWindow();
+            return SingleInstanceResult::ExitSuccess;
+        }
+
+        return SingleInstanceResult::Continue;
+    }
+
     void TrayIconMessageLoop();
     void TrayIconShutdown();
     BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType) {
@@ -242,6 +289,15 @@ int main(int argc, char* argv[]) {
     }
 
     #ifdef _WIN32
+        switch (EnsureSingleInstance()) {
+            case SingleInstanceResult::Continue:
+                break;
+            case SingleInstanceResult::ExitSuccess:
+                return 0;
+            case SingleInstanceResult::ExitFailure:
+                return 1;
+        }
+
         WSADATA wsaData;
         if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
             return -1;

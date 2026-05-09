@@ -80,7 +80,13 @@ void LogsPage::BuildView() {
 void LogsPage::OnShown() {
     if (!logReflectorRegistered_) {
         g_logReflectorTarget = this;
-        g_logger.AddLogReflector(LogReflectorCallback);
+        const auto logHistory = g_logger.AddLogReflector(LogReflectorCallback);
+        {
+            std::lock_guard<std::mutex> lock(terminalLogViewMutex_);
+            if (terminalLogView_) {
+                terminalLogView_->SetAnsiLogText(logHistory);
+            }
+        }
         logReflectorRegistered_ = true;
     }
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include <winrt/Windows.UI.Xaml.Controls.h>
 #include <winrt/Windows.UI.Xaml.Documents.h>
@@ -12,8 +13,10 @@ public:
 
     winrt::Windows::UI::Xaml::Controls::ScrollViewer View() const;
     void AppendAnsiLogText(const std::wstring& text);
+    void SetAnsiLogText(const std::vector<std::wstring>& lines);
 
 private:
+    void AppendAnsiLogText(const std::wstring& text, bool scrollToBottom);
     winrt::Windows::UI::Xaml::Documents::Paragraph CreateParagraphForAnsiLine(const std::wstring& line) const;
     winrt::Windows::UI::Xaml::Media::Brush BrushForAnsiCode(const std::wstring& code) const;
     void TrimOldLines();

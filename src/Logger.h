@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdarg>
+#include <deque>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -16,16 +17,10 @@ public:
     };
 
     using LogReflectorCallback = void(*)(const std::wstring& line);
-    void AddLogReflector(LogReflectorCallback callback) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (std::find(logReflectors_.begin(), logReflectors_.end(), callback) == logReflectors_.end()) {
-            logReflectors_.push_back(callback);
-        }
-    }
-    void RemoveLogReflector(LogReflectorCallback callback) {
-		std::lock_guard<std::mutex> lock(mutex_);
-        logReflectors_.erase(std::remove(logReflectors_.begin(), logReflectors_.end(), callback), logReflectors_.end());
-	}
+    using LogHistory = std::vector<std::wstring>;
+
+    LogHistory AddLogReflector(LogReflectorCallback callback);
+    void RemoveLogReflector(LogReflectorCallback callback);
 
     void log(const wchar_t* function, Level level, const wchar_t* message, ...);
     void log(const char* function, Level level, const char* message, ...);
@@ -41,6 +36,7 @@ private:
 	static const wchar_t* LevelToColor(Level level);
     static const wchar_t* ResetColor();
 	std::vector<LogReflectorCallback> logReflectors_;
+    std::deque<std::wstring> recentLogLines_;
 
     std::mutex mutex_;
 };

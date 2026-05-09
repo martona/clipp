@@ -20,12 +20,21 @@
 #define ID_TRAY_ABOUT 1001
 #define ID_TRAY_EXIT  1002
 
+static constexpr wchar_t kTrayWindowClassName[] = L"ClippHiddenTrayWindow";
+static constexpr wchar_t kShowMainWindowMessageName[] = L"ClippShowMainWindow";
+static const UINT g_showMainWindowMessage = RegisterWindowMessageW(kShowMainWindowMessageName);
+
 // Global handle for cleanup
 static NOTIFYICONDATAW g_nid = {};
 static HWND g_trayWindow = NULL;
 
 // The core event callback for the hidden window
 LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (g_showMainWindowMessage != 0 && msg == g_showMainWindowMessage) {
+        ShowClippMainDialog(hwnd);
+        return 0;
+    }
+
     switch (msg) {
         case WM_CREATE:
             DarkMode::setWindowEraseBgSubclass(hwnd);
@@ -69,18 +78,20 @@ LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                 DarkMode::DarkMessageBox(g_trayWindow, L"Clipp v1.0\nSecure cross-platform clipboard sync.", L"About", MB_ICONINFORMATION | MB_OK);
                 break;
             case ID_TRAY_EXIT:
-                PostQuitMessage(0);
+                PostMessageW(hwnd, WM_CLOSE, 0, 0);
                 break;
             }
             break;
 
         case WM_CLOSE:
-		    PostQuitMessage(0);
+		    DestroyWindow(hwnd);
 		    break;
 
         case WM_DESTROY:
             CloseClippMainDialog();
             Shell_NotifyIconW(NIM_DELETE, &g_nid);
+            g_trayWindow = NULL;
+            PostQuitMessage(0);
             break;
 
         default:
@@ -96,7 +107,7 @@ void TrayIconMessageLoop() {
     WNDCLASSW wc = {};
     wc.lpfnWndProc = TrayWndProc;
     wc.hInstance = hInstance;
-    wc.lpszClassName = L"ClippHiddenTrayWindow";
+    wc.lpszClassName = kTrayWindowClassName;
     RegisterClassW(&wc);
 
     g_trayWindow = CreateWindowW(wc.lpszClassName, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, hInstance, NULL);

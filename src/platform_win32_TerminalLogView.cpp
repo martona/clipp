@@ -42,6 +42,19 @@ winrt::Windows::UI::Xaml::Controls::ScrollViewer TerminalLogView::View() const {
 }
 
 void TerminalLogView::AppendAnsiLogText(const std::wstring& text) {
+    AppendAnsiLogText(text, true);
+}
+
+void TerminalLogView::SetAnsiLogText(const std::vector<std::wstring>& lines) {
+    richTextBlock_.Blocks().Clear();
+    for (const auto& line : lines) {
+        AppendAnsiLogText(line, false);
+    }
+    TrimOldLines();
+    ScrollToBottom();
+}
+
+void TerminalLogView::AppendAnsiLogText(const std::wstring& text, bool scrollToBottom) {
     std::wstring trimmedText = text;
     while (!trimmedText.empty() && (trimmedText.back() == L'\r' || trimmedText.back() == L'\n')) {
         trimmedText.pop_back();
@@ -71,7 +84,9 @@ void TerminalLogView::AppendAnsiLogText(const std::wstring& text) {
     }
 
     TrimOldLines();
-    ScrollToBottom();
+    if (scrollToBottom) {
+        ScrollToBottom();
+    }
 }
 
 winrt::Windows::UI::Xaml::Documents::Paragraph TerminalLogView::CreateParagraphForAnsiLine(const std::wstring& line) const {
