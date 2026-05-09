@@ -155,8 +155,6 @@ void OnMDNSNotification(const char* hostNameUtf8,
                         const char* queryID, 
                         const char* nonce, 
                         const char* verb, 
-                        const char* networkName,
-	                    const uint64_t networkNameTimestamp,
                         u_short port, 
                         const unsigned char* rawHostID) 
 {
@@ -173,33 +171,14 @@ void OnMDNSNotification(const char* hostNameUtf8,
 
     g_peerManager.CullPeers();
 
-    networkName = networkName ? networkName : "<unknown>";
-    const uint64_t localNetworkNameTimestamp = g_settings.networkNameTimestamp();
     g_logger.log(__FUNCTION__, Logger::Level::Debug,
-        "mDNS notification received for host: %s / %s\n  from: %s:%hu\n  verb:    %s\n  network: %s\n  network timestamp: remote=%llu local=%llu\n  queryID: %s\n  nonce:   %s",
-        hostNameUtf8, hostID, senderIp, port, verb, networkName, networkNameTimestamp, localNetworkNameTimestamp, queryID, nonce);
+        "mDNS notification received for host: %s / %s\n  from: %s:%hu\n  verb:    %s\n  queryID: %s\n  nonce:   %s",
+        hostNameUtf8, hostID, senderIp, port, verb, queryID, nonce);
 
     if (memcmp(ourHostId.data(), rawHostID, 32) == 0) {
         g_logger.log(__FUNCTION__, Logger::Level::Debug, "mDNS notification is from self; ignoring network name update.");
         return;
 	}
-
-	if (networkNameTimestamp > localNetworkNameTimestamp) {
-        if (g_settings.set_networkNameTimestamp(networkNameTimestamp)) {
-            g_logger.log(__FUNCTION__, Logger::Level::Info, "Updated local network name timestamp to %llu from mDNS notification.", networkNameTimestamp);
-        } else {
-            g_logger.log(__FUNCTION__, Logger::Level::Warning, "Failed to save network name timestamp from mDNS notification: %llu", networkNameTimestamp);
-        }
-        if (g_settings.set_networkName(networkName)) {
-            g_logger.log(__FUNCTION__, Logger::Level::Info, "Updated local network name to %s from mDNS notification.", networkName);
-        } else {
-            g_logger.log(__FUNCTION__, Logger::Level::Warning, "Failed to save network name from mDNS notification: %s", networkName);
-        }
-    } else {
-        g_logger.log(__FUNCTION__, Logger::Level::Debug,
-            "Skipping network name update because remote timestamp %llu is not newer than local timestamp %llu.",
-            networkNameTimestamp, localNetworkNameTimestamp);
-    }
 
     if (rawHostID != nullptr) {
         size_t hostNameWLen = utf8_to_utf16(hostNameUtf8, strlen(hostNameUtf8), nullptr, 0);
@@ -212,7 +191,7 @@ void OnMDNSNotification(const char* hostNameUtf8,
 }
 
 void PrintNetworkKeyHash(const std::array<unsigned char, KeyManager::NetworkKeySize>& networkKey) {
-    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Network Key hash: %s", g_keyManager.GetNetworkKeyHash(&networkKey).c_str());
+    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Network Key hash: %ls", g_keyManager.GetNetworkKeyHash(&networkKey).c_str());
 }
 
 int main(int argc, char* argv[]) {
@@ -257,13 +236,6 @@ int main(int argc, char* argv[]) {
 
         if (!g_settings.set_networkName(input)) {
             g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to store network name.");
-            return 1;
-        }
-        auto now = std::chrono::system_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch());
-        uint64_t time_ms = static_cast<uint64_t>(duration.count());
-        if (!g_settings.set_networkNameTimestamp(time_ms)) {
-            g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to store network name timestamp.");
             return 1;
         }
 

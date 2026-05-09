@@ -20,7 +20,7 @@ Settings::Settings()
       mdnsPort_(DefaultMdnsPort),
       tcpPort_(DefaultTcpPort),
 	  networkNameTimestamp_(0),
-      networkName_(DefaultNetworkName) {
+      networkName_(GetDefaultNetworkName()) {
     LoadCache();
 }
 
@@ -29,7 +29,6 @@ const std::string& Settings::listenerIp() const { return listenerIp_; }
 int Settings::mdnsPort() const { return mdnsPort_; }
 int Settings::tcpPort() const { return tcpPort_; }
 const std::string& Settings::networkName() const { return networkName_; }
-const uint64_t Settings::networkNameTimestamp() const { return networkNameTimestamp_; }
 
 bool Settings::set_multicastIp(const std::string& value) {
     if (!WriteStringValue(kMulticastIpName, value)) {
@@ -64,19 +63,10 @@ bool Settings::set_tcpPort(int value) {
 }
 
 bool Settings::set_networkName(const std::string& value) {
-    std::string truncatedValue = value.substr(0, MaxNetworkNameLength);
-    if (!WriteStringValue(kNetworkNameName, truncatedValue)) {
+    if (!WriteStringValue(kNetworkNameName, value)) {
         return false;
     }
-    networkName_ = truncatedValue;
-    return true;
-}
-
-bool Settings::set_networkNameTimestamp(uint64_t value) {
-    if (!WriteUint64Value(kNetworkNameTimestampName, value)) {
-        return false;
-    }
-    networkNameTimestamp_ = value;
+    networkName_ = value;
     return true;
 }
 
@@ -121,7 +111,7 @@ bool Settings::LoadCache() {
         multicastIp_ = multicast;
     }
     if (ReadStringValue(kNetworkNameName, networkName)) {
-        networkName_ = networkName.substr(0, MaxNetworkNameLength);
+        networkName_ = networkName;
     }
     if (ReadUint64Value(kNetworkNameTimestampName, networkNameTimestamp)) {
         networkNameTimestamp_ = networkNameTimestamp;

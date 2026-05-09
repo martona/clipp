@@ -2,6 +2,8 @@
 #include "platform.h"
 #include <cstring>
 #include <cwchar>
+#include <unistd.h>
+#include <pwd.h>
 
 #ifdef __APPLE__
 #import <Foundation/Foundation.h>
@@ -139,6 +141,22 @@ bool Settings::ReadBinaryValue(const wchar_t* valueName, std::vector<unsigned ch
         std::memcpy(outValue.data(), [value bytes], outValue.size());
     }
     return true;
+}
+
+std::string Settings::GetDefaultNetworkName() {
+    std::string username;
+
+    uid_t uid = getuid();
+    struct passwd* pw = getpwuid(uid);
+    if (pw && pw->pw_name) {
+        username = pw->pw_name;
+    }
+
+    if (username.empty()) {
+        username = "local";
+    }
+
+    return username + "'s clipp network";
 }
 
 #endif

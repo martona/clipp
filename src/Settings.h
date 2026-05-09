@@ -11,8 +11,6 @@ public:
     static constexpr int DefaultTcpPort = 15353;
     static constexpr const char* DefaultMulticastIp = "239.255.10.10";
 	static constexpr const char* DefaultListenerIp = "0.0.0.0";
-    static constexpr const char* DefaultNetworkName = "my clipp network";
-    static constexpr size_t MaxNetworkNameLength = 63;
 
     Settings();
 
@@ -21,14 +19,12 @@ public:
     int mdnsPort() const;
     int tcpPort() const;
     const std::string& networkName() const;
-	const uint64_t networkNameTimestamp() const;
 
     bool set_multicastIp(const std::string& value);
 	bool set_listenerIp(const std::string& value);
     bool set_mdnsPort(int value);
     bool set_tcpPort(int value);
     bool set_networkName(const std::string& value);
-	bool set_networkNameTimestamp(uint64_t value);
 
     bool setEncryptedNetworkKey(const std::vector<unsigned char>& value);
     bool getEncryptedNetworkKey(std::vector<unsigned char>& value) const;
@@ -45,6 +41,7 @@ private:
     static bool WriteUint64Value(const wchar_t* valueName, uint64_t value);
     static bool WriteBinaryValue(const wchar_t* valueName, const unsigned char* data, size_t len);
     static bool ReadBinaryValue(const wchar_t* valueName, std::vector<unsigned char>& outValue);
+    static std::string GetDefaultNetworkName();
 
     std::string multicastIp_;
 	std::string listenerIp_;

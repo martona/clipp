@@ -155,3 +155,27 @@ bool Settings::ReadBinaryValue(const wchar_t* valueName, std::vector<unsigned ch
     RegCloseKey(keyHandle);
     return status == ERROR_SUCCESS;
 }
+
+std::string Settings::GetDefaultNetworkName() {
+    std::string username;
+
+    DWORD size = 0;
+    GetUserNameW(nullptr, &size);
+    if (GetLastError() == ERROR_INSUFFICIENT_BUFFER) {
+        std::vector<wchar_t> buffer(size);
+        if (GetUserNameW(buffer.data(), &size)) {
+            // Convert wide string to UTF-8
+            int utf8Size = WideCharToMultiByte(CP_UTF8, 0, buffer.data(), -1, nullptr, 0, nullptr, nullptr);
+            if (utf8Size > 0) {
+                username.resize(utf8Size - 1);
+                WideCharToMultiByte(CP_UTF8, 0, buffer.data(), -1, &username[0], utf8Size, nullptr, nullptr);
+            }
+        }
+    }
+
+    if (username.empty()) {
+        username = "local";
+    }
+
+    return username + "'s clipp network";
+}

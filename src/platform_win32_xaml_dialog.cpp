@@ -290,9 +290,6 @@ winrt::Windows::UI::Xaml::Controls::Grid BuildPlaceholderContent() {
 
             if (newName != g_settings.networkName() && !newName.empty()) {
                 g_settings.set_networkName(newName);
-                auto now = std::chrono::system_clock::now();
-                auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch());
-                g_settings.set_networkNameTimestamp(static_cast<uint64_t>(duration.count()));
 				g_keyManager.ClearNetworkKey(); // Clear the key to force re-derivation with the new name
                 MDNSNotifyNetworkKeyChange();
                 g_peerManager.ClearPeers();
@@ -700,7 +697,9 @@ LRESULT CALLBACK MainDialogWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     default:
         if (msg == g_msgDerivedKey) {
             KeyDerivationWorker::KeyDerivationResult* result = reinterpret_cast<KeyDerivationWorker::KeyDerivationResult*>(wParam);
-
+            // force saving default network name as it's dynamically generated
+            g_settings.set_networkName(g_settings.networkName());
+            // set, save, and start using network key
             g_keyManager.SetNetworkKey(result->derivedKey);
             MDNSNotifyNetworkKeyChange();
             g_peerManager.ClearPeers();
