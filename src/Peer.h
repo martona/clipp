@@ -55,9 +55,13 @@ private:
 	void ThreadProcRecv();
 	void ThreadProcSend();
 	bool ConnectSocket();
+	void ShutdownSocket();
 	void CloseSocket();
-	bool SendClipboardData(CryptoChannel& channel, const ClipboardPayload& payload);
+	bool SendClipboardData(CryptoChannel& channel, SOCKET socket, const ClipboardPayload& payload);
 	void ReportTraffic(uint64_t bytesSent, uint64_t bytesReceived);
+	SOCKET CurrentSocket() const;
+	void SetSocket(SOCKET socket);
+	SOCKET DetachSocket();
 	void InterruptibleSleep(std::chrono::milliseconds duration);
 	void log(const char* function, Logger::Level level, const wchar_t* message, ...) const;
 	void logV(const char* function, Logger::Level level, const wchar_t* message, va_list args) const;
@@ -83,4 +87,5 @@ private:
 	TrafficCallback trafficCallback_{};
 
 	SOCKET socket_{ INVALID_SOCKET };
+	mutable std::mutex socketMutex_;
 };

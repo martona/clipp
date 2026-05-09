@@ -345,6 +345,9 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
             DrainWakeSocket(wakeSock);
         }
 
+        // empty callback just to call g_peerManager.CullPeers 
+        g_mdnsCallback(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, nullptr);
+
         if (ready > 0 && FD_ISSET(sock, &readfds)) {
             sockaddr_in fromAddr{};
             socklen_t fromLen = sizeof(fromAddr);

@@ -24,16 +24,36 @@ Settings::Settings()
     LoadCache();
 }
 
-const std::string& Settings::multicastIp() const { return multicastIp_; }
-const std::string& Settings::listenerIp() const { return listenerIp_; }
-int Settings::mdnsPort() const { return mdnsPort_; }
-int Settings::tcpPort() const { return tcpPort_; }
-const std::string& Settings::networkName() const { return networkName_; }
+std::string Settings::multicastIp() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return multicastIp_;
+}
+
+std::string Settings::listenerIp() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return listenerIp_;
+}
+
+int Settings::mdnsPort() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return mdnsPort_;
+}
+
+int Settings::tcpPort() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return tcpPort_;
+}
+
+std::string Settings::networkName() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return networkName_;
+}
 
 bool Settings::set_multicastIp(const std::string& value) {
     if (!WriteStringValue(kMulticastIpName, value)) {
         return false;
     }
+    std::lock_guard<std::mutex> lock(mutex_);
     multicastIp_ = value;
     return true;
 }
@@ -42,6 +62,7 @@ bool Settings::set_listenerIp(const std::string& value) {
     if (!WriteStringValue(kListenerIpName, value)) {
         return false;
     }
+    std::lock_guard<std::mutex> lock(mutex_);
     listenerIp_ = value;
     return true;
 }
@@ -50,6 +71,7 @@ bool Settings::set_mdnsPort(int value) {
     if (!WriteUint32Value(kMdnsPortName, value)) {
         return false;
     }
+    std::lock_guard<std::mutex> lock(mutex_);
     mdnsPort_ = value;
     return true;
 }
@@ -58,6 +80,7 @@ bool Settings::set_tcpPort(int value) {
     if (!WriteUint32Value(kTcpPortName, value)) {
         return false;
     }
+    std::lock_guard<std::mutex> lock(mutex_);
     tcpPort_ = value;
     return true;
 }
@@ -66,6 +89,7 @@ bool Settings::set_networkName(const std::string& value) {
     if (!WriteStringValue(kNetworkNameName, value)) {
         return false;
     }
+    std::lock_guard<std::mutex> lock(mutex_);
     networkName_ = value;
     return true;
 }
@@ -125,4 +149,3 @@ bool Settings::LoadCache() {
 
     return true;
 }
-

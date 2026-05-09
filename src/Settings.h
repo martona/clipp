@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -14,11 +15,11 @@ public:
 
     Settings();
 
-    const std::string& multicastIp() const;
-	const std::string& listenerIp() const;
+    std::string multicastIp() const;
+	std::string listenerIp() const;
     int mdnsPort() const;
     int tcpPort() const;
-    const std::string& networkName() const;
+    std::string networkName() const;
 
     bool set_multicastIp(const std::string& value);
 	bool set_listenerIp(const std::string& value);
@@ -49,6 +50,7 @@ private:
     int tcpPort_;
     std::string networkName_;
 	uint64_t networkNameTimestamp_;
+    mutable std::mutex mutex_;
 };
 
 extern Settings g_settings;

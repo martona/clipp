@@ -92,6 +92,7 @@ KeyManager::KeyManager(Settings& settings)
 }
 
 void KeyManager::ClearNetworkKey() {
+    std::lock_guard<std::mutex> lock(mutex_);
     cacheValid_ = false;
     cachedNetworkKey_.fill(0);
     settings_.setEncryptedNetworkKey(std::vector<unsigned char>{});
@@ -199,6 +200,8 @@ bool KeyManager::SetNetworkKey(const std::array<unsigned char, NetworkKeySize>& 
     std::vector<unsigned char> encryptedBuffer;
 #endif
 
+    std::lock_guard<std::mutex> lock(mutex_);
+
 #ifndef __APPLE__
     if (!settings_.setEncryptedNetworkKey(encryptedBuffer)) {
         if (errorMessage != nullptr) {
@@ -217,9 +220,6 @@ bool KeyManager::SetNetworkKey(const std::array<unsigned char, NetworkKeySize>& 
 }
 
 bool KeyManager::HaveNetworkKey() {
-    if (cacheValid_) {
-        return true;
-    }
     std::array<unsigned char, NetworkKeySize> networkKey{};
     bool haveKey = GetNetworkKey(networkKey);
     sodium_memzero(networkKey.data(), networkKey.size());
@@ -227,6 +227,8 @@ bool KeyManager::HaveNetworkKey() {
 }
 
 bool KeyManager::GetNetworkKey(std::array<unsigned char, NetworkKeySize>& networkKey, std::string* errorMessage) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
     if (cacheValid_) {
         networkKey = cachedNetworkKey_;
         return true;
@@ -317,7 +319,7 @@ bool KeyManager::GetNetworkKey(std::array<unsigned char, NetworkKeySize>& networ
 }
 
 bool KeyManager::DeriveNetworkKey(const std::string& password, std::array<unsigned char, 32>& outKey) {
-    static std::vector<unsigned char> staticSalt = HexStringToBytes("9ea1e55abc07c859fd900958d8b7efbe");
+    static const std::vector<unsigned char> staticSalt = HexStringToBytes("9ea1e55abc07c859fd900958d8b7efbe");
     CLIPP_ASSERT(staticSalt.size() == crypto_pwhash_SALTBYTES);
     if (crypto_pwhash(
         outKey.data(),
@@ -348,9 +350,12 @@ static std::wstring FormatHash(const unsigned char* hash, size_t hashLen) {
 }
 
 std::wstring KeyManager::GetNetworkKeyHash(const std::array<unsigned char, NetworkKeySize>* networkKey) {
+    std::array<unsigned char, NetworkKeySize> cachedNetworkKey{};
     if (networkKey == nullptr) {
+        std::lock_guard<std::mutex> lock(mutex_);
         if (cacheValid_) {
-            networkKey = &cachedNetworkKey_;
+            cachedNetworkKey = cachedNetworkKey_;
+            networkKey = &cachedNetworkKey;
         } else {
             return L"";
         }

@@ -217,6 +217,8 @@ void OnMDNSNotification(const char* hostNameUtf8,
 	}
 
     g_peerManager.CullPeers();
+    // are we just waking up to call CullPeers?
+    if (hostNameUtf8 == nullptr) return;
 
     g_logger.log(__FUNCTION__, Logger::Level::Debug,
         "mDNS notification received for host: %s / %s\n  from: %s:%hu\n  verb:    %s\n  queryID: %s\n  nonce:   %s",

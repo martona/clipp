@@ -2,6 +2,7 @@
 #include "Peer.h"
 
 #include <array>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -17,7 +18,46 @@
 #include "utils_socket.h"
 #include "PeerManager.h"
 
+#if defined(__APPLE__)
+#include <fcntl.h>
+#include <sys/select.h>
+#endif
+
 extern PeerManager g_peerManager;
+
+static bool SetSocketBlockingMode(SOCKET socket, bool blocking) {
+#ifdef _WIN32
+	u_long mode = blocking ? 0 : 1;
+	return ioctlsocket(socket, FIONBIO, &mode) == 0;
+#else
+	int flags = fcntl(socket, F_GETFL, 0);
+	if (flags == -1) return false;
+	flags = blocking ? (flags & ~O_NONBLOCK) : (flags | O_NONBLOCK);
+	return fcntl(socket, F_SETFL, flags) == 0;
+#endif
+}
+
+static int GetLastSocketError() {
+#ifdef _WIN32
+	return WSAGetLastError();
+#else
+	return errno;
+#endif
+}
+
+static bool IsConnectPendingError(int error) {
+#ifdef _WIN32
+	return error == WSAEWOULDBLOCK || error == WSAEINPROGRESS || error == WSAEALREADY;
+#else
+	return error == EINPROGRESS || error == EWOULDBLOCK || error == EALREADY;
+#endif
+}
+
+static bool GetPendingConnectError(SOCKET socket, int& connectError) {
+	socklen_t optionLength = sizeof(connectError);
+	connectError = 0;
+	return getsockopt(socket, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&connectError), &optionLength) == 0;
+}
 
 Peer::Peer(const wchar_t* hostName, const unsigned char* hostID, const wchar_t* ip, u_short port, VerifiedCallback verifiedCallback, TrafficCallback trafficCallback)
 	: hostName_(hostName), ip_(ip), port_(port),
@@ -76,10 +116,11 @@ void Peer::Stop() {
 	stopRequested_.store(true);
 	stopCV_.notify_all();
 	messageQueue_.WakeAll();
-	CloseSocket();
+	ShutdownSocket();
 	if (thread_.joinable()) {
 		thread_.join();
 	}
+	CloseSocket();
 }
 
 void Peer::InterruptibleSleep(std::chrono::milliseconds duration) {
@@ -142,20 +183,45 @@ void Peer::ReportTraffic(uint64_t bytesSent, uint64_t bytesReceived) {
 	trafficCallback_(currentHostName, currentHostID, bytesSent, bytesReceived);
 }
 
+SOCKET Peer::CurrentSocket() const {
+	std::lock_guard<std::mutex> lock(socketMutex_);
+	return socket_;
+}
+
+void Peer::SetSocket(SOCKET socket) {
+	std::lock_guard<std::mutex> lock(socketMutex_);
+	socket_ = socket;
+}
+
+SOCKET Peer::DetachSocket() {
+	std::lock_guard<std::mutex> lock(socketMutex_);
+	SOCKET socket = socket_;
+	socket_ = INVALID_SOCKET;
+	return socket;
+}
+
+void Peer::ShutdownSocket() {
+	SOCKET socket = CurrentSocket();
+	if (socket != INVALID_SOCKET) {
+		shutdown(socket, SD_BOTH);
+	}
+}
+
 void Peer::CloseSocket() {
-	if (socket_ != INVALID_SOCKET) {
-		shutdown(socket_, SD_BOTH);
-		closesocket(socket_);
-		socket_ = INVALID_SOCKET;
+	SOCKET socket = DetachSocket();
+	if (socket != INVALID_SOCKET) {
+		shutdown(socket, SD_BOTH);
+		closesocket(socket);
 	}
 }
 
 bool Peer::ConnectSocket() {
-	socket_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-	if (socket_ == INVALID_SOCKET) {
+	SOCKET socket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (socket == INVALID_SOCKET) {
 		log(__FUNCTION__, Logger::Level::Error, L"Peer: failed to create socket.");
 		return false;
 	}
+	SetSocket(socket);
 
 	sockaddr_in address{};
 	address.sin_family = AF_INET;
@@ -163,20 +229,73 @@ bool Peer::ConnectSocket() {
 	std::string peerIp = WideToUtf8String(ip());
 	if (inet_pton(AF_INET, peerIp.c_str(), &address.sin_addr) != 1) {
 		log(__FUNCTION__, Logger::Level::Error, L"Peer: invalid remote IP address.");
-		closesocket(socket_);
+		CloseSocket();
 		return false;
 	}
 
-	if (connect(socket_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == SOCKET_ERROR) {
-		log(__FUNCTION__, Logger::Level::Debug, L"Peer: TCP connect failed; retrying.");
-		closesocket(socket_);
+	if (!SetSocketBlockingMode(socket, false)) {
+		log(__FUNCTION__, Logger::Level::Error, L"Peer: failed to set socket nonblocking.");
+		CloseSocket();
+		return false;
+	}
+
+	if (connect(socket, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == SOCKET_ERROR) {
+		const int connectStartError = GetLastSocketError();
+		if (!IsConnectPendingError(connectStartError)) {
+			log(__FUNCTION__, Logger::Level::Debug, L"Peer: TCP connect failed; retrying.");
+			CloseSocket();
+			return false;
+		}
+
+		bool connected = false;
+		while (!stopRequested_.load()) {
+			fd_set writeSet;
+			fd_set errorSet;
+			FD_ZERO(&writeSet);
+			FD_ZERO(&errorSet);
+			FD_SET(socket, &writeSet);
+			FD_SET(socket, &errorSet);
+
+			timeval timeout{};
+			timeout.tv_usec = 250 * 1000;
+
+			const int selected = select(static_cast<int>(socket) + 1, nullptr, &writeSet, &errorSet, &timeout);
+			if (selected == SOCKET_ERROR) {
+				log(__FUNCTION__, Logger::Level::Debug, L"Peer: TCP connect poll failed; retrying.");
+				CloseSocket();
+				return false;
+			}
+			if (selected == 0) {
+				continue;
+			}
+
+			int connectError = 0;
+			if (!GetPendingConnectError(socket, connectError) || connectError != 0) {
+				log(__FUNCTION__, Logger::Level::Debug, L"Peer: TCP connect failed; retrying.");
+				CloseSocket();
+				return false;
+			}
+
+			connected = true;
+			break;
+		}
+
+		if (!connected) {
+			CloseSocket();
+			return false;
+		}
+	}
+
+	if (!SetSocketBlockingMode(socket, true)) {
+		log(__FUNCTION__, Logger::Level::Error, L"Peer: failed to restore socket blocking mode.");
+		CloseSocket();
 		return false;
 	}
 
 	return true;
 }
 
-bool Peer::SendClipboardData(CryptoChannel& channel, const ClipboardPayload& payload) {
+bool Peer::SendClipboardData(CryptoChannel& channel, SOCKET socket, const ClipboardPayload& payload) {
 	ClipboardPayload payloadToSend = payload;
 	const size_t maxEncodedPayloadBytes = (64u * 1024u * 1024u) - sizeof(NetworkDefs::ClipboardMessage) - crypto_secretstream_xchacha20poly1305_ABYTES;
 	if (payloadToSend.rawData.size() > maxEncodedPayloadBytes) return false;
@@ -192,10 +311,10 @@ bool Peer::SendClipboardData(CryptoChannel& channel, const ClipboardPayload& pay
 	msg.isCompressed = payloadToSend.isCompressed ? 1 : 0;
 	msg.decodedDataSize = htonl(payloadToSend.decodedDataSize);
 	msg.encodedDataSize = htonl(encodedDataSize);
-	if (!channel.SendTaggedMessage(socket_, "CLIP")) return false;
-	if (!channel.SendMessage(socket_, reinterpret_cast<unsigned char*>(& msg), sizeof(msg))) return false;
+	if (socket == INVALID_SOCKET || !channel.SendTaggedMessage(socket, "CLIP")) return false;
+	if (!channel.SendMessage(socket, reinterpret_cast<unsigned char*>(& msg), sizeof(msg))) return false;
 	if (!payloadToSend.rawData.empty())
-		if (!channel.SendMessage(socket_, payloadToSend.rawData.data(), static_cast<uint32_t>(payloadToSend.rawData.size()))) 
+		if (!channel.SendMessage(socket, payloadToSend.rawData.data(), static_cast<uint32_t>(payloadToSend.rawData.size())))
 			return false;
 	ReportTraffic(4 + sizeof(NetworkDefs::ClipboardMessage) + payloadToSend.rawData.size(), 0);
 	return true;
@@ -215,7 +334,8 @@ void Peer::ThreadProcSend() {
 		if (!g_settings.getHostID(localHostId)) { CloseSocket(); continue; }
 		char localHostNameA[256] = {};
 		if (gethostname(localHostNameA, sizeof(localHostNameA)) != 0) { CloseSocket(); continue; }
-		if (!channel.ClientHandshake(socket_, localHostId, localHostNameA, remoteHostId, remoteHostNameUtf8)) {
+		SOCKET socket = CurrentSocket();
+		if (socket == INVALID_SOCKET || !channel.ClientHandshake(socket, localHostId, localHostNameA, remoteHostId, remoteHostNameUtf8)) {
 			log(__FUNCTION__, Logger::Level::Debug, L"Peer: secure handshake failed.");
 			CloseSocket();
 			if (!stopRequested_.load()) InterruptibleSleep(std::chrono::milliseconds(5000));
@@ -238,7 +358,7 @@ void Peer::ThreadProcSend() {
 
 		log(__FUNCTION__, Logger::Level::Info, L"Peer connected and authenticated.");
 		while (!stopRequested_.load()) {
-			if (socket_ == INVALID_SOCKET || !channel.SendTaggedMessage(socket_, "PING")) {
+			if (socket == INVALID_SOCKET || !channel.SendTaggedMessage(socket, "PING")) {
 				log(__FUNCTION__, Logger::Level::Debug, L"Peer failed secure send");
 				break;
 			}
@@ -246,7 +366,7 @@ void Peer::ThreadProcSend() {
 			log(__FUNCTION__, Logger::Level::Debug, L"PING?");
 
 			char packet[4] = {};
-			if (socket_ == INVALID_SOCKET || !channel.RecvTaggedMessage(socket_, packet)) {
+			if (socket == INVALID_SOCKET || !channel.RecvTaggedMessage(socket, packet)) {
 				log(__FUNCTION__, Logger::Level::Debug, L"Peer failed secure recv");
 				break;
 			}
@@ -272,7 +392,7 @@ void Peer::ThreadProcSend() {
 				// A message was pulled from the queue
 				std::shared_ptr<const ClipboardPayload> payload = msg.value();
 				log(__FUNCTION__, Logger::Level::Debug, L"Clipboard payload to be sent: format ID %u, encoded size %zu bytes, decoded size %u bytes", payload->formatId, payload->rawData.size(), payload->decodedDataSize);
-				if (!SendClipboardData(channel, *payload)) {
+				if (!SendClipboardData(channel, socket, *payload)) {
 					log(__FUNCTION__, Logger::Level::Debug, L"Peer failed to send clipboard payload.");
 					break;
 				}
@@ -290,7 +410,8 @@ void Peer::ThreadProcRecv() {
 	CryptoChannel channel;
 	std::array<unsigned char, 32> remoteHostId{};
 	std::string remoteHostNameUtf8;
-	if (!channel.ServerHandshake(socket_, remoteHostId, remoteHostNameUtf8)) {
+	SOCKET socket = CurrentSocket();
+	if (socket == INVALID_SOCKET || !channel.ServerHandshake(socket, remoteHostId, remoteHostNameUtf8)) {
 		log(__FUNCTION__, Logger::Level::Error, L"Client secure handshake failed.");
 	}
 	else {
@@ -308,7 +429,7 @@ void Peer::ThreadProcRecv() {
 
 		char packet[4] = {};
 		while (!stopRequested_.load()) {
-			if (!channel.RecvTaggedMessage(socket_, packet)) {
+			if (socket == INVALID_SOCKET || !channel.RecvTaggedMessage(socket, packet)) {
 				break;
 			}
 			ReportTraffic(0, 4);
@@ -319,7 +440,7 @@ void Peer::ThreadProcRecv() {
 					std::lock_guard<std::mutex> lock(dataMutex_);
 					lastPingReceivedAt_ = std::chrono::steady_clock::now();
 				}
-				if (!channel.SendTaggedMessage(socket_, "PONG")) {
+				if (!channel.SendTaggedMessage(socket, "PONG")) {
 					break;
 				}
 				log(__FUNCTION__, Logger::Level::Debug, L"PONG!");
@@ -329,7 +450,7 @@ void Peer::ThreadProcRecv() {
 
 			if (std::memcmp(packet, "CLIP", 4) == 0) {
 				std::vector<unsigned char> headerMsg;
-				if (!channel.RecvMessage(socket_, headerMsg) || headerMsg.size() != sizeof(NetworkDefs::ClipboardMessage)) {
+				if (!channel.RecvMessage(socket, headerMsg) || headerMsg.size() != sizeof(NetworkDefs::ClipboardMessage)) {
 					break;
 				}
 				ReportTraffic(0, headerMsg.size());
@@ -345,7 +466,7 @@ void Peer::ThreadProcRecv() {
 				payload.isCompressed = clipMessage->isCompressed != 0;
 				uint32_t encodedDataSize = ntohl(clipMessage->encodedDataSize);
 
-				if (!channel.RecvMessage(socket_, payload.rawData)) {
+				if (!channel.RecvMessage(socket, payload.rawData)) {
 					break;
 				}
 				ReportTraffic(0, payload.rawData.size());
@@ -384,6 +505,7 @@ void Peer::ThreadProcRecv() {
 		log(__FUNCTION__, Logger::Level::Info, L"Client disconnected");
 	}
 
+	CloseSocket();
 	running_.store(false);
 	std::thread([]() {
 			g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Lambda culling...");

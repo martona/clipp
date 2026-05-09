@@ -12,7 +12,7 @@
 
 static std::thread g_clipboardThread;
 static std::atomic<bool> g_stopClipboardThread{false};
-static NSInteger g_lastChangeCount = 0;
+static std::atomic<NSInteger> g_lastChangeCount{0};
 
 static std::mutex g_hashMutex;
 static XXH128_hash_t g_lastClipboardHash{ 0, 0 };
@@ -35,7 +35,7 @@ static void ClipboardThreadProc(std::promise<bool> initPromise, ClipboardCallbac
 
     @autoreleasepool {
         NSPasteboard* pb = [NSPasteboard generalPasteboard];
-        g_lastChangeCount = [pb changeCount];
+        g_lastChangeCount.store([pb changeCount]);
     }
 
     initPromise.set_value(true);
@@ -46,8 +46,8 @@ static void ClipboardThreadProc(std::promise<bool> initPromise, ClipboardCallbac
             NSPasteboard* pb = [NSPasteboard generalPasteboard];
             NSInteger currentCount = [pb changeCount];
             
-            if (currentCount != g_lastChangeCount) {
-                g_lastChangeCount = currentCount;
+            if (currentCount != g_lastChangeCount.load()) {
+                g_lastChangeCount.store(currentCount);
                 if (g_clipboardCallback) {
                     g_clipboardCallback(nullptr);
                 }
@@ -158,7 +158,7 @@ void SetClipboardData(ClipboardPayload& payload) {
 
         if (wroteClipboard) {
             // Fast-forward our known changeCount so we don't trigger a recursive network broadcast of our own change
-            g_lastChangeCount = [pb changeCount];
+            g_lastChangeCount.store([pb changeCount]);
 
             std::lock_guard<std::mutex> lock(g_hashMutex);
             g_lastClipboardHash = newHash;

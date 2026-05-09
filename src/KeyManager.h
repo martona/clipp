@@ -3,6 +3,7 @@
 #include "Settings.h"
 
 #include <array>
+#include <mutex>
 #include <string>
 
 class KeyManager {
@@ -22,6 +23,7 @@ private:
     Settings& settings_;
     bool cacheValid_ = false;
     std::array<unsigned char, NetworkKeySize> cachedNetworkKey_{};
+    mutable std::mutex mutex_;
 };
 
 extern KeyManager g_keyManager;

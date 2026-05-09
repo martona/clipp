@@ -40,6 +40,7 @@ public:
 	};
 
     void SetNotificationTarget(HWND hwnd, UINT messageId) {
+        std::lock_guard<std::mutex> lock(mutex);
         notifyWindowHandle = hwnd;
         notifyMessageId = messageId;
     }
@@ -60,6 +61,8 @@ private:
                 // Grab the latest password and its generation ID
                 targetPassword = pendingPassword;
                 targetGeneration = currentGeneration;
+                sodium_memzero(pendingPassword.data(), pendingPassword.capacity());
+                pendingPassword.clear();
                 hasPendingWork = false;
             }
 
@@ -69,31 +72,39 @@ private:
             std::array<unsigned char, KeyManager::NetworkKeySize> newKey{};
             bool success = g_keyManager.DeriveNetworkKey(targetPassword, newKey);
             sodium_memzero(targetPassword.data(), targetPassword.capacity());
-            sodium_memzero(pendingPassword.data(), pendingPassword.capacity());
 
             // --- CHECK IF STALE ---
+            bool shouldApply = false;
             {
                 std::lock_guard<std::mutex> lock(mutex);
                 if (targetGeneration == currentGeneration) {
                     // We are still the latest request! The user didn't type anything new.
-                    if (success) {
-                        // Apply the key to your PeerManager / Settings here
-                        ApplyKeyToSystem(newKey);
-                    }
+                    shouldApply = success;
                 } else {
                     // STALE: The user kept typing. Throw away this hash.
                     // The loop will immediately restart because hasPendingWork is true again.
                 }
             }
+            if (shouldApply) {
+                // Apply the key to your PeerManager / Settings here
+                ApplyKeyToSystem(newKey);
+            }
         }
     }
 
     void ApplyKeyToSystem(const std::array<unsigned char, KeyManager::NetworkKeySize>& key) {
-		if (notifyMessageId == 0 || notifyWindowHandle == nullptr) return;
+        HWND hwnd = nullptr;
+        UINT messageId = 0;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            hwnd = notifyWindowHandle;
+            messageId = notifyMessageId;
+        }
+		if (messageId == 0 || hwnd == nullptr) return;
 		KeyDerivationResult result{};
         result.derivedKey = std::move(key);
         result.derivedKeyHash = std::move(g_keyManager.GetNetworkKeyHash(&key));
-		SendMessage(notifyWindowHandle, notifyMessageId, reinterpret_cast<WPARAM>(&result), 0);
+		SendMessage(hwnd, messageId, reinterpret_cast<WPARAM>(&result), 0);
     }
 
     std::thread workerThread;
