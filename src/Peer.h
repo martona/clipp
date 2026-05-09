@@ -14,6 +14,7 @@
 #include <variant>
 #include <functional>
 #include "platform.h"
+#include "utils_socket.h"
 #include "BlockingQueue.h"
 #include "ClipboardData.h"
 #include "Logger.h"
@@ -55,7 +56,6 @@ private:
 	void ThreadProcRecv();
 	void ThreadProcSend();
 	bool ConnectSocket();
-	void ShutdownSocket();
 	void CloseSocket();
 	bool SendClipboardData(CryptoChannel& channel, SOCKET socket, const ClipboardPayload& payload);
 	void ReportTraffic(uint64_t bytesSent, uint64_t bytesReceived);
@@ -89,4 +89,5 @@ private:
 
 	SOCKET socket_{ INVALID_SOCKET };
 	mutable std::mutex socketMutex_;
+	SocketWakeEvent wakeEvent_;
 };

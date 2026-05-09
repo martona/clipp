@@ -7,6 +7,8 @@
 #include <vector>
 #include "platform.h"
 
+class SocketWakeEvent;
+
 class CryptoChannel {
 public:
     static constexpr size_t HostIdSize = 32;
@@ -20,17 +22,19 @@ public:
                         const std::string& localHostNameUtf8, 
                         std::array<unsigned char, 
                         HostIdSize>& remoteHostId, 
-                        std::string& remoteHostNameUtf8);
+                        std::string& remoteHostNameUtf8,
+                        const SocketWakeEvent* wakeEvent = nullptr);
     bool ServerHandshake(SOCKET socket, 
                         std::array<unsigned char, 
                         HostIdSize>& remoteHostId, 
-                        std::string& remoteHostNameUtf8);
+                        std::string& remoteHostNameUtf8,
+                        const SocketWakeEvent* wakeEvent = nullptr);
 
-    bool SendTaggedMessage(SOCKET socket, const char* tag4);
-    bool RecvTaggedMessage(SOCKET socket, char* outTag4);
+    bool SendTaggedMessage(SOCKET socket, const char* tag4, const SocketWakeEvent* wakeEvent = nullptr);
+    bool RecvTaggedMessage(SOCKET socket, char* outTag4, const SocketWakeEvent* wakeEvent = nullptr);
 
-    bool SendMessage(SOCKET socket, const unsigned char* data, uint32_t dataSize);
-    bool RecvMessage(SOCKET socket, std::vector<unsigned char>& outData);
+    bool SendMessage(SOCKET socket, const unsigned char* data, uint32_t dataSize, const SocketWakeEvent* wakeEvent = nullptr);
+    bool RecvMessage(SOCKET socket, std::vector<unsigned char>& outData, const SocketWakeEvent* wakeEvent = nullptr);
 
 private:
     bool LoadNetworkKey(std::array<unsigned char, crypto_secretbox_KEYBYTES>& networkKey);

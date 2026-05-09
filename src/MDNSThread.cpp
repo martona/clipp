@@ -14,6 +14,8 @@
 #include <iomanip>
 #include <mutex>
 
+#include "utils_socket.h"
+
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "Crypt32.lib")
 
@@ -21,8 +23,7 @@ static std::thread g_mdnsThread;
 static MDNSCallback g_mdnsCallback = nullptr;
 static std::atomic<bool> g_mdnsRunning{ false };
 static SOCKET g_mdnsSock = INVALID_SOCKET;
-static SOCKET g_mdnsWakeSock = INVALID_SOCKET;
-static sockaddr_in g_mdnsWakeAddr{};
+static SocketWakeEvent g_mdnsWakeEvent;
 static std::mutex g_mdnsSocketMutex;
 static std::atomic<bool> g_mdnsSendImmediately{ false };
 static std::array<unsigned char, 32> g_lastSentQueryID{};
@@ -179,59 +180,9 @@ static bool SendDiscoveryPacket(SOCKET sock, const sockaddr_in& targetAddr, cons
     return sent == sizeof(encryptedPacket);
 }
 
-static bool CreateWakeSocket(SOCKET& wakeSock, sockaddr_in& wakeAddr) {
-    wakeSock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (wakeSock == INVALID_SOCKET)
-        return false;
-
-    sockaddr_in bindAddr{};
-    bindAddr.sin_family = AF_INET;
-    bindAddr.sin_port = 0;
-    if (inet_pton(AF_INET, "127.0.0.1", &bindAddr.sin_addr) != 1) {
-        closesocket(wakeSock);
-        wakeSock = INVALID_SOCKET;
-        return false;
-    }
-
-    if (bind(wakeSock, reinterpret_cast<const sockaddr*>(&bindAddr), sizeof(bindAddr)) == SOCKET_ERROR) {
-        closesocket(wakeSock);
-        wakeSock = INVALID_SOCKET;
-        return false;
-    }
-
-    socklen_t addrLen = sizeof(wakeAddr);
-    if (getsockname(wakeSock, reinterpret_cast<sockaddr*>(&wakeAddr), &addrLen) == SOCKET_ERROR) {
-        closesocket(wakeSock);
-        wakeSock = INVALID_SOCKET;
-        return false;
-    }
-
-    return true;
-}
-
 static void WakeMDNSThread() {
-    SOCKET wakeSock = INVALID_SOCKET;
-    sockaddr_in wakeAddr{};
-    {
-        std::lock_guard<std::mutex> lock(g_mdnsSocketMutex);
-        wakeSock = g_mdnsWakeSock;
-        wakeAddr = g_mdnsWakeAddr;
-    }
-
-    if (wakeSock == INVALID_SOCKET)
-        return;
-
-    const char wakeByte = 0;
-    sendto(wakeSock, &wakeByte, sizeof(wakeByte), 0,
-        reinterpret_cast<const sockaddr*>(&wakeAddr), sizeof(wakeAddr));
-}
-
-static void DrainWakeSocket(SOCKET wakeSock) {
-    std::array<char, 64> wakeBuffer{};
-    sockaddr_in fromAddr{};
-    socklen_t fromLen = sizeof(fromAddr);
-    recvfrom(wakeSock, wakeBuffer.data(), static_cast<int>(wakeBuffer.size()), 0,
-        reinterpret_cast<sockaddr*>(&fromAddr), &fromLen);
+    std::lock_guard<std::mutex> lock(g_mdnsSocketMutex);
+    g_mdnsWakeEvent.Signal();
 }
 
 static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback) {
@@ -261,9 +212,7 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
         return;
     }
 
-    SOCKET wakeSock = INVALID_SOCKET;
-    sockaddr_in wakeAddr{};
-    if (!CreateWakeSocket(wakeSock, wakeAddr)) {
+    if (!g_mdnsWakeEvent.Initialize()) {
         closesocket(sock);
         initPromise.set_value(false);
         return;
@@ -282,7 +231,7 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
     bindAddr.sin_port = htons(static_cast<u_short>(g_settings.mdnsPort()));
     bindAddr.sin_addr.s_addr = listenerAddrn.s_addr;
     if (bind(sock, reinterpret_cast<const sockaddr*>(&bindAddr), sizeof(bindAddr)) == SOCKET_ERROR) {
-        closesocket(wakeSock);
+        g_mdnsWakeEvent.Close();
         closesocket(sock);
         initPromise.set_value(false);
         return;
@@ -301,8 +250,6 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
     {
         std::lock_guard<std::mutex> lock(g_mdnsSocketMutex);
         g_mdnsSock = sock;
-        g_mdnsWakeSock = wakeSock;
-        g_mdnsWakeAddr = wakeAddr;
     }
     g_mdnsSendImmediately = true;
     g_mdnsRunning = true;
@@ -327,13 +274,13 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
         fd_set readfds;
         FD_ZERO(&readfds);
         FD_SET(sock, &readfds);
-        FD_SET(wakeSock, &readfds);
+        FD_SET(g_mdnsWakeEvent.Socket(), &readfds);
 
         timeval tv{};
         tv.tv_sec = 10;
         tv.tv_usec = 0;
 
-        const SOCKET maxSock = (std::max)(sock, wakeSock);
+        const SOCKET maxSock = (std::max)(sock, g_mdnsWakeEvent.Socket());
         const int ready = select(static_cast<int>(maxSock) + 1, &readfds, nullptr, nullptr, &tv);
         if (ready == SOCKET_ERROR)
             break;
@@ -341,12 +288,9 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
         if (!g_mdnsRunning.load())
             break;
 
-        if (ready > 0 && FD_ISSET(wakeSock, &readfds)) {
-            DrainWakeSocket(wakeSock);
+        if (ready > 0 && FD_ISSET(g_mdnsWakeEvent.Socket(), &readfds)) {
+            g_mdnsWakeEvent.Drain();
         }
-
-        // empty callback just to call g_peerManager.CullPeers 
-        g_mdnsCallback(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, nullptr);
 
         if (ready > 0 && FD_ISSET(sock, &readfds)) {
             sockaddr_in fromAddr{};
@@ -412,15 +356,11 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
         setsockopt(sock, IPPROTO_IP, IP_DROP_MEMBERSHIP, reinterpret_cast<const char*>(&group), sizeof(group));
         closesocket(sock);
     }
-    if (wakeSock != INVALID_SOCKET) {
-        closesocket(wakeSock);
-    }
 
     {
         std::lock_guard<std::mutex> lock(g_mdnsSocketMutex);
         g_mdnsSock = INVALID_SOCKET;
-        g_mdnsWakeSock = INVALID_SOCKET;
-        g_mdnsWakeAddr = {};
+        g_mdnsWakeEvent.Close();
     }
     g_mdnsRunning = false;
 }

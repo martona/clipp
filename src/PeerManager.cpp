@@ -36,8 +36,9 @@ void PeerManager::AddPeer(const wchar_t* hostName, const unsigned char* hostID, 
 		});
 	peer->MarkDisplayRegistered();
 	g_peerDisplay.NotifyPeer(peer->hostName(), peer->hostID(), peer->connType_, peer->createdAt());
-	peer->Start();
+	Peer* peerPtr = peer.get();
 	peers_.emplace_back(std::move(peer));
+	peerPtr->Start();
 	g_logger.log(__FUNCTION__, Logger::Level::Debug, L"PeerManager: added new peer (outgoing).");
 }
 
