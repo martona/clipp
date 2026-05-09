@@ -1,6 +1,14 @@
 #pragma once
 
-#include <Windows.h>
+#ifndef _WINDEF_
+struct HWND__;
+typedef HWND__* HWND;
+#endif
+
+#ifndef _WINUSER_
+struct tagMSG;
+typedef tagMSG MSG;
+#endif
 
 void ShowClippMainDialog(HWND owner);
 bool ClippMainDialogPreTranslateMessage(MSG* msg);

@@ -1,19 +1,18 @@
-#include "PeerManager.h"
+#include "Logger.h"
 #include "PeerDisplay.h"
-#include "platform_win32_xaml_dialog.h"
-#include "platform_win32_NetworkView.h"
+#include "PeerManager.h"
+#include "clipp-win32-darkmode32/DMSubclass.h"
+#include "platform_win32_ClippPage.h"
+#include "platform_win32_PlaceholderPage.h"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstdint>
 #include <memory>
-#include <mutex>
+#include <limits>
 #include <string>
 
 #include <Windows.h>
-// winrt/Windows.UI.Xaml.Media.Animation.h has a GetCurrentTime method; Windows.h
-// also defines GetCurrentTime as a compatibility macro, which breaks C++/WinRT.
 #ifdef GetCurrentTime
 #undef GetCurrentTime
 #endif
@@ -31,14 +30,9 @@
 #include <winrt/Windows.UI.Xaml.Hosting.h>
 #include <winrt/Windows.UI.Xaml.Input.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
-#include <winrt/Windows.System.h>
 #include <winrt/base.h>
 
-#include "Logger.h"
-#include "platform_win32_TerminalLogView.h"
-#include "MDNSThread.h"
-#include "clipp-win32-darkmode32/DMSubclass.h"
-#include "platform_win32_KeyDerivationWorker.h"
+#include "platform_win32_xaml_dialog.h"
 
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "runtimeobject.lib")
@@ -46,127 +40,22 @@
 
 extern PeerManager g_peerManager;
 extern PeerDisplay g_peerDisplay;
+extern Logger g_logger;
 
 namespace {
 
 constexpr wchar_t kDialogClassName[] = L"ClippMainXamlDialog";
-constexpr double kDialogDefaultClientWidthDips = 720;
-constexpr double kDialogDefaultClientHeightDips = 560;
-constexpr double kDialogMinClientWidthDips = 520;
+constexpr double kDialogDefaultClientWidthDips = 820;
+constexpr double kDialogDefaultClientHeightDips = 580;
+constexpr double kDialogMinClientWidthDips = 620;
 constexpr double kDialogMinClientHeightDips = 420;
 
-struct XamlDialogState {
-    winrt::Windows::UI::Xaml::Hosting::DesktopWindowXamlSource xamlSource{ nullptr };
-    HWND xamlHost = nullptr;
-};
-
-HWND g_dialogWindow = nullptr;
-winrt::Windows::UI::Xaml::Hosting::WindowsXamlManager g_xamlManager{ nullptr };
-std::wstring g_createError;
-
-winrt::Windows::UI::Xaml::Controls::TextBox g_networkNameField{ nullptr };
-winrt::Windows::UI::Xaml::Controls::PasswordBox g_passwordField{ nullptr };
-winrt::Windows::System::DispatcherQueue g_uiDispatcher{ nullptr };
-std::unique_ptr<TerminalLogView> g_terminalLogView;
-std::unique_ptr<NetworkView> g_networkView;
-winrt::Windows::UI::Xaml::DispatcherTimer g_networkPollTimer{ nullptr };
-std::mutex g_terminalLogViewMutex;
-winrt::Windows::UI::Xaml::Controls::StackPanel g_passwordStatusPanel{ nullptr };
-winrt::Windows::UI::Xaml::Controls::TextBlock g_passwordHashText{ nullptr };
-winrt::Windows::UI::Xaml::Controls::StackPanel g_passwordInfoPanel{ nullptr };
-winrt::Windows::UI::Xaml::Controls::TextBlock g_passwordInfoText{ nullptr };
-
-KeyDerivationWorker g_keyDerivationWorker;
-UINT g_msgDerivedKey = RegisterWindowMessageW(L"ClippDerivedKeyNotification");
-UINT g_msgPeerDisplayUpdate = RegisterWindowMessageW(L"ClippPeerDisplayUpdate");
-
-std::size_t g_peerDisplayWatcherID{};
-
-void NetworkView_Poll() {
-    if (g_networkView) {
-        g_networkView->Poll();
-    }
-}
-
-void NetworkView_StartPollTimer() {
-    if (!g_networkPollTimer) {
-        g_networkPollTimer = winrt::Windows::UI::Xaml::DispatcherTimer();
-        g_networkPollTimer.Interval(std::chrono::seconds(1));
-        g_networkPollTimer.Tick([](auto const&, auto const&) {
-            NetworkView_Poll();
-        });
-    }
-    g_networkPollTimer.Start();
-}
-
-void NetworkView_StopPollTimer() {
-    if (g_networkPollTimer) {
-        g_networkPollTimer.Stop();
-    }
-}
-
-void PeerDisplay_Watcher(const PeerDisplayUpdate&, void* userData) {
-    const HWND hwnd = reinterpret_cast<HWND>(userData);
-    if (hwnd && IsWindow(hwnd)) {
-        PostMessageW(hwnd, g_msgPeerDisplayUpdate, 0, 0);
-    }
-}
-
-void PeerDisplay_BeginNotifications(HWND hwnd) {
-    if (!hwnd || g_peerDisplayWatcherID != 0) {
-        return;
-    }
-
-    const auto registration = g_peerDisplay.QueryAndRegister(PeerDisplay_Watcher, hwnd);
-    g_peerDisplayWatcherID = registration.watcherID;
-    NetworkView_Poll();
-}
-
-void PeerDisplay_EndNotifications() {
-    if (g_peerDisplayWatcherID == 0) {
-        return;
-    }
-
-    g_peerDisplay.Unregister(g_peerDisplayWatcherID);
-    g_peerDisplayWatcherID = 0;
-}
-
-void PasswordFields_Setup() {
-    using namespace winrt::Windows::UI::Xaml;
-    std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
-
-    if (g_keyManager.HaveNetworkKey()) {
-        g_passwordField.Password(L"••••••••••••••••");
-        g_passwordHashText.Text(g_keyManager.GetNetworkKeyHash());
-        g_passwordStatusPanel.Visibility(Visibility::Visible);
-        g_passwordInfoPanel.Visibility(Visibility::Collapsed);
-    } else {
-        g_passwordField.Password(L"");
-        g_passwordInfoText.Text(L"Enter network secret to create or join a network.");
-        g_passwordStatusPanel.Visibility(Visibility::Collapsed);
-        g_passwordInfoPanel.Visibility(Visibility::Visible);
-    }
-}
-
-void PasswordFields_NewHashReceived() {
-    using namespace winrt::Windows::UI::Xaml;
-    if (g_keyManager.HaveNetworkKey()) {
-        g_passwordHashText.Text(g_keyManager.GetNetworkKeyHash());
-        g_passwordStatusPanel.Visibility(Visibility::Visible);
-        g_passwordInfoPanel.Visibility(Visibility::Collapsed);
-    }
-}
-
-void EnsureXamlInitialized() {
+void EnsureWinRtApartmentInitialized() {
     static bool apartmentInitialized = false;
 
     if (!apartmentInitialized) {
         winrt::init_apartment(winrt::apartment_type::single_threaded);
         apartmentInitialized = true;
-    }
-
-    if (!g_xamlManager) {
-        g_xamlManager = winrt::Windows::UI::Xaml::Hosting::WindowsXamlManager::InitializeForCurrentThread();
     }
 }
 
@@ -221,266 +110,12 @@ winrt::Windows::UI::Xaml::Media::Brush GetThemeBackgroundBrush() {
     return SolidColorBrush(ColorFromColorRef(fallbackColor));
 }
 
-winrt::Windows::UI::Xaml::Controls::ScrollViewer CreateTerminalLikeScrollViewer() {
-    auto terminalLogView = std::make_unique<TerminalLogView>();
-    auto view = terminalLogView->View();
-
-    {
-        std::lock_guard<std::mutex> lock(g_terminalLogViewMutex);
-        g_terminalLogView = std::move(terminalLogView);
-    }
-
-    return view;
-}
-
-winrt::Windows::UI::Xaml::Controls::Grid BuildPlaceholderContent() {
-    using namespace winrt::Windows::UI::Xaml;
-    using namespace winrt::Windows::UI::Xaml::Controls;
-    using namespace winrt::Windows::UI::Xaml::Media;
-
-    Grid root;
-    root.RequestedTheme(GetCurrentXamlTheme());
-    root.Background(GetThemeBackgroundBrush());
-
-    StackPanel content;
-    content.Orientation(Orientation::Vertical);
-    content.Padding(ThicknessHelper::FromUniformLength(24));
-    content.Spacing(16);
-
-    TextBlock heading;
-    heading.Text(L"Clipp");
-    heading.FontSize(28);
-    heading.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
-    heading.TextWrapping(TextWrapping::Wrap);
-    content.Children().Append(heading);
-
-    TextBlock intro;
-    intro.Text(L"Secure cross-platform clipboard sync with peer-to-peer networking.");
-    intro.FontSize(14);
-    intro.TextWrapping(TextWrapping::WrapWholeWords);
-    content.Children().Append(intro);
-
-
-    // --- 1. Password Header ---
-    TextBlock passwordHeader;
-    passwordHeader.Text(L"Network");
-    passwordHeader.FontSize(16);
-    passwordHeader.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
-
-    TextBlock networkNameLabel;
-    networkNameLabel.Text(L"Name");
-    networkNameLabel.VerticalAlignment(VerticalAlignment::Center);
-
-    TextBlock passwordLabel;
-    passwordLabel.Text(L"Secret");
-    passwordLabel.VerticalAlignment(VerticalAlignment::Center);
-
-    g_networkNameField = TextBox();
-    g_networkNameField.VerticalAlignment(VerticalAlignment::Center);
-
-    std::string currentName = g_settings.networkName();
-    size_t size_needed = utf8_to_utf16(currentName.c_str(), currentName.length(), nullptr, 0);
-    std::wstring wCurrentName(size_needed, 0);
-    utf8_to_utf16(currentName.c_str(), currentName.length(), &wCurrentName[0], size_needed);
-    g_networkNameField.Text(wCurrentName);
-
-    g_networkNameField.LostFocus([](auto const& sender, auto const&) {
-            auto tb = sender.as<winrt::Windows::UI::Xaml::Controls::TextBox>();
-            std::string newName = winrt::to_string(tb.Text());
-
-            if (newName != g_settings.networkName() && !newName.empty()) {
-                g_settings.set_networkName(newName);
-				g_keyManager.ClearNetworkKey(); // Clear the key to force re-derivation with the new name
-                MDNSNotifyNetworkKeyChange();
-                g_peerManager.ClearPeers();
-				PasswordFields_Setup();
-            }
-        });
-
-    // Editable Input
-    winrt::Windows::UI::Xaml::DispatcherTimer debounceTimer;
-    debounceTimer.Interval(std::chrono::milliseconds(500));
-    debounceTimer.Stop();
-    debounceTimer.Tick([=](auto const&, auto const&) {
-            debounceTimer.Stop();
-            winrt::hstring pwd = g_passwordField.Password();
-
-            g_passwordStatusPanel.Visibility(Visibility::Collapsed);
-            g_passwordInfoPanel.Visibility(Visibility::Visible);
-
-            if (pwd.size() < 8) {
-                g_passwordInfoText.Text(L"Password must be at least 8 characters.");
-                return; // Reject and wait for user to keep typing
-            }
-
-            g_passwordInfoText.Text(L"... working ...");
-
-            std::string networkName = g_settings.networkName();
-            g_logger.log(__FUNCTION__, Logger::Level::Debug, "Generating key with secret (network name: %s)", networkName.c_str());
-            std::string newPassword = winrt::to_string(pwd);
-            std::string netNameAndPassword = networkName + "|";
-            netNameAndPassword += newPassword;
-            g_keyDerivationWorker.RequestKeyDerivation(netNameAndPassword);
-            sodium_memzero(newPassword.data(), newPassword.capacity());
-            sodium_memzero(netNameAndPassword.data(), netNameAndPassword.capacity());
-        });
-
-    g_passwordField = PasswordBox();
-    g_passwordField.VerticalAlignment(VerticalAlignment::Center);
-    g_passwordField.MinWidth(200);
-    g_passwordField.Tag(winrt::box_value(false));
-    g_passwordField.GotFocus([](auto const& sender, auto const&) {
-            g_passwordField.Password(L"");
-        });
-    g_passwordField.LostFocus([](auto const& sender, auto const&) {
-            PasswordFields_Setup();
-        });
-    g_passwordField.KeyDown([](auto const& sender, auto const& e) {
-            //if (e.Key() == winrt::Windows::System::VirtualKey::Escape) {
-            //    PasswordFields_CancelEdit();
-            //    e.Handled(true);
-            //}
-        });
-    g_passwordField.PasswordChanged([=](auto const& sender, auto const&) {
-            debounceTimer.Stop();
-            if (g_passwordField.Password() != L"" &&
-                g_passwordField.Password() != L"••••••••••••••••") {
-                debounceTimer.Start();
-            }
-        });
-
-    // --- 2. Input Row Grid ---
-    Grid inputGrid;
-    inputGrid.CornerRadius(CornerRadius{ 4 });
-    inputGrid.BorderThickness(ThicknessHelper::FromLengths(1, 1, 1, 1));
-    inputGrid.BorderBrush(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(50, 150, 150, 150)));
-    inputGrid.Padding(ThicknessHelper::FromLengths(16, 12, 16, 12));
-
-    inputGrid.RowSpacing(12);
-    inputGrid.ColumnSpacing(16);
-
-    ColumnDefinition col1, col2;
-    col1.Width(GridLength{ 1, GridUnitType::Auto });
-    col2.Width(GridLength{ 1, GridUnitType::Star });
-    inputGrid.ColumnDefinitions().Append(col1);
-    inputGrid.ColumnDefinitions().Append(col2);
-
-    RowDefinition row1, row2;
-    row1.Height(GridLength{ 1, GridUnitType::Auto });
-    row2.Height(GridLength{ 1, GridUnitType::Auto });
-    inputGrid.RowDefinitions().Append(row1);
-    inputGrid.RowDefinitions().Append(row2);
-
-    // Row 0: Network Name
-    Grid::SetRow(networkNameLabel, 0);
-    Grid::SetColumn(networkNameLabel, 0);
-    Grid::SetRow(g_networkNameField, 0);
-    Grid::SetColumn(g_networkNameField, 1);
-
-    // Row 1: Network Secret
-    Grid::SetRow(passwordLabel, 1);
-    Grid::SetColumn(passwordLabel, 0);
-    Grid::SetRow(g_passwordField, 1);
-    Grid::SetColumn(g_passwordField, 1);
-
-    inputGrid.Children().Append(networkNameLabel);
-    inputGrid.Children().Append(g_networkNameField);
-    inputGrid.Children().Append(passwordLabel);
-    inputGrid.Children().Append(g_passwordField);
-
-    // --- 3. Status Panel (Key Icon, Bold Hash, Explainer) ---
-    g_passwordStatusPanel = StackPanel();
-    g_passwordStatusPanel.CornerRadius(CornerRadius{ 4 });
-    g_passwordStatusPanel.BorderThickness(ThicknessHelper::FromLengths(1, 1, 1, 1));
-    g_passwordStatusPanel.BorderBrush(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(50, 150, 150, 150)));
-    g_passwordStatusPanel.Padding(ThicknessHelper::FromLengths(16, 12, 16, 12));
-    g_passwordStatusPanel.Orientation(Orientation::Horizontal);
-    g_passwordStatusPanel.Spacing(12);
-
-    FontIcon keyIcon;
-    keyIcon.FontFamily(Media::FontFamily(L"Segoe MDL2 Assets"));
-    keyIcon.Glyph(L"\xE8D7"); // Key icon
-    keyIcon.FontSize(18);
-    keyIcon.VerticalAlignment(VerticalAlignment::Center);
-
-    StackPanel statusTextStack;
-    statusTextStack.Orientation(Orientation::Vertical);
-    statusTextStack.Spacing(2);
-    statusTextStack.VerticalAlignment(VerticalAlignment::Center);
-
-    g_passwordHashText = TextBlock();
-    g_passwordHashText.FontWeight(winrt::Windows::UI::Text::FontWeights::Bold());
-    g_passwordHashText.TextWrapping(TextWrapping::Wrap);
-
-    TextBlock hashExplainer;
-    hashExplainer.Text(L"Network key fingerprint. Used only on this screen; not in itself a secret.");
-    hashExplainer.Opacity(0.6); // Muted/darker text style
-    hashExplainer.TextWrapping(TextWrapping::Wrap);
-
-    statusTextStack.Children().Append(g_passwordHashText);
-    statusTextStack.Children().Append(hashExplainer);
-
-    g_passwordStatusPanel.Children().Append(keyIcon);
-    g_passwordStatusPanel.Children().Append(statusTextStack);
-
-    // --- 4. Info Panel (Info Icon, Notification Text) ---
-    g_passwordInfoPanel = StackPanel();
-    g_passwordInfoPanel.CornerRadius(CornerRadius{ 4 });
-    g_passwordInfoPanel.BorderThickness(ThicknessHelper::FromLengths(1, 1, 1, 1));
-    g_passwordInfoPanel.BorderBrush(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(50, 150, 150, 150)));
-    g_passwordInfoPanel.Padding(ThicknessHelper::FromLengths(16, 12, 16, 12));
-    g_passwordInfoPanel.Orientation(Orientation::Horizontal);
-    g_passwordInfoPanel.Spacing(12);
-
-    FontIcon infoIcon;
-    infoIcon.FontFamily(Media::FontFamily(L"Segoe MDL2 Assets"));
-    infoIcon.Glyph(L"\xE946"); // Info icon
-    infoIcon.FontSize(18);
-    infoIcon.VerticalAlignment(VerticalAlignment::Center);
-
-    g_passwordInfoText = TextBlock();
-    g_passwordInfoText.VerticalAlignment(VerticalAlignment::Center);
-
-    g_passwordInfoPanel.Children().Append(infoIcon);
-    g_passwordInfoPanel.Children().Append(g_passwordInfoText);
-
-    // --- Container Assembly ---
-    StackPanel outerContainer;
-    outerContainer.Orientation(Orientation::Vertical);
-    outerContainer.Spacing(10);
-
-    outerContainer.Children().Append(passwordHeader);
-    outerContainer.Children().Append(inputGrid);
-    outerContainer.Children().Append(g_passwordStatusPanel);
-    outerContainer.Children().Append(g_passwordInfoPanel);
-
-    content.Children().Append(outerContainer);
-
-    g_networkView = std::make_unique<NetworkView>(g_peerDisplay);
-    content.Children().Append(g_networkView->View());
-    NetworkView_Poll();
-
-    content.Children().Append(CreateTerminalLikeScrollViewer());
-
-    winrt::Windows::UI::Xaml::Controls::ScrollViewer mainScroll;
-    mainScroll.VerticalScrollBarVisibility(winrt::Windows::UI::Xaml::Controls::ScrollBarVisibility::Auto);
-    mainScroll.Content(content); 
-    root.Children().Append(mainScroll);
-
-    g_uiDispatcher = winrt::Windows::System::DispatcherQueue::GetForCurrentThread();
-
-    return root;
-}
-
-void ResizeXamlHost(HWND hwnd);
-
 void ApplyModernWindowAttributes(HWND hwnd) {
-    // Prefer the newer dark-title-bar attribute, but fall back to the earlier Windows 10 value.
     BOOL useDarkTitleBar = DarkMode::isEnabled() ? TRUE : FALSE;
     DwmSetWindowAttribute(hwnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &useDarkTitleBar, sizeof(useDarkTitleBar));
     DwmSetWindowAttribute(hwnd, 19 /* DWMWA_USE_IMMERSIVE_DARK_MODE before Windows 10 20H1 */, &useDarkTitleBar, sizeof(useDarkTitleBar));
 
-    const DWORD cornerPreferenceRound = 2; // DWMWCP_ROUND on Windows 11; ignored on older builds.
+    const DWORD cornerPreferenceRound = 2;
     DwmSetWindowAttribute(hwnd, 33 /* DWMWA_WINDOW_CORNER_PREFERENCE */, &cornerPreferenceRound, sizeof(cornerPreferenceRound));
 }
 
@@ -488,324 +123,430 @@ int DipsToPixels(double dips, UINT dpi) {
     return static_cast<int>(std::ceil(dips * dpi / USER_DEFAULT_SCREEN_DPI));
 }
 
-RECT WindowRectForClientSize(HWND hwnd, int clientWidth, int clientHeight) {
-    RECT rect{ 0, 0, clientWidth, clientHeight };
-    const DWORD style = static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_STYLE));
-    const DWORD exStyle = static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE));
-    const BOOL hasMenu = GetMenu(hwnd) != nullptr;
-    const UINT dpi = GetDpiForWindow(hwnd);
-
-    if (!AdjustWindowRectExForDpi(&rect, style, hasMenu, exStyle, dpi)) {
-        AdjustWindowRectEx(&rect, style, hasMenu, exStyle);
-    }
-
-    return rect;
-}
-
-SIZE DesiredClientSizePixels(HWND hwnd) {
-    const UINT dpi = GetDpiForWindow(hwnd);
-    double widthDips = kDialogDefaultClientWidthDips;
-    double heightDips = kDialogDefaultClientHeightDips;
-
-    auto* state = reinterpret_cast<XamlDialogState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
-    if (state && state->xamlSource) {
-        const auto content = state->xamlSource.Content();
-        if (content) {
-            content.Measure(winrt::Windows::Foundation::Size{
-                static_cast<float>(kDialogDefaultClientWidthDips),
-                std::numeric_limits<float>::infinity()
-            });
-
-            const auto desired = content.DesiredSize();
-            widthDips = (std::max)(widthDips, static_cast<double>(desired.Width));
-            heightDips = (std::max)(heightDips, static_cast<double>(desired.Height));
+class MainXamlDialog {
+public:
+    MainXamlDialog() = default;
+    ~MainXamlDialog() {
+        Destroy();
+        if (xamlManager_) {
+            xamlManager_.Close();
+            xamlManager_ = nullptr;
         }
     }
 
-    widthDips = (std::max)(widthDips, kDialogMinClientWidthDips);
-    heightDips = (std::max)(heightDips, kDialogMinClientHeightDips);
+    MainXamlDialog(const MainXamlDialog&) = delete;
+    MainXamlDialog& operator=(const MainXamlDialog&) = delete;
 
-    return SIZE{ DipsToPixels(widthDips, dpi), DipsToPixels(heightDips, dpi) };
-}
-
-HMONITOR DialogMonitor(HWND hwnd, HWND owner) {
-    if (owner) {
-        if (HMONITOR monitor = MonitorFromWindow(owner, MONITOR_DEFAULTTONULL)) {
-            return monitor;
-        }
-    }
-
-    if (HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL)) {
-        return monitor;
-    }
-
-    POINT cursor{};
-    if (GetCursorPos(&cursor)) {
-        return MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
-    }
-
-    return MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
-}
-
-void SizeAndCenterDialog(HWND hwnd, HWND owner) {
-    const SIZE desiredClientSize = DesiredClientSizePixels(hwnd);
-    RECT windowRect = WindowRectForClientSize(hwnd, desiredClientSize.cx, desiredClientSize.cy);
-    int windowWidth = windowRect.right - windowRect.left;
-    int windowHeight = windowRect.bottom - windowRect.top;
-
-    MONITORINFO monitorInfo{ sizeof(monitorInfo) };
-    GetMonitorInfoW(DialogMonitor(hwnd, owner), &monitorInfo);
-
-    const RECT workArea = monitorInfo.rcWork;
-    const int workWidth = workArea.right - workArea.left;
-    const int workHeight = workArea.bottom - workArea.top;
-    const UINT dpi = GetDpiForWindow(hwnd);
-    const int margin = DipsToPixels(24, dpi);
-
-    windowWidth = (std::min)(windowWidth, (std::max)(1, workWidth - (margin * 2)));
-    windowHeight = (std::min)(windowHeight, (std::max)(1, workHeight - (margin * 2)));
-
-    const int x = workArea.left + ((workWidth - windowWidth) / 2);
-    const int y = workArea.top + ((workHeight - windowHeight) / 2);
-
-    SetWindowPos(hwnd, nullptr, x, y, windowWidth, windowHeight, SWP_NOZORDER | SWP_NOACTIVATE);
-    ResizeXamlHost(hwnd);
-}
-
-void ResizeXamlHost(HWND hwnd) {
-    auto* state = reinterpret_cast<XamlDialogState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
-    if (!state || !state->xamlHost) {
-        return;
-    }
-
-    RECT clientRect{};
-    GetClientRect(hwnd, &clientRect);
-    SetWindowPos(
-        state->xamlHost,
-        nullptr,
-        0,
-        0,
-        clientRect.right - clientRect.left,
-        clientRect.bottom - clientRect.top,
-        SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-    ShowWindow(state->xamlHost, SW_SHOW);
-}
-
-void InitializeXamlIsland(HWND hwnd) {
-    EnsureXamlInitialized();
-
-    auto state = std::make_unique<XamlDialogState>();
-    state->xamlSource = winrt::Windows::UI::Xaml::Hosting::DesktopWindowXamlSource{};
-
-    auto nativeSource = state->xamlSource.as<IDesktopWindowXamlSourceNative>();
-    winrt::check_hresult(nativeSource->AttachToWindow(hwnd));
-    winrt::check_hresult(nativeSource->get_WindowHandle(&state->xamlHost));
-
-    state->xamlSource.Content(BuildPlaceholderContent());
-    SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state.get()));
-    state.release();
-    ResizeXamlHost(hwnd);
-}
-
-void LogReflectorCallback(const std::wstring& line) {
-    if (!g_uiDispatcher) {
-        return;
-    }
-
-    g_uiDispatcher.TryEnqueue([line]() {
-        std::lock_guard<std::mutex> lock(g_terminalLogViewMutex);
-        if (g_terminalLogView) {
-            g_terminalLogView->AppendAnsiLogText(line);
-        }
-    });
-}
-
-LRESULT CALLBACK MainDialogWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    switch (msg) {
-    case WM_CREATE:
+    void Show(HWND owner) {
         try {
-            DarkMode::setWindowEraseBgSubclass(hwnd);
-            DarkMode::setDarkWndNotifySafe(hwnd, true);
-            ApplyModernWindowAttributes(hwnd);
-            InitializeXamlIsland(hwnd);
-			g_keyDerivationWorker.SetNotificationTarget(hwnd, g_msgDerivedKey);
+            RegisterDialogClass(GetModuleHandleW(nullptr));
+            if (!hwnd_) {
+                createError_.clear();
+                Create(owner);
+            }
+
+            if (hwnd_) {
+                SizeAndCenter(owner);
+                ShowWindow(hwnd_, SW_SHOWNORMAL);
+                SetForegroundWindow(hwnd_);
+            } else if (!createError_.empty()) {
+                MessageBoxW(owner, createError_.c_str(), L"Clipp", MB_ICONERROR | MB_OK);
+            }
         }
         catch (const winrt::hresult_error& error) {
-            g_createError = L"Unable to open the XAML Islands dialog. This requires Windows 10 version 1903 or later and the WinRT XAML hosting runtime.\n\nHRESULT: " +
-                std::to_wstring(static_cast<uint32_t>(static_cast<int32_t>(error.code())));
-            g_logger.log(__FUNCTION__, Logger::Level::Error, g_createError.c_str());
-            return -1;
+            const std::wstring message = L"Unable to open the XAML Islands dialog. This requires Windows 10 version 1903 or later and the WinRT XAML hosting runtime.\n\nHRESULT: " + std::to_wstring(static_cast<uint32_t>(static_cast<int32_t>(error.code())));
+            g_logger.log(__FUNCTION__, Logger::Level::Error, message.c_str());
+            MessageBoxW(owner, message.c_str(), L"Clipp", MB_ICONERROR | MB_OK);
         }
-        return 0;
+    }
 
-    case WM_SHOWWINDOW:
-        if (wParam) {
-            PeerDisplay_BeginNotifications(hwnd);
-            NetworkView_StartPollTimer();
-            g_logger.AddLogReflector(LogReflectorCallback);
-            if (g_uiDispatcher) {
-                g_uiDispatcher.TryEnqueue([]() {
-                        PasswordFields_Setup();
-                    });
+    bool PreTranslateMessage(MSG* msg) {
+        if (!hwnd_ || !msg || !xamlSource_) {
+            return false;
+        }
+
+        auto nativeSource = xamlSource_.as<IDesktopWindowXamlSourceNative2>();
+        BOOL handled = FALSE;
+        return SUCCEEDED(nativeSource->PreTranslateMessage(msg, &handled)) && handled;
+    }
+
+    void Destroy() {
+        if (hwnd_) {
+            DestroyWindow(hwnd_);
+            hwnd_ = nullptr;
+        }
+    }
+
+private:
+    enum class PageID {
+        Clipp = 0,
+        Settings = 1,
+        Logs = 2,
+        About = 3,
+    };
+
+    void Create(HWND owner) {
+        hwnd_ = CreateWindowExW(
+            WS_EX_APPWINDOW,
+            kDialogClassName,
+            L"Clipp",
+            WS_OVERLAPPEDWINDOW,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            820,
+            580,
+            nullptr,
+            nullptr,
+            GetModuleHandleW(nullptr),
+            this);
+
+        if (!hwnd_ && createError_.empty()) {
+            createError_ = L"Unable to create the Clipp dialog window.";
+        }
+    }
+
+    LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
+        switch (msg) {
+        case WM_CREATE:
+            try {
+                DarkMode::setWindowEraseBgSubclass(hwnd_);
+                DarkMode::setDarkWndNotifySafe(hwnd_, true);
+                ApplyModernWindowAttributes(hwnd_);
+                InitializeXamlIsland();
             }
+            catch (const winrt::hresult_error& error) {
+                createError_ = L"Unable to open the XAML Islands dialog. This requires Windows 10 version 1903 or later and the WinRT XAML hosting runtime.\n\nHRESULT: " +
+                    std::to_wstring(static_cast<uint32_t>(static_cast<int32_t>(error.code())));
+                g_logger.log(__FUNCTION__, Logger::Level::Error, createError_.c_str());
+                return -1;
+            }
+            return 0;
+
+        case WM_SHOWWINDOW:
+            if (clippPage_) {
+                if (wParam) {
+                    clippPage_->OnShown();
+                } else {
+                    clippPage_->OnHidden();
+                }
+            }
+            return 0;
+
+        case WM_SIZE:
+            ResizeXamlHost();
+            return 0;
+
+        case WM_GETMINMAXINFO: {
+            auto* minMaxInfo = reinterpret_cast<MINMAXINFO*>(lParam);
+            const UINT dpi = GetDpiForWindow(hwnd_);
+            const RECT minWindowRect = WindowRectForClientSize(
+                DipsToPixels(kDialogMinClientWidthDips, dpi),
+                DipsToPixels(kDialogMinClientHeightDips, dpi));
+            minMaxInfo->ptMinTrackSize.x = minWindowRect.right - minWindowRect.left;
+            minMaxInfo->ptMinTrackSize.y = minWindowRect.bottom - minWindowRect.top;
+            return 0;
+        }
+
+        case WM_CLOSE:
+            ShowWindow(hwnd_, SW_HIDE);
+            return 0;
+
+        case WM_DESTROY:
+            if (clippPage_) {
+                clippPage_->OnDestroy();
+            }
+            clippPage_.reset();
+            settingsPage_.reset();
+            logsPage_.reset();
+            aboutPage_.reset();
+            xamlSource_ = nullptr;
+            xamlHost_ = nullptr;
+            return 0;
+
+        default:
+            if (msg == derivedKeyMessage_) {
+                auto* result = reinterpret_cast<KeyDerivationWorker::KeyDerivationResult*>(wParam);
+                if (clippPage_) {
+                    clippPage_->OnDerivedKey(result);
+                }
+                return 0;
+            }
+
+            if (msg == peerDisplayUpdateMessage_) {
+                if (clippPage_) {
+                    clippPage_->OnPeerDisplayUpdate();
+                }
+                return 0;
+            }
+
+            return DefWindowProcW(hwnd_, msg, wParam, lParam);
+        }
+    }
+
+    void InitializeXamlIsland() {
+        EnsureWinRtApartmentInitialized();
+        if (!xamlManager_) {
+            xamlManager_ = winrt::Windows::UI::Xaml::Hosting::WindowsXamlManager::InitializeForCurrentThread();
+        }
+
+        xamlSource_ = winrt::Windows::UI::Xaml::Hosting::DesktopWindowXamlSource{};
+        auto nativeSource = xamlSource_.as<IDesktopWindowXamlSourceNative>();
+        winrt::check_hresult(nativeSource->AttachToWindow(hwnd_));
+        winrt::check_hresult(nativeSource->get_WindowHandle(&xamlHost_));
+
+        xamlSource_.Content(BuildShell());
+        ResizeXamlHost();
+    }
+
+    winrt::Windows::UI::Xaml::Controls::Grid BuildShell() {
+        using namespace winrt::Windows::UI::Xaml;
+        using namespace winrt::Windows::UI::Xaml::Controls;
+        using namespace winrt::Windows::UI::Xaml::Media;
+
+        clippPage_ = std::make_unique<ClippPage>(hwnd_, derivedKeyMessage_, peerDisplayUpdateMessage_, g_peerDisplay, g_peerManager);
+        settingsPage_ = std::make_unique<SettingsPage>();
+        logsPage_ = std::make_unique<LogsPage>();
+        aboutPage_ = std::make_unique<AboutPage>();
+
+        Grid root;
+        root.HorizontalAlignment(HorizontalAlignment::Stretch);
+        root.VerticalAlignment(VerticalAlignment::Stretch);
+        root.RequestedTheme(GetCurrentXamlTheme());
+        root.Background(GetThemeBackgroundBrush());
+
+        ColumnDefinition menuColumn;
+        menuColumn.Width(GridLength{ 148, GridUnitType::Pixel });
+        ColumnDefinition contentColumn;
+        contentColumn.Width(GridLength{ 1, GridUnitType::Star });
+        root.ColumnDefinitions().Append(menuColumn);
+        root.ColumnDefinitions().Append(contentColumn);
+
+        ListBox menu;
+        menu.HorizontalAlignment(HorizontalAlignment::Stretch);
+        menu.VerticalAlignment(VerticalAlignment::Stretch);
+        menu.Padding(ThicknessHelper::FromLengths(8, 16, 8, 16));
+        menu.SelectionMode(SelectionMode::Single);
+        menu.Background(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(24, 127, 127, 127)));
+
+        for (const wchar_t* label : { L"Clipp", L"Settings", L"Logs", L"About" }) {
+            ListBoxItem item;
+            item.Content(winrt::box_value(winrt::hstring{ label }));
+            item.Padding(ThicknessHelper::FromLengths(12, 10, 12, 10));
+            menu.Items().Append(item);
+        }
+
+        contentPresenter_ = ContentControl();
+        contentPresenter_.HorizontalAlignment(HorizontalAlignment::Stretch);
+        contentPresenter_.VerticalAlignment(VerticalAlignment::Stretch);
+        contentPresenter_.HorizontalContentAlignment(HorizontalAlignment::Stretch);
+        contentPresenter_.VerticalContentAlignment(VerticalAlignment::Stretch);
+        contentPresenter_.Content(clippPage_->View());
+
+        menu.SelectionChanged([this](auto const& sender, auto const&) {
+            auto menu = sender.as<ListBox>();
+            ShowPage(static_cast<PageID>(menu.SelectedIndex()));
+        });
+        menu.SelectedIndex(0);
+
+        Grid::SetColumn(menu, 0);
+        Grid::SetColumn(contentPresenter_, 1);
+        root.Children().Append(menu);
+        root.Children().Append(contentPresenter_);
+        return root;
+    }
+
+    void ShowPage(PageID pageID) {
+        if (!contentPresenter_) {
+            return;
+        }
+
+        switch (pageID) {
+        case PageID::Clipp:
+            contentPresenter_.Content(clippPage_->View());
+            break;
+        case PageID::Settings:
+            contentPresenter_.Content(settingsPage_->View());
+            break;
+        case PageID::Logs:
+            contentPresenter_.Content(logsPage_->View());
+            break;
+        case PageID::About:
+            contentPresenter_.Content(aboutPage_->View());
+            break;
+        }
+    }
+
+    RECT WindowRectForClientSize(int clientWidth, int clientHeight) const {
+        RECT rect{ 0, 0, clientWidth, clientHeight };
+        const DWORD style = static_cast<DWORD>(GetWindowLongPtrW(hwnd_, GWL_STYLE));
+        const DWORD exStyle = static_cast<DWORD>(GetWindowLongPtrW(hwnd_, GWL_EXSTYLE));
+        const BOOL hasMenu = GetMenu(hwnd_) != nullptr;
+        const UINT dpi = GetDpiForWindow(hwnd_);
+
+        if (!AdjustWindowRectExForDpi(&rect, style, hasMenu, exStyle, dpi)) {
+            AdjustWindowRectEx(&rect, style, hasMenu, exStyle);
+        }
+
+        return rect;
+    }
+
+    SIZE DesiredClientSizePixels() const {
+        const UINT dpi = GetDpiForWindow(hwnd_);
+        double widthDips = kDialogDefaultClientWidthDips;
+        double heightDips = kDialogDefaultClientHeightDips;
+
+        if (xamlSource_) {
+            const auto content = xamlSource_.Content();
+            if (content) {
+                content.Measure(winrt::Windows::Foundation::Size{
+                    static_cast<float>(kDialogDefaultClientWidthDips),
+                    std::numeric_limits<float>::infinity()
+                });
+
+                const auto desired = content.DesiredSize();
+                widthDips = (std::max)(widthDips, static_cast<double>(desired.Width));
+                heightDips = (std::max)(heightDips, static_cast<double>(desired.Height));
+            }
+        }
+
+        widthDips = (std::max)(widthDips, kDialogMinClientWidthDips);
+        heightDips = (std::max)(heightDips, kDialogMinClientHeightDips);
+        return SIZE{ DipsToPixels(widthDips, dpi), DipsToPixels(heightDips, dpi) };
+    }
+
+    HMONITOR DialogMonitor(HWND owner) const {
+        if (owner) {
+            if (HMONITOR monitor = MonitorFromWindow(owner, MONITOR_DEFAULTTONULL)) {
+                return monitor;
+            }
+        }
+
+        if (HMONITOR monitor = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONULL)) {
+            return monitor;
+        }
+
+        POINT cursor{};
+        if (GetCursorPos(&cursor)) {
+            return MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+        }
+
+        return MonitorFromWindow(hwnd_, MONITOR_DEFAULTTOPRIMARY);
+    }
+
+    void SizeAndCenter(HWND owner) {
+        const SIZE desiredClientSize = DesiredClientSizePixels();
+        RECT windowRect = WindowRectForClientSize(desiredClientSize.cx, desiredClientSize.cy);
+        int windowWidth = windowRect.right - windowRect.left;
+        int windowHeight = windowRect.bottom - windowRect.top;
+
+        MONITORINFO monitorInfo{ sizeof(monitorInfo) };
+        GetMonitorInfoW(DialogMonitor(owner), &monitorInfo);
+
+        const RECT workArea = monitorInfo.rcWork;
+        const int workWidth = workArea.right - workArea.left;
+        const int workHeight = workArea.bottom - workArea.top;
+        const UINT dpi = GetDpiForWindow(hwnd_);
+        const int margin = DipsToPixels(24, dpi);
+
+        windowWidth = (std::min)(windowWidth, (std::max)(1, workWidth - (margin * 2)));
+        windowHeight = (std::min)(windowHeight, (std::max)(1, workHeight - (margin * 2)));
+
+        const int x = workArea.left + ((workWidth - windowWidth) / 2);
+        const int y = workArea.top + ((workHeight - windowHeight) / 2);
+
+        SetWindowPos(hwnd_, nullptr, x, y, windowWidth, windowHeight, SWP_NOZORDER | SWP_NOACTIVATE);
+        ResizeXamlHost();
+    }
+
+    void ResizeXamlHost() const {
+        if (!xamlHost_) {
+            return;
+        }
+
+        RECT clientRect{};
+        GetClientRect(hwnd_, &clientRect);
+        SetWindowPos(
+            xamlHost_,
+            nullptr,
+            0,
+            0,
+            clientRect.right - clientRect.left,
+            clientRect.bottom - clientRect.top,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        ShowWindow(xamlHost_, SW_SHOW);
+    }
+
+    static void RegisterDialogClass(HINSTANCE hInstance) {
+        static bool registered = false;
+        if (registered) {
+            return;
+        }
+
+        WNDCLASSW wc{};
+        wc.lpfnWndProc = WndProc;
+        wc.hInstance = hInstance;
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+        wc.lpszClassName = kDialogClassName;
+        wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+
+        RegisterClassW(&wc);
+        registered = true;
+    }
+
+    static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+        MainXamlDialog* dialog = nullptr;
+
+        if (msg == WM_NCCREATE) {
+            auto* createStruct = reinterpret_cast<CREATESTRUCTW*>(lParam);
+            dialog = reinterpret_cast<MainXamlDialog*>(createStruct->lpCreateParams);
+            dialog->hwnd_ = hwnd;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(dialog));
         } else {
-            PeerDisplay_EndNotifications();
-            NetworkView_StopPollTimer();
-            g_logger.RemoveLogReflector(LogReflectorCallback);
+            dialog = reinterpret_cast<MainXamlDialog*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
         }
-        return 0;
 
-    case WM_SIZE:
-        ResizeXamlHost(hwnd);
-        return 0;
+        if (!dialog) {
+            return DefWindowProcW(hwnd, msg, wParam, lParam);
+        }
 
-    case WM_GETMINMAXINFO: {
-        auto* minMaxInfo = reinterpret_cast<MINMAXINFO*>(lParam);
-        const UINT dpi = GetDpiForWindow(hwnd);
-        const RECT minWindowRect = WindowRectForClientSize(
-            hwnd,
-            DipsToPixels(kDialogMinClientWidthDips, dpi),
-            DipsToPixels(kDialogMinClientHeightDips, dpi));
-        minMaxInfo->ptMinTrackSize.x = minWindowRect.right - minWindowRect.left;
-        minMaxInfo->ptMinTrackSize.y = minWindowRect.bottom - minWindowRect.top;
-        return 0;
+        const LRESULT result = dialog->HandleMessage(msg, wParam, lParam);
+        if (msg == WM_NCDESTROY) {
+            dialog->hwnd_ = nullptr;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+        }
+        return result;
     }
 
-    case WM_CLOSE:
-        ShowWindow(hwnd, SW_HIDE);
-        return 0;
+    HWND hwnd_ = nullptr;
+    HWND xamlHost_ = nullptr;
+    std::wstring createError_;
+    winrt::Windows::UI::Xaml::Hosting::WindowsXamlManager xamlManager_{ nullptr };
+    winrt::Windows::UI::Xaml::Hosting::DesktopWindowXamlSource xamlSource_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::ContentControl contentPresenter_{ nullptr };
+    std::unique_ptr<ClippPage> clippPage_;
+    std::unique_ptr<SettingsPage> settingsPage_;
+    std::unique_ptr<LogsPage> logsPage_;
+    std::unique_ptr<AboutPage> aboutPage_;
+    UINT derivedKeyMessage_ = RegisterWindowMessageW(L"ClippDerivedKeyNotification");
+    UINT peerDisplayUpdateMessage_ = RegisterWindowMessageW(L"ClippPeerDisplayUpdate");
+};
 
-    case WM_DESTROY: {
-        PeerDisplay_EndNotifications();
-        NetworkView_StopPollTimer();
-        g_logger.RemoveLogReflector(LogReflectorCallback);
-        {
-            std::lock_guard<std::mutex> lock(g_terminalLogViewMutex);
-            g_terminalLogView.reset();
-        }
-        g_networkView.reset();
-        g_networkPollTimer = nullptr;
-
-        auto* state = reinterpret_cast<XamlDialogState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-        delete state;
-
-        if (g_dialogWindow == hwnd) {
-            g_dialogWindow = nullptr;
-        }
-        return 0;
-    }
-
-    default:
-        if (msg == g_msgDerivedKey) {
-            KeyDerivationWorker::KeyDerivationResult* result = reinterpret_cast<KeyDerivationWorker::KeyDerivationResult*>(wParam);
-            // force saving default network name as it's dynamically generated
-            g_settings.set_networkName(g_settings.networkName());
-            // set, save, and start using network key
-            g_keyManager.SetNetworkKey(result->derivedKey);
-            MDNSNotifyNetworkKeyChange();
-            g_peerManager.ClearPeers();
-
-            // Refresh the UI safely to show the status panel and hide the info panel
-            if (g_uiDispatcher) {
-                g_uiDispatcher.TryEnqueue([]() {
-					    PasswordFields_NewHashReceived();
-                    });
-            }
-            return 0;
-		}
-
-        if (msg == g_msgPeerDisplayUpdate) {
-            if (g_peerDisplayWatcherID != 0) {
-                NetworkView_Poll();
-            }
-            return 0;
-        }
-        return DefWindowProcW(hwnd, msg, wParam, lParam);
-    }
-}
-
-void RegisterDialogClass(HINSTANCE hInstance) {
-    static bool registered = false;
-    if (registered) {
-        return;
-    }
-
-    WNDCLASSW wc{};
-    wc.lpfnWndProc = MainDialogWndProc;
-    wc.hInstance = hInstance;
-    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
-    wc.lpszClassName = kDialogClassName;
-    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
-
-    RegisterClassW(&wc);
-    registered = true;
-}
+std::unique_ptr<MainXamlDialog> g_dialog;
 
 } // namespace
 
 void ShowClippMainDialog(HWND owner) {
-    try {
-        HINSTANCE hInstance = GetModuleHandleW(nullptr);
-        RegisterDialogClass(hInstance);
-
-        if (!g_dialogWindow) {
-            g_createError.clear();
-            g_dialogWindow = CreateWindowExW(
-                WS_EX_APPWINDOW,
-                kDialogClassName,
-                L"Clipp",
-                WS_OVERLAPPEDWINDOW,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                720,
-                520,
-                nullptr,
-                nullptr,
-                hInstance,
-                nullptr);
-        }
-
-        if (g_dialogWindow) {
-            SizeAndCenterDialog(g_dialogWindow, owner);
-            ShowWindow(g_dialogWindow, SW_SHOWNORMAL);
-            SetForegroundWindow(g_dialogWindow);
-        }
-        else if (!g_createError.empty()) {
-            MessageBoxW(owner, g_createError.c_str(), L"Clipp", MB_ICONERROR | MB_OK);
-        }
+    if (!g_dialog) {
+        g_dialog = std::make_unique<MainXamlDialog>();
     }
-    catch (const winrt::hresult_error& error) {
-        const std::wstring message = L"Unable to open the XAML Islands dialog. This requires Windows 10 version 1903 or later and the WinRT XAML hosting runtime.\n\nHRESULT: " + std::to_wstring(static_cast<uint32_t>(static_cast<int32_t>(error.code())));
-        g_logger.log(__FUNCTION__, Logger::Level::Error, message.c_str());
-        MessageBoxW(owner, message.c_str(), L"Clipp", MB_ICONERROR | MB_OK);
-    }
+    g_dialog->Show(owner);
 }
 
 bool ClippMainDialogPreTranslateMessage(MSG* msg) {
-    if (!g_dialogWindow || !msg) {
-        return false;
-    }
-
-    auto* state = reinterpret_cast<XamlDialogState*>(GetWindowLongPtrW(g_dialogWindow, GWLP_USERDATA));
-    if (!state || !state->xamlSource) {
-        return false;
-    }
-
-    auto nativeSource = state->xamlSource.as<IDesktopWindowXamlSourceNative2>();
-    BOOL handled = FALSE;
-    return SUCCEEDED(nativeSource->PreTranslateMessage(msg, &handled)) && handled;
+    return g_dialog ? g_dialog->PreTranslateMessage(msg) : false;
 }
 
 void CloseClippMainDialog() {
-    if (g_dialogWindow) {
-        DestroyWindow(g_dialogWindow);
-        g_dialogWindow = nullptr;
-    }
-
-    if (g_xamlManager) {
-        g_xamlManager.Close();
-        g_xamlManager = nullptr;
-    }
+    g_dialog.reset();
 }

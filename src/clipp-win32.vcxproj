@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -191,6 +191,8 @@
     <ClCompile Include="platform_win32_NetworkItem.cpp" />
     <ClCompile Include="platform_win32_NetworkView.cpp" />
     <ClCompile Include="platform_win32_TerminalLogView.cpp" />
+    <ClCompile Include="platform_win32_ClippPage.cpp" />
+    <ClCompile Include="platform_win32_PlaceholderPage.cpp" />
     <ClCompile Include="platform_win32_tray.cpp" />
     <ClCompile Include="platform_win32_xaml_dialog.cpp" />
     <ClCompile Include="Settings.cpp" />
@@ -205,6 +207,8 @@
     <ClInclude Include="platform_win32_NetworkItem.h" />
     <ClInclude Include="platform_win32_NetworkView.h" />
     <ClInclude Include="platform_win32_TerminalLogView.h" />
+    <ClInclude Include="platform_win32_ClippPage.h" />
+    <ClInclude Include="platform_win32_PlaceholderPage.h" />
     <ClInclude Include="platform_win32_xaml_dialog.h" />
     <ClInclude Include="MDNSThread.h" />
     <ClInclude Include="KeyManager.h" />
