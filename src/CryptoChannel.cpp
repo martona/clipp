@@ -1,15 +1,33 @@
 #include "CryptoChannel.h"
 
-#include <vector>
 #include <cstring>
+#include <vector>
 
-#include "platform.h"
-#include "Settings.h"
 #include "KeyManager.h"
+#include "Settings.h"
+#include "platform.h"
 #include "utils.h"
 #include "utils_socket.h"
 
 namespace {
+    constexpr uint32_t kMaxCiphertextMessageBytes = 64u * 1024u * 1024u; // 64 MiB
+
+    using NetworkKey = std::array<unsigned char, crypto_secretbox_KEYBYTES>;
+    using PublicKey = std::array<unsigned char, crypto_kx_PUBLICKEYBYTES>;
+    using SecretKey = std::array<unsigned char, crypto_kx_SECRETKEYBYTES>;
+    using SessionKey = std::array<unsigned char, crypto_kx_SESSIONKEYBYTES>;
+    using StreamHeader = std::array<unsigned char, crypto_secretstream_xchacha20poly1305_HEADERBYTES>;
+
+    struct KeyPair {
+        PublicKey publicKey{};
+        SecretKey secretKey{};
+    };
+
+    struct SessionKeys {
+        SessionKey rx{};
+        SessionKey tx{};
+    };
+
 #pragma pack(push, 1)
     struct HandshakePlaintext {
         unsigned char ephemeralPk[crypto_kx_PUBLICKEYBYTES];
@@ -22,130 +40,307 @@ namespace {
         unsigned char ciphertext[crypto_secretbox_MACBYTES + sizeof(HandshakePlaintext)];
     };
 #pragma pack(pop)
+
+    void GenerateKeyPair(KeyPair& keyPair) {
+        crypto_kx_keypair(keyPair.publicKey.data(), keyPair.secretKey.data());
+    }
+
+    void FillHandshakePlaintext(
+        HandshakePlaintext& plaintext,
+        const PublicKey& publicKey,
+        const CryptoChannel::HostId& hostId,
+        const char* hostNameUtf8)
+    {
+        std::memcpy(plaintext.ephemeralPk, publicKey.data(), publicKey.size());
+        std::memcpy(plaintext.hostId, hostId.data(), hostId.size());
+        strncpys(plaintext.hostNameUTF8, hostNameUtf8);
+    }
+
+    PublicKey CopyPublicKey(const HandshakePlaintext& plaintext) {
+        PublicKey publicKey{};
+        std::memcpy(publicKey.data(), plaintext.ephemeralPk, publicKey.size());
+        return publicKey;
+    }
+
+    void CopyRemoteIdentity(
+        const HandshakePlaintext& plaintext,
+        CryptoChannel::HostId& remoteHostId,
+        std::string& remoteHostNameUtf8)
+    {
+        std::memcpy(remoteHostId.data(), plaintext.hostId, remoteHostId.size());
+        remoteHostNameUtf8 = plaintext.hostNameUTF8;
+    }
+
+    void SealHandshakeFrame(
+        const HandshakePlaintext& plaintext,
+        const NetworkKey& networkKey,
+        HandshakeFrame& frame)
+    {
+        randombytes_buf(frame.nonce, sizeof(frame.nonce));
+        crypto_secretbox_easy(
+            frame.ciphertext,
+            reinterpret_cast<const unsigned char*>(&plaintext),
+            sizeof(plaintext),
+            frame.nonce,
+            networkKey.data());
+    }
+
+    bool OpenHandshakeFrame(
+        const HandshakeFrame& frame,
+        const NetworkKey& networkKey,
+        HandshakePlaintext& plaintext)
+    {
+        return crypto_secretbox_open_easy(
+            reinterpret_cast<unsigned char*>(&plaintext),
+            frame.ciphertext,
+            sizeof(frame.ciphertext),
+            frame.nonce,
+            networkKey.data()) == 0;
+    }
+
+    bool SendHandshakeFrame(
+        const SocketIoContext& io,
+        const HandshakePlaintext& plaintext,
+        const NetworkKey& networkKey)
+    {
+        HandshakeFrame frame{};
+        SealHandshakeFrame(plaintext, networkKey, frame);
+        return SendAll(io, reinterpret_cast<const char*>(&frame), sizeof(frame));
+    }
+
+    bool ReceiveHandshakeFrame(
+        const SocketIoContext& io,
+        const NetworkKey& networkKey,
+        HandshakePlaintext& plaintext)
+    {
+        HandshakeFrame frame{};
+        if (!RecvAll(io, reinterpret_cast<char*>(&frame), sizeof(frame))) {
+            return false;
+        }
+
+        return OpenHandshakeFrame(frame, networkKey, plaintext);
+    }
+
+    bool LoadLocalIdentity(CryptoChannel::HostId& hostId, std::array<char, CryptoChannel::HOSTNAME_MAX_BYTES>& hostNameUtf8) {
+        if (!g_settings.getHostID(hostId)) {
+            return false;
+        }
+
+        return gethostname(hostNameUtf8.data(), static_cast<int>(hostNameUtf8.size())) == 0;
+    }
+
+    bool DeriveClientSessionKeys(
+        const KeyPair& clientKeys,
+        const PublicKey& serverPublicKey,
+        SessionKeys& sessionKeys)
+    {
+        return crypto_kx_client_session_keys(
+            sessionKeys.rx.data(),
+            sessionKeys.tx.data(),
+            clientKeys.publicKey.data(),
+            clientKeys.secretKey.data(),
+            serverPublicKey.data()) == 0;
+    }
+
+    bool DeriveServerSessionKeys(
+        const KeyPair& serverKeys,
+        const PublicKey& clientPublicKey,
+        SessionKeys& sessionKeys)
+    {
+        return crypto_kx_server_session_keys(
+            sessionKeys.rx.data(),
+            sessionKeys.tx.data(),
+            serverKeys.publicKey.data(),
+            serverKeys.secretKey.data(),
+            clientPublicKey.data()) == 0;
+    }
+
+    bool SendStreamHeader(
+        const SocketIoContext& io,
+        crypto_secretstream_xchacha20poly1305_state& state,
+        const SessionKey& txKey)
+    {
+        StreamHeader header{};
+        if (crypto_secretstream_xchacha20poly1305_init_push(&state, header.data(), txKey.data()) != 0) {
+            return false;
+        }
+
+        return SendAll(io, reinterpret_cast<const char*>(header.data()), static_cast<int>(header.size()));
+    }
+
+    bool ReceiveStreamHeader(
+        const SocketIoContext& io,
+        crypto_secretstream_xchacha20poly1305_state& state,
+        const SessionKey& rxKey)
+    {
+        StreamHeader header{};
+        if (!RecvAll(io, reinterpret_cast<char*>(header.data()), static_cast<int>(header.size()))) {
+            return false;
+        }
+
+        return crypto_secretstream_xchacha20poly1305_init_pull(&state, header.data(), rxKey.data()) == 0;
+    }
+
+    bool CanEncryptMessage(uint32_t dataSize) {
+        return dataSize <= (kMaxCiphertextMessageBytes - crypto_secretstream_xchacha20poly1305_ABYTES);
+    }
+
+    bool IsCiphertextMessageSizeValid(uint32_t ciphertextSize) {
+        return ciphertextSize > crypto_secretstream_xchacha20poly1305_ABYTES
+            && ciphertextSize <= kMaxCiphertextMessageBytes;
+    }
 }
 
-CryptoChannel::CryptoChannel() {}
+CryptoChannel::CryptoChannel() = default;
 
 bool CryptoChannel::LoadNetworkKey(std::array<unsigned char, crypto_secretbox_KEYBYTES>& networkKey) {
     std::string errorMessage;
-    if (!g_keyManager.GetNetworkKey(networkKey, &errorMessage)) {
+    return g_keyManager.GetNetworkKey(networkKey, &errorMessage);
+}
+
+bool CryptoChannel::ClientHandshake(
+    const SocketIoContext& io,
+    const HostId& localHostId,
+    const std::string& localHostNameUtf8,
+    HostId& remoteHostId,
+    std::string& remoteHostNameUtf8)
+{
+    NetworkKey networkKey{};
+    if (!LoadNetworkKey(networkKey)) {
         return false;
     }
-    return true;
+
+    KeyPair clientKeys{};
+    GenerateKeyPair(clientKeys);
+
+    HandshakePlaintext localPlaintext{};
+    FillHandshakePlaintext(localPlaintext, clientKeys.publicKey, localHostId, localHostNameUtf8.c_str());
+    if (!SendHandshakeFrame(io, localPlaintext, networkKey)) {
+        return false;
+    }
+
+    HandshakePlaintext remotePlaintext{};
+    if (!ReceiveHandshakeFrame(io, networkKey, remotePlaintext)) {
+        return false;
+    }
+
+    const PublicKey serverPublicKey = CopyPublicKey(remotePlaintext);
+    CopyRemoteIdentity(remotePlaintext, remoteHostId, remoteHostNameUtf8);
+
+    SessionKeys sessionKeys{};
+    if (!DeriveClientSessionKeys(clientKeys, serverPublicKey, sessionKeys)) {
+        return false;
+    }
+
+    return SendStreamHeader(io, txState_, sessionKeys.tx)
+        && ReceiveStreamHeader(io, rxState_, sessionKeys.rx);
 }
 
-bool CryptoChannel::ClientHandshake(const SocketIoContext& io,
-                                    const std::array<unsigned char, 
-                                    HostIdSize>& localHostId, 
-                                    const std::string& localHostNameUtf8, 
-                                    std::array<unsigned char, HostIdSize>& remoteHostId, 
-                                    std::string& remoteHostNameUtf8)
+bool CryptoChannel::ServerHandshake(
+    const SocketIoContext& io,
+    HostId& remoteHostId,
+    std::string& remoteHostNameUtf8)
 {
-    std::array<unsigned char, crypto_secretbox_KEYBYTES> networkKey{};
-    if (!LoadNetworkKey(networkKey)) return false;
+    NetworkKey networkKey{};
+    if (!LoadNetworkKey(networkKey)) {
+        return false;
+    }
 
-    unsigned char clientPk[crypto_kx_PUBLICKEYBYTES]{}; unsigned char clientSk[crypto_kx_SECRETKEYBYTES]{};
-    crypto_kx_keypair(clientPk, clientSk);
+    HandshakePlaintext remotePlaintext{};
+    if (!ReceiveHandshakeFrame(io, networkKey, remotePlaintext)) {
+        return false;
+    }
 
-    HandshakePlaintext plain{};
-    std::memcpy(plain.ephemeralPk, clientPk, crypto_kx_PUBLICKEYBYTES);
-    std::memcpy(plain.hostId, localHostId.data(), HostIdSize);
-    strncpys(plain.hostNameUTF8, localHostNameUtf8.c_str());
+    const PublicKey clientPublicKey = CopyPublicKey(remotePlaintext);
+    CopyRemoteIdentity(remotePlaintext, remoteHostId, remoteHostNameUtf8);
 
-    HandshakeFrame tx{}; randombytes_buf(tx.nonce, sizeof(tx.nonce));
-    crypto_secretbox_easy(tx.ciphertext, reinterpret_cast<const unsigned char*>(&plain), sizeof(plain), tx.nonce, networkKey.data());
-    if (!SendAll(io, reinterpret_cast<const char*>(&tx), sizeof(tx))) return false;
+    HostId localHostId{};
+    std::array<char, HOSTNAME_MAX_BYTES> localHostNameUtf8{};
+    if (!LoadLocalIdentity(localHostId, localHostNameUtf8)) {
+        return false;
+    }
 
-    HandshakeFrame rx{};
-    if (!RecvAll(io, reinterpret_cast<char*>(&rx), sizeof(rx))) return false;
-    HandshakePlaintext remotePlain{};
-    if (crypto_secretbox_open_easy(reinterpret_cast<unsigned char*>(&remotePlain), rx.ciphertext, sizeof(rx.ciphertext), rx.nonce, networkKey.data()) != 0) return false;
+    KeyPair serverKeys{};
+    GenerateKeyPair(serverKeys);
 
-    unsigned char serverPk[crypto_kx_PUBLICKEYBYTES]{};
-    std::memcpy(serverPk, remotePlain.ephemeralPk, crypto_kx_PUBLICKEYBYTES);
-    std::memcpy(remoteHostId.data(), remotePlain.hostId, HostIdSize);
-    remoteHostNameUtf8 = remotePlain.hostNameUTF8;
+    HandshakePlaintext localPlaintext{};
+    FillHandshakePlaintext(localPlaintext, serverKeys.publicKey, localHostId, localHostNameUtf8.data());
+    if (!SendHandshakeFrame(io, localPlaintext, networkKey)) {
+        return false;
+    }
 
-    unsigned char rxKey[crypto_kx_SESSIONKEYBYTES]{}; unsigned char txKey[crypto_kx_SESSIONKEYBYTES]{};
-    if (crypto_kx_client_session_keys(rxKey, txKey, clientPk, clientSk, serverPk) != 0) return false;
+    SessionKeys sessionKeys{};
+    if (!DeriveServerSessionKeys(serverKeys, clientPublicKey, sessionKeys)) {
+        return false;
+    }
 
-    unsigned char txHeader[crypto_secretstream_xchacha20poly1305_HEADERBYTES]{};
-    if (crypto_secretstream_xchacha20poly1305_init_push(&txState_, txHeader, txKey) != 0) return false;
-    if (!SendAll(io, reinterpret_cast<const char*>(txHeader), sizeof(txHeader))) return false;
-    unsigned char rxHeader[crypto_secretstream_xchacha20poly1305_HEADERBYTES]{};
-    if (!RecvAll(io, reinterpret_cast<char*>(rxHeader), sizeof(rxHeader))) return false;
-    if (crypto_secretstream_xchacha20poly1305_init_pull(&rxState_, rxHeader, rxKey) != 0) return false;
-    return true;
-}
-
-bool CryptoChannel::ServerHandshake(const SocketIoContext& io,
-                                    std::array<unsigned char, 
-                                    HostIdSize>& remoteHostId, 
-                                    std::string& remoteHostNameUtf8)
-{
-    std::array<unsigned char, crypto_secretbox_KEYBYTES> networkKey{};
-    if (!LoadNetworkKey(networkKey)) return false;
-
-    HandshakeFrame rx{};
-    if (!RecvAll(io, reinterpret_cast<char*>(&rx), sizeof(rx))) return false;
-    HandshakePlaintext remotePlain{};
-    if (crypto_secretbox_open_easy(reinterpret_cast<unsigned char*>(&remotePlain), rx.ciphertext, sizeof(rx.ciphertext), rx.nonce, networkKey.data()) != 0) return false;
-
-    unsigned char clientPk[crypto_kx_PUBLICKEYBYTES]{};
-    std::memcpy(clientPk, remotePlain.ephemeralPk, crypto_kx_PUBLICKEYBYTES);
-    std::memcpy(remoteHostId.data(), remotePlain.hostId, HostIdSize);
-    remoteHostNameUtf8 = remotePlain.hostNameUTF8;
-
-    std::array<unsigned char, 32> localHostId{}; if (!g_settings.getHostID(localHostId)) return false;
-    char localHostNameUtf8[HOSTNAME_MAX_BYTES] = {};
-    if (gethostname(localHostNameUtf8, sizeof(localHostNameUtf8)) != 0) return false;
-
-    unsigned char serverPk[crypto_kx_PUBLICKEYBYTES]{}; unsigned char serverSk[crypto_kx_SECRETKEYBYTES]{};
-    crypto_kx_keypair(serverPk, serverSk);
-    HandshakePlaintext plain{};
-    std::memcpy(plain.ephemeralPk, serverPk, crypto_kx_PUBLICKEYBYTES);
-    std::memcpy(plain.hostId, localHostId.data(), HostIdSize);
-    strncpys(plain.hostNameUTF8, localHostNameUtf8);
-    HandshakeFrame tx{}; randombytes_buf(tx.nonce, sizeof(tx.nonce));
-    crypto_secretbox_easy(tx.ciphertext, reinterpret_cast<const unsigned char*>(&plain), sizeof(plain), tx.nonce, networkKey.data());
-    if (!SendAll(io, reinterpret_cast<const char*>(&tx), sizeof(tx))) return false;
-
-    unsigned char rxKey[crypto_kx_SESSIONKEYBYTES]{}; unsigned char txKey[crypto_kx_SESSIONKEYBYTES]{};
-    if (crypto_kx_server_session_keys(rxKey, txKey, serverPk, serverSk, clientPk) != 0) return false;
-    unsigned char rxHeader[crypto_secretstream_xchacha20poly1305_HEADERBYTES]{};
-    if (!RecvAll(io, reinterpret_cast<char*>(rxHeader), sizeof(rxHeader))) return false;
-    if (crypto_secretstream_xchacha20poly1305_init_pull(&rxState_, rxHeader, rxKey) != 0) return false;
-    unsigned char txHeader[crypto_secretstream_xchacha20poly1305_HEADERBYTES]{};
-    if (crypto_secretstream_xchacha20poly1305_init_push(&txState_, txHeader, txKey) != 0) return false;
-    if (!SendAll(io, reinterpret_cast<const char*>(txHeader), sizeof(txHeader))) return false;
-    return true;
-}
-
-namespace {
-    constexpr uint32_t kMaxCiphertextMessageBytes = 64u * 1024u * 1024u; // 64 MiB
+    return ReceiveStreamHeader(io, rxState_, sessionKeys.rx)
+        && SendStreamHeader(io, txState_, sessionKeys.tx);
 }
 
 bool CryptoChannel::SendMessage(const SocketIoContext& io, const unsigned char* data, uint32_t dataSize) {
-    if (dataSize > (kMaxCiphertextMessageBytes - crypto_secretstream_xchacha20poly1305_ABYTES)) return false;
-    unsigned long long clen = 0; unsigned char tag = 0;
-    std::vector<unsigned char> c(dataSize + crypto_secretstream_xchacha20poly1305_ABYTES);
-    if (crypto_secretstream_xchacha20poly1305_push(&txState_, c.data(), &clen, data, dataSize, nullptr, 0, tag) != 0) return false;
-    if (clen > kMaxCiphertextMessageBytes) return false;
-    const uint32_t n = htonl(static_cast<uint32_t>(clen));
-    return SendAll(io, reinterpret_cast<const char*>(&n), sizeof(n)) && SendAll(io, reinterpret_cast<const char*>(c.data()), static_cast<int>(clen));
+    if (!CanEncryptMessage(dataSize)) {
+        return false;
+    }
+
+    std::vector<unsigned char> ciphertext(dataSize + crypto_secretstream_xchacha20poly1305_ABYTES);
+    unsigned long long ciphertextSize = 0;
+    unsigned char tag = 0;
+
+    if (crypto_secretstream_xchacha20poly1305_push(
+            &txState_,
+            ciphertext.data(),
+            &ciphertextSize,
+            data,
+            dataSize,
+            nullptr,
+            0,
+            tag) != 0) {
+        return false;
+    }
+
+    if (ciphertextSize > kMaxCiphertextMessageBytes) {
+        return false;
+    }
+
+    const uint32_t networkSize = htonl(static_cast<uint32_t>(ciphertextSize));
+    return SendAll(io, reinterpret_cast<const char*>(&networkSize), sizeof(networkSize))
+        && SendAll(io, reinterpret_cast<const char*>(ciphertext.data()), static_cast<int>(ciphertextSize));
 }
 
 bool CryptoChannel::RecvMessage(const SocketIoContext& io, std::vector<unsigned char>& outData) {
-    uint32_t n = 0;
-    if (!RecvAll(io, reinterpret_cast<char*>(&n), sizeof(n))) return false;
-    const uint32_t clen = ntohl(n);
-    if (clen <= crypto_secretstream_xchacha20poly1305_ABYTES || clen > kMaxCiphertextMessageBytes) return false;
-    std::vector<unsigned char> c(clen);
-    if (!RecvAll(io, reinterpret_cast<char*>(c.data()), static_cast<int>(clen))) return false;
-    unsigned long long mlen = 0; unsigned char tag = 0;
-    outData.assign(static_cast<size_t>(clen), 0);
-    if (crypto_secretstream_xchacha20poly1305_pull(&rxState_, outData.data(), &mlen, &tag, c.data(), c.size(), nullptr, 0) != 0) return false;
-    outData.resize(static_cast<size_t>(mlen));
+    uint32_t networkSize = 0;
+    if (!RecvAll(io, reinterpret_cast<char*>(&networkSize), sizeof(networkSize))) {
+        return false;
+    }
+
+    const uint32_t ciphertextSize = ntohl(networkSize);
+    if (!IsCiphertextMessageSizeValid(ciphertextSize)) {
+        return false;
+    }
+
+    std::vector<unsigned char> ciphertext(ciphertextSize);
+    if (!RecvAll(io, reinterpret_cast<char*>(ciphertext.data()), static_cast<int>(ciphertext.size()))) {
+        return false;
+    }
+
+    unsigned long long plaintextSize = 0;
+    unsigned char tag = 0;
+    outData.assign(static_cast<size_t>(ciphertextSize), 0);
+
+    if (crypto_secretstream_xchacha20poly1305_pull(
+            &rxState_,
+            outData.data(),
+            &plaintextSize,
+            &tag,
+            ciphertext.data(),
+            ciphertext.size(),
+            nullptr,
+            0) != 0) {
+        return false;
+    }
+
+    outData.resize(static_cast<size_t>(plaintextSize));
     return true;
 }
 
@@ -155,7 +350,10 @@ bool CryptoChannel::SendTaggedMessage(const SocketIoContext& io, const char* tag
 
 bool CryptoChannel::RecvTaggedMessage(const SocketIoContext& io, char* outTag4) {
     std::vector<unsigned char> message;
-    if (!RecvMessage(io, message) || message.size() != 4) return false;
+    if (!RecvMessage(io, message) || message.size() != 4) {
+        return false;
+    }
+
     std::memcpy(outTag4, message.data(), 4);
     return true;
 }

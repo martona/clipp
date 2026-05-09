@@ -3,8 +3,10 @@
 #include <array>
 #include <cstdint>
 #include <string>
-#include <sodium.h>
 #include <vector>
+
+#include <sodium.h>
+
 #include "platform.h"
 
 struct SocketIoContext;
@@ -14,19 +16,21 @@ public:
     static constexpr size_t HostIdSize = 32;
     static constexpr size_t HOSTNAME_MAX_BYTES = 256;
 
+    using HostId = std::array<unsigned char, HostIdSize>;
+
     CryptoChannel();
 
-    bool ClientHandshake(const SocketIoContext& io,
-                        const std::array<unsigned char, 
-                        HostIdSize>& localHostId, 
-                        const std::string& localHostNameUtf8, 
-                        std::array<unsigned char, 
-                        HostIdSize>& remoteHostId, 
-                        std::string& remoteHostNameUtf8);
-    bool ServerHandshake(const SocketIoContext& io,
-                        std::array<unsigned char, 
-                        HostIdSize>& remoteHostId, 
-                        std::string& remoteHostNameUtf8);
+    bool ClientHandshake(
+        const SocketIoContext& io,
+        const HostId& localHostId,
+        const std::string& localHostNameUtf8,
+        HostId& remoteHostId,
+        std::string& remoteHostNameUtf8);
+
+    bool ServerHandshake(
+        const SocketIoContext& io,
+        HostId& remoteHostId,
+        std::string& remoteHostNameUtf8);
 
     bool SendTaggedMessage(const SocketIoContext& io, const char* tag4);
     bool RecvTaggedMessage(const SocketIoContext& io, char* outTag4);
