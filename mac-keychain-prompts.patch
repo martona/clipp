@@ -1,0 +1,200 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 725e6d5..14d718d 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -65,7 +65,6 @@ set(CODE_SIGN_IDENTITY "75B684388ADFBC91BED0EDE18049B734D1169C8F")
+ 
+ # Add the post-build signing step
+ add_custom_command(TARGET clipp POST_BUILD
+-    COMMAND /usr/bin/codesign --force --sign "${CODE_SIGN_IDENTITY}" $<TARGET_FILE:clipp>
++    COMMAND /usr/bin/codesign --force --sign "${CODE_SIGN_IDENTITY}" --identifier net.clipp.app $<TARGET_FILE:clipp>
+     COMMENT "Codesigning $<TARGET_FILE:clipp>..."
+ )
+-
+diff --git a/src/KeyManager.cpp b/src/KeyManager.cpp
+index cf9ee14..37dba92 100644
+--- a/src/KeyManager.cpp
++++ b/src/KeyManager.cpp
+@@ -30,27 +30,48 @@
+         return oss.str();
+     }
+ 
+-    static SecAccessRef CreateAccessForCurrentApp() {
+-        SecTrustedApplicationRef trustedApp = nullptr;
+-        OSStatus trustedStatus = SecTrustedApplicationCreateFromPath(nullptr, &trustedApp);
+-        if (trustedStatus != errSecSuccess || trustedApp == nullptr) {
++    static CFMutableDictionaryRef CreateNetworkKeyQuery(CFStringRef account) {
++        CFMutableDictionaryRef query = CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
++            &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
++        if (query == nullptr) {
+             return nullptr;
+         }
+ 
+-        const void* values[] = { trustedApp };
+-        CFArrayRef trustedApps = CFArrayCreate(kCFAllocatorDefault, values, 1, &kCFTypeArrayCallBacks);
+-        CFRelease(trustedApp);
+-        if (trustedApps == nullptr) {
+-            return nullptr;
++        CFDictionaryAddValue(query, kSecClass, kSecClassGenericPassword);
++        CFDictionaryAddValue(query, kSecAttrService, CFSTR("net.clipp.app"));
++        CFDictionaryAddValue(query, kSecAttrAccount, account);
++
++        return query;
++    }
++
++    static void AddNoAuthenticationPrompt(CFMutableDictionaryRef query) {
++        CFDictionaryAddValue(query, kSecUseAuthenticationUI, kSecUseAuthenticationUIFail);
++    }
++
++    static void DeleteNetworkKeyItem(CFStringRef account) {
++        CFMutableDictionaryRef query = CreateNetworkKeyQuery(account);
++        if (query == nullptr) {
++            return;
+         }
+ 
+-        SecAccessRef access = nullptr;
+-        OSStatus accessStatus = SecAccessCreate(CFSTR("clipp network key"), trustedApps, &access);
+-        CFRelease(trustedApps);
+-        if (accessStatus != errSecSuccess) {
+-            return nullptr;
++        AddNoAuthenticationPrompt(query);
++        SecItemDelete(query);
++        CFRelease(query);
++    }
++
++    static OSStatus CopyNetworkKeyData(CFStringRef account, CFTypeRef* outData) {
++        CFMutableDictionaryRef query = CreateNetworkKeyQuery(account);
++        if (query == nullptr) {
++            return errSecAllocate;
+         }
+-        return access;
++
++        CFDictionaryAddValue(query, kSecReturnData, kCFBooleanTrue);
++        CFDictionaryAddValue(query, kSecMatchLimit, kSecMatchLimitOne);
++        AddNoAuthenticationPrompt(query);
++
++        OSStatus status = SecItemCopyMatching(query, outData);
++        CFRelease(query);
++        return status;
+     }
+ #endif
+ 
+@@ -95,7 +116,12 @@ void KeyManager::ClearNetworkKey() {
+     std::lock_guard<std::mutex> lock(mutex_);
+     cacheValid_ = false;
+     cachedNetworkKey_.fill(0);
++#ifndef __APPLE__
+     settings_.setEncryptedNetworkKey(std::vector<unsigned char>{});
++#else
++    DeleteNetworkKeyItem(CFSTR("NetworkKeyV2"));
++    DeleteNetworkKeyItem(CFSTR("NetworkKey"));
++#endif
+ }
+ 
+ bool KeyManager::SetNetworkKey(const std::array<unsigned char, NetworkKeySize>& networkKey, std::string* errorMessage) {
+@@ -122,48 +148,33 @@ bool KeyManager::SetNetworkKey(const std::array<unsigned char, NetworkKeySize>&
+     std::vector<unsigned char> encryptedBuffer(encryptedData.pbData, encryptedData.pbData + encryptedData.cbData);
+     LocalFree(encryptedData.pbData);
+ #else
+-    const CFStringRef service = CFSTR("net.clipp.app");
+-    const CFStringRef account = CFSTR("NetworkKey");
+-
+     CFDataRef plainData = CFDataCreate(kCFAllocatorDefault, networkKey.data(), networkKey.size());
+     if (plainData == nullptr) {
+         if (errorMessage != nullptr) *errorMessage = "Failed to create keychain payload";
+         return false;
+     }
+ 
+-    CFMutableDictionaryRef addQuery = CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
+-        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
++    CFMutableDictionaryRef addQuery = CreateNetworkKeyQuery(CFSTR("NetworkKeyV2"));
+     if (addQuery == nullptr) {
+         CFRelease(plainData);
+         if (errorMessage != nullptr) *errorMessage = "Failed to allocate keychain add query";
+         return false;
+     }
+ 
+-    CFDictionaryAddValue(addQuery, kSecClass, kSecClassGenericPassword);
+-    CFDictionaryAddValue(addQuery, kSecAttrService, service);
+-    CFDictionaryAddValue(addQuery, kSecAttrAccount, account);
+     CFDictionaryAddValue(addQuery, kSecValueData, plainData);
+     CFDictionaryAddValue(addQuery, kSecAttrAccessible, kSecAttrAccessibleAfterFirstUnlock);
+-    SecAccessRef access = CreateAccessForCurrentApp();
+-    if (access != nullptr) {
+-        CFDictionaryAddValue(addQuery, kSecAttrAccess, access);
+-    }
+ 
+     OSStatus status = SecItemAdd(addQuery, nullptr);
+-    if (access != nullptr) CFRelease(access);
+     CFRelease(addQuery);
+ 
+     if (status == errSecDuplicateItem) {
+-        CFMutableDictionaryRef matchQuery = CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
+-            &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
++        CFMutableDictionaryRef matchQuery = CreateNetworkKeyQuery(CFSTR("NetworkKeyV2"));
+         if (matchQuery == nullptr) {
+             CFRelease(plainData);
+             if (errorMessage != nullptr) *errorMessage = "Failed to allocate keychain match query";
+             return false;
+         }
+-        CFDictionaryAddValue(matchQuery, kSecClass, kSecClassGenericPassword);
+-        CFDictionaryAddValue(matchQuery, kSecAttrService, service);
+-        CFDictionaryAddValue(matchQuery, kSecAttrAccount, account);
++        AddNoAuthenticationPrompt(matchQuery);
+ 
+         CFMutableDictionaryRef updateAttrs = CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
+             &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+@@ -174,13 +185,7 @@ bool KeyManager::SetNetworkKey(const std::array<unsigned char, NetworkKeySize>&
+             return false;
+         }
+         CFDictionaryAddValue(updateAttrs, kSecValueData, plainData);
+-        CFDictionaryAddValue(updateAttrs, kSecAttrAccessible, kSecAttrAccessibleAfterFirstUnlock);
+-        SecAccessRef updateAccess = CreateAccessForCurrentApp();
+-        if (updateAccess != nullptr) {
+-            CFDictionaryAddValue(updateAttrs, kSecAttrAccess, updateAccess);
+-        }
+         status = SecItemUpdate(matchQuery, updateAttrs);
+-        if (updateAccess != nullptr) CFRelease(updateAccess);
+         CFRelease(updateAttrs);
+         CFRelease(matchQuery);
+     }
+@@ -197,6 +202,8 @@ bool KeyManager::SetNetworkKey(const std::array<unsigned char, NetworkKeySize>&
+         return false;
+     }
+ 
++    DeleteNetworkKeyItem(CFSTR("NetworkKey"));
++
+     std::vector<unsigned char> encryptedBuffer;
+ #endif
+ 
+@@ -273,26 +280,11 @@ bool KeyManager::GetNetworkKey(std::array<unsigned char, NetworkKeySize>& networ
+     std::copy(plainData.pbData, plainData.pbData + NetworkKeySize, networkKey.begin());
+     LocalFree(plainData.pbData);
+ #else
+-    const CFStringRef service = CFSTR("net.clipp.app");
+-    const CFStringRef account = CFSTR("NetworkKey");
+-
+-    CFMutableDictionaryRef query = CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
+-        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+-    if (query == nullptr) {
+-        if (errorMessage != nullptr) *errorMessage = "Failed to allocate keychain query";
+-        return false;
+-    }
+-
+-    CFDictionaryAddValue(query, kSecClass, kSecClassGenericPassword);
+-    CFDictionaryAddValue(query, kSecAttrService, service);
+-    CFDictionaryAddValue(query, kSecAttrAccount, account);
+-    CFDictionaryAddValue(query, kSecReturnData, kCFBooleanTrue);
+-    CFDictionaryAddValue(query, kSecMatchLimit, kSecMatchLimitOne);
+-    CFDictionaryAddValue(query, kSecUseAuthenticationUI, kSecUseAuthenticationUIFail);
+-
+     CFTypeRef outData = nullptr;
+-    OSStatus status = SecItemCopyMatching(query, &outData);
+-    CFRelease(query);
++    OSStatus status = CopyNetworkKeyData(CFSTR("NetworkKeyV2"), &outData);
++    if (status != errSecSuccess) {
++        status = CopyNetworkKeyData(CFSTR("NetworkKey"), &outData);
++    }
+ 
+     if (status != errSecSuccess || outData == nullptr) {
+         if (errorMessage != nullptr) *errorMessage = FormatSecurityError("Failed to read network key from keychain", status);

@@ -65,7 +65,6 @@ set(CODE_SIGN_IDENTITY "75B684388ADFBC91BED0EDE18049B734D1169C8F")
 
 # Add the post-build signing step
 add_custom_command(TARGET clipp POST_BUILD
-    COMMAND /usr/bin/codesign --force --sign "${CODE_SIGN_IDENTITY}" $<TARGET_FILE:clipp>
+    COMMAND /usr/bin/codesign --force --sign "${CODE_SIGN_IDENTITY}" --identifier net.clipp.app $<TARGET_FILE:clipp>
     COMMENT "Codesigning $<TARGET_FILE:clipp>..."
 )
-
