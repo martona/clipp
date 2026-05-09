@@ -185,6 +185,11 @@ private:
         About = 3,
     };
 
+    struct MenuItemDefinition {
+        const wchar_t* glyph;
+        const wchar_t* label;
+    };
+
     void Create(HWND owner) {
         hwnd_ = CreateWindowExW(
             WS_EX_APPWINDOW,
@@ -328,11 +333,15 @@ private:
         menu.SelectionMode(SelectionMode::Single);
         menu.Background(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(24, 127, 127, 127)));
 
-        for (const wchar_t* label : { L"Clipp", L"Settings", L"Logs", L"About" }) {
-            ListBoxItem item;
-            item.Content(winrt::box_value(winrt::hstring{ label }));
-            item.Padding(ThicknessHelper::FromLengths(12, 10, 12, 10));
-            menu.Items().Append(item);
+        const MenuItemDefinition menuItems[] = {
+            { L"\xE77F", L"Clipp" },
+            { L"\xE713", L"Settings" },
+            { L"\xE8A5", L"Logs" },
+            { L"\xE946", L"About" },
+        };
+
+        for (const auto& menuItem : menuItems) {
+            menu.Items().Append(CreateMenuItem(menuItem));
         }
 
         contentPresenter_ = ContentControl();
@@ -353,6 +362,35 @@ private:
         root.Children().Append(menu);
         root.Children().Append(contentPresenter_);
         return root;
+    }
+
+    winrt::Windows::UI::Xaml::Controls::ListBoxItem CreateMenuItem(const MenuItemDefinition& menuItem) {
+        using namespace winrt::Windows::UI::Xaml;
+        using namespace winrt::Windows::UI::Xaml::Controls;
+        using namespace winrt::Windows::UI::Xaml::Media;
+
+        FontIcon icon;
+        icon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
+        icon.Glyph(menuItem.glyph);
+        icon.FontSize(16);
+        icon.Width(20);
+        icon.VerticalAlignment(VerticalAlignment::Center);
+
+        TextBlock label;
+        label.Text(menuItem.label);
+        label.VerticalAlignment(VerticalAlignment::Center);
+
+        StackPanel content;
+        content.Orientation(Orientation::Horizontal);
+        content.Spacing(10);
+        content.VerticalAlignment(VerticalAlignment::Center);
+        content.Children().Append(icon);
+        content.Children().Append(label);
+
+        ListBoxItem item;
+        item.Content(content);
+        item.Padding(ThicknessHelper::FromLengths(12, 10, 12, 10));
+        return item;
     }
 
     void ShowPage(PageID pageID) {
