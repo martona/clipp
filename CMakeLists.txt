@@ -65,12 +65,14 @@ if (APPLE)
     find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
     find_library(SECURITY_FRAMEWORK Security REQUIRED)
     find_library(APPKIT_FRAMEWORK AppKit REQUIRED)
+    find_library(SERVICEMANAGEMENT_FRAMEWORK ServiceManagement REQUIRED)
 
     target_link_libraries(clipp PRIVATE
         ${COREFOUNDATION_FRAMEWORK}
         ${FOUNDATION_FRAMEWORK}
         ${SECURITY_FRAMEWORK}
         ${APPKIT_FRAMEWORK}
+        ${SERVICEMANAGEMENT_FRAMEWORK}
     )
 
     set_target_properties(clipp PROPERTIES

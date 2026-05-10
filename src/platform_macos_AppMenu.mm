@@ -2,14 +2,77 @@
 
 #ifdef __APPLE__
 
+#include "Logger.h"
+
 #import <AppKit/AppKit.h>
+#import <ServiceManagement/ServiceManagement.h>
 #import <dispatch/dispatch.h>
+
+#include <atomic>
+
+namespace {
+std::atomic_bool g_pendingOpenMainWindow{ false };
+}
+
+@class ClippStatusMenuController;
+static ClippStatusMenuController* g_statusMenuController = nil;
 
 static void SetMacOSDockIconVisible(BOOL visible) {
     NSApplicationActivationPolicy policy = visible
         ? NSApplicationActivationPolicyRegular
         : NSApplicationActivationPolicyAccessory;
     [[NSApplication sharedApplication] setActivationPolicy:policy];
+}
+
+static NSString* MacOSServiceErrorDescription(NSError* error) {
+    if (error == nil) {
+        return @"";
+    }
+    NSString* reason = error.localizedFailureReason;
+    if (reason.length > 0) {
+        return [NSString stringWithFormat:@"%@ (%@)", error.localizedDescription, reason];
+    }
+    return error.localizedDescription;
+}
+
+bool RegisterClippAutoStart() {
+    SMAppService* service = SMAppService.mainAppService;
+    if (service.status == SMAppServiceStatusEnabled) {
+        return true;
+    }
+    if (service.status == SMAppServiceStatusRequiresApproval) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, "Clipp is registered for login but still requires approval in macOS Login Items.");
+        return false;
+    }
+
+    NSError* error = nil;
+    if (![service registerAndReturnError:&error]) {
+        NSString* message = MacOSServiceErrorDescription(error);
+        const char* text = message.UTF8String != nullptr ? message.UTF8String : "";
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, "Failed to register Clipp as a login item: %s", text);
+        return false;
+    }
+
+    g_logger.log(__FUNCTION__, Logger::Level::Debug, "Registered Clipp as a login item.");
+    return true;
+}
+
+bool UnregisterClippAutoStart() {
+    SMAppService* service = SMAppService.mainAppService;
+    if (service.status == SMAppServiceStatusNotRegistered) {
+        return true;
+    }
+
+    NSError* error = nil;
+    if (![service unregisterAndReturnError:&error]) {
+        NSString* message = MacOSServiceErrorDescription(error);
+        const char* text = message.UTF8String != nullptr ? message.UTF8String : "";
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, "Failed to unregister Clipp as a login item: %s", text);
+        return false;
+    }
+
+    g_logger.log(__FUNCTION__, Logger::Level::Debug, "Unregistered Clipp as a login item.");
+    return true;
 }
 
 @interface ClippMainWindowController : NSWindowController <NSWindowDelegate>
@@ -20,10 +83,21 @@ static void SetMacOSDockIconVisible(BOOL visible) {
 - (BOOL)isWindowVisibleOrMiniaturized;
 @end
 
-@interface ClippStatusMenuController : NSObject
+@interface ClippStatusMenuController : NSObject <NSApplicationDelegate>
 @property(nonatomic, strong) NSStatusItem* statusItem;
 @property(nonatomic, strong) ClippMainWindowController* mainWindowController;
+- (void)openClipp:(id)sender;
 @end
+
+void RequestMacOSShowMainWindow() {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (g_statusMenuController != nil) {
+            [g_statusMenuController openClipp:nil];
+            return;
+        }
+        g_pendingOpenMainWindow.store(true);
+    });
+}
 
 @implementation ClippMainWindowController
 
@@ -241,7 +315,7 @@ static void SetMacOSDockIconVisible(BOOL visible) {
 
 - (void)exitApplication:(id)sender {
     (void)sender;
-    RequestMacOSAppShutdown();
+    RequestMacOSAppShutdown(true);
 }
 
 - (BOOL)windowShouldClose:(id)sender {
@@ -336,12 +410,23 @@ static void SetMacOSDockIconVisible(BOOL visible) {
 
 - (void)exitApp:(id)sender {
     (void)sender;
-    RequestMacOSAppShutdown();
+    RequestMacOSAppShutdown(true);
+}
+
+- (BOOL)applicationShouldHandleReopen:(NSApplication*)sender hasVisibleWindows:(BOOL)flag {
+    (void)sender;
+    (void)flag;
+    [self openClipp:nil];
+    return YES;
 }
 
 @end
 
-static void StopMacOSAppOnMainThread() {
+static void StopMacOSAppOnMainThread(bool unregisterAutoStart) {
+    if (unregisterAutoStart) {
+        UnregisterClippAutoStart();
+    }
+
     NSApplication* app = [NSApplication sharedApplication];
     [app stop:nil];
 
@@ -357,14 +442,14 @@ static void StopMacOSAppOnMainThread() {
     [app postEvent:event atStart:NO];
 }
 
-void RequestMacOSAppShutdown() {
+void RequestMacOSAppShutdown(bool unregisterAutoStart) {
     if ([NSThread isMainThread]) {
-        StopMacOSAppOnMainThread();
+        StopMacOSAppOnMainThread(unregisterAutoStart);
         return;
     }
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        StopMacOSAppOnMainThread();
+        StopMacOSAppOnMainThread(unregisterAutoStart);
     });
 }
 
@@ -375,6 +460,11 @@ void RunMacOSStatusMenu() {
 
         static ClippStatusMenuController* controller = nil;
         controller = [[ClippStatusMenuController alloc] init];
+        g_statusMenuController = controller;
+        app.delegate = controller;
+        if (g_pendingOpenMainWindow.exchange(false)) {
+            [controller openClipp:nil];
+        }
 
         [app run];
     }

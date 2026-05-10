@@ -169,9 +169,21 @@ static inline void strncpys(char(&dst)[N], const char* src) {
 
 #define cntof(arr) (sizeof(arr) / sizeof(arr[0]))
 
+enum class SingleInstanceResult {
+    Continue,
+    ExitSuccess,
+    ExitFailure,
+};
+
+SingleInstanceResult EnsureSingleInstance();
+void StopSingleInstanceServer();
+bool RegisterClippAutoStart();
+bool UnregisterClippAutoStart();
+
 #if defined(__APPLE__)
+void RequestMacOSShowMainWindow();
 void RunMacOSStatusMenu();
-void RequestMacOSAppShutdown();
+void RequestMacOSAppShutdown(bool unregisterAutoStart = false);
 #endif
 
 #ifndef NDEBUG

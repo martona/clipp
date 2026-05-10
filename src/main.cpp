@@ -18,7 +18,6 @@
 #include "utils.h"
 
 #ifdef _WIN32
-    #include "platform_win32_AutoStart.h"
     #include <io.h>
     #include <fcntl.h>
     #include <Windows.h>
@@ -40,12 +39,6 @@ NetworkRuntime g_networkRuntime;
     constexpr wchar_t kSingleInstanceMutexName[] = L"Local\\ClippSingleInstanceMutex";
     constexpr wchar_t kTrayWindowClassName[] = L"ClippHiddenTrayWindow";
     constexpr wchar_t kShowMainWindowMessageName[] = L"ClippShowMainWindow";
-
-    enum class SingleInstanceResult {
-        Continue,
-        ExitSuccess,
-        ExitFailure,
-    };
     }
 
     static void RequestRunningInstanceToShowWindow() {
@@ -66,7 +59,7 @@ NetworkRuntime g_networkRuntime;
         }
     }
 
-    static SingleInstanceResult EnsureSingleInstance() {
+    SingleInstanceResult EnsureSingleInstance() {
         HANDLE newMutex = CreateMutexW(nullptr, TRUE, kSingleInstanceMutexName);
         if (!newMutex) {
             g_logger.log(__FUNCTION__, Logger::Level::Error, L"CreateMutexW failed while creating the single-instance mutex (GetLastError=%lu).", GetLastError());
@@ -82,11 +75,14 @@ NetworkRuntime g_networkRuntime;
         return SingleInstanceResult::Continue;
     }
 
+    void StopSingleInstanceServer() {
+    }
+
     void TrayIconMessageLoop();
     void TrayIconShutdown();
     BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType) {
         if (dwCtrlType == CTRL_C_EVENT || dwCtrlType == CTRL_BREAK_EVENT || dwCtrlType == CTRL_CLOSE_EVENT) {
-			g_logger.log(__FUNCTION__, Logger::Level::Info, "Console control event received, shutting down...");
+            g_logger.log(__FUNCTION__, Logger::Level::Info, "Console control event received, shutting down...");
             TrayIconShutdown();
             return TRUE;
         }
@@ -94,6 +90,23 @@ NetworkRuntime g_networkRuntime;
     }
 
     #pragma comment(linker, "/SUBSYSTEM:windows /ENTRY:mainCRTStartup")
+#endif
+
+#if !defined(_WIN32) && !defined(__APPLE__)
+SingleInstanceResult EnsureSingleInstance() {
+    return SingleInstanceResult::Continue;
+}
+
+void StopSingleInstanceServer() {
+}
+
+bool RegisterClippAutoStart() {
+    return true;
+}
+
+bool UnregisterClippAutoStart() {
+    return true;
+}
 #endif
 
 bool InitializeConsoleOutput() {
@@ -247,26 +260,30 @@ int main(int argc, char* argv[]) {
 
     g_logger.log(__FUNCTION__, Logger::Level::Info, L"==================================================================");
 
+    switch (EnsureSingleInstance()) {
+        case SingleInstanceResult::Continue:
+            break;
+        case SingleInstanceResult::ExitSuccess:
+            return 0;
+        case SingleInstanceResult::ExitFailure:
+            return 1;
+    }
+    const auto exitAfterStartupFailure = [](int exitCode) {
+        StopSingleInstanceServer();
+        return exitCode;
+    };
+
+    RegisterClippAutoStart();
+
     #ifdef _WIN32
-        switch (EnsureSingleInstance()) {
-            case SingleInstanceResult::Continue:
-                break;
-            case SingleInstanceResult::ExitSuccess:
-                return 0;
-            case SingleInstanceResult::ExitFailure:
-                return 1;
-        }
-
-        RegisterClippAutoStart();
-
         WSADATA wsaData;
         if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-            return -1;
+            return exitAfterStartupFailure(-1);
         }
     #else
-	    // ignore SIGPIPE to prevent crashes when writing to a closed socket
+        // ignore SIGPIPE to prevent crashes when writing to a closed socket
         signal(SIGPIPE, SIG_IGN);
-		// block SIGINT and SIGTERM in all threads; we'll handle shutdown 
+        // block SIGINT and SIGTERM in all threads; we'll handle shutdown
         sigset_t waitset;
         sigemptyset(&waitset);
         sigaddset(&waitset, SIGINT);
@@ -277,14 +294,14 @@ int main(int argc, char* argv[]) {
     // libsodium requires initialization before calling any other functions
     if (sodium_init() < 0) {
         g_logger.log(__FUNCTION__, Logger::Level::Error, "Fatal: libsodium failed to initialize!");
-        return 1;
+        return exitAfterStartupFailure(1);
     }
     g_logger.log(__FUNCTION__, Logger::Level::Debug, "libsodium initialized successfully.");
 
     HostId hostID;
     if (!g_settings.ensureHostID(hostID)) {
         g_logger.log(__FUNCTION__, Logger::Level::Error, "Fatal: failed to initialize host ID.");
-        return 1;
+        return exitAfterStartupFailure(1);
     }
 
     std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
@@ -329,7 +346,9 @@ int main(int argc, char* argv[]) {
     g_logger.log(__FUNCTION__, Logger::Level::Info, "Clipboard notification stopped.");
 
     g_peerManager.ClearPeers();
-	g_logger.log(__FUNCTION__, Logger::Level::Info, "Peer manager cleared.");
+    g_logger.log(__FUNCTION__, Logger::Level::Info, "Peer manager cleared.");
+
+    StopSingleInstanceServer();
 
     #ifdef _WIN32
         WSACleanup();
