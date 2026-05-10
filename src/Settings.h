@@ -5,6 +5,7 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include "HostId.h"
 
 class Settings {
 public:
@@ -29,8 +30,8 @@ public:
 
     bool setEncryptedNetworkKey(const std::vector<unsigned char>& value);
     bool getEncryptedNetworkKey(std::vector<unsigned char>& value) const;
-    bool ensureHostID(std::array<unsigned char, 32>& value);
-    bool getHostID(std::array<unsigned char, 32>& value) const;
+    bool ensureHostID(HostId& value);
+    bool getHostID(HostId& value) const;
 
 private:
     bool LoadCache();

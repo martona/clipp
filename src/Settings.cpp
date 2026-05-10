@@ -100,26 +100,24 @@ bool Settings::getEncryptedNetworkKey(std::vector<unsigned char>& value) const {
     return ReadBinaryValue(kEncryptedNetworkKeyName, value);
 }
 
-bool Settings::ensureHostID(std::array<unsigned char, 32>& value) {
-    std::vector<unsigned char> existingValue;
-    if (ReadBinaryValue(kHostIDName, existingValue) && existingValue.size() == value.size()) {
-        std::memcpy(value.data(), existingValue.data(), value.size());
+bool Settings::ensureHostID(HostId& value) {
+    std::vector<unsigned char> hostID;
+    if (ReadBinaryValue(kHostIDName, hostID) && hostID.size() == HostId::kSize) {
+		value.AssignFromVector(hostID);
         return true;
     }
 
-    randombytes_buf(value.data(), value.size());
-
-    return WriteBinaryValue(kHostIDName, value.data(), value.size());
+    randombytes_buf(value.data().data(), value.data().size());
+    return WriteBinaryValue(kHostIDName, value.data().data(), value.data().size());
 }
 
-bool Settings::getHostID(std::array<unsigned char, 32>& value) const {
+bool Settings::getHostID(HostId& value) const {
     std::vector<unsigned char> hostID;
-    if (!ReadBinaryValue(kHostIDName, hostID) || hostID.size() != value.size()) {
+    if (!ReadBinaryValue(kHostIDName, hostID) || hostID.size() != HostId::kSize) {
         return false;
     }
 
-    std::memcpy(value.data(), hostID.data(), value.size());
-    return true;
+    return value.AssignFromVector(hostID);
 }
 
 bool Settings::LoadCache() {

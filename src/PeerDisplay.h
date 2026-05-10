@@ -11,10 +11,11 @@
 #include <vector>
 
 #include "Peer.h"
+#include "HostId.h"
 
 struct PeerDisplayItem {
 	std::wstring hostName;
-	std::array<unsigned char, 32> hostID{};
+	HostId hostID;
 	bool hasIncomingConnection{ false };
 	bool hasOutgoingConnection{ false };
 	uint64_t bytesSent{};
@@ -41,9 +42,9 @@ class PeerDisplay {
 public:
 	using Watcher = std::function<void(const PeerDisplayUpdate&, void*)>;
 
-	void NotifyPeer(const std::wstring& hostName, const std::array<unsigned char, 32>& hostID, Peer::ConnType connType, std::chrono::steady_clock::time_point connectedSince);
-	void NotifyPeerRemoved(const std::wstring& hostName, const std::array<unsigned char, 32>& hostID, Peer::ConnType connType);
-	void NotifyPeerBytes(const std::wstring& hostName, const std::array<unsigned char, 32>& hostID, uint64_t bytesSent, uint64_t bytesReceived);
+	void NotifyPeer(const std::wstring& hostName, const HostId& hostID, Peer::ConnType connType, std::chrono::steady_clock::time_point connectedSince);
+	void NotifyPeerRemoved(const HostId& hostID, Peer::ConnType connType);
+	void NotifyPeerBytes(const HostId& hostID, uint64_t bytesSent, uint64_t bytesReceived);
 	std::vector<PeerDisplayItem> Query() const;
 	PeerDisplayRegistration QueryAndRegister(Watcher watcher, void* userData = nullptr);
 	void Unregister(std::size_t watcherID);
@@ -56,7 +57,7 @@ private:
 	};
 
 	static bool LessDisplayItem(const PeerDisplayItem& left, const PeerDisplayItem& right);
-	static bool HostIdEquals(const PeerDisplayEntry& entry, const std::array<unsigned char, 32>& hostID);
+	static bool HostIdEquals(const PeerDisplayEntry& entry, const HostId& hostID);
 	std::vector<PeerDisplayItem> SnapshotLocked() const;
 
 	mutable std::mutex mutex_;

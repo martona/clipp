@@ -15,6 +15,8 @@
 #include <winrt/Windows.UI.Xaml.Media.h>
 #include <winrt/base.h>
 
+#include "HostId.h"
+
 namespace {
 constexpr uint64_t kMaxByteCounter = 999'999'999'999;
 
@@ -178,7 +180,7 @@ void NetworkItemView::UpdateHostName(const std::wstring& hostName) {
     title_.Text(DisplayHostName(hostName));
 }
 
-void NetworkItemView::UpdateHostID(const std::array<unsigned char, 32>& hostID) {
+void NetworkItemView::UpdateHostID(const HostId& hostID) {
     //hostIDValue_.Text(FormatHostID(hostID));
 }
 

@@ -15,6 +15,7 @@
 #include <mutex>
 
 #include "utils_socket.h"
+#include "HostId.h"
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "Crypt32.lib")
@@ -27,7 +28,7 @@ static SocketWakeEvent g_mdnsWakeEvent;
 static std::mutex g_mdnsSocketMutex;
 static std::atomic<bool> g_mdnsSendImmediately{ false };
 static std::array<unsigned char, 32> g_lastSentQueryID{};
-static std::array<unsigned char, 32> g_hostID{};
+static HostId g_hostId;
 
 struct mdns_packet {
     mdns_packet() {
@@ -111,7 +112,7 @@ static mdns_packet BuildMDNSPacket(const std::string& hostName, const std::strin
     strncpys(packet.hostName, hostName.c_str());
     strncpys(packet.verb, verb.c_str());
     packet.port = htons(static_cast<u_short>(g_settings.tcpPort()));
-    std::memcpy(packet.hostID, g_hostID.data(), sizeof(packet.hostID));
+    std::memcpy(packet.hostID, g_hostId.data().data(), sizeof(packet.hostID));
     if (queryID) {
         std::memcpy(packet.queryID, queryID, sizeof(packet.queryID));
         std::memcpy(g_lastSentQueryID.data(), queryID, sizeof(packet.queryID));
@@ -124,13 +125,12 @@ static mdns_packet BuildMDNSPacket(const std::string& hostName, const std::strin
 
 static bool ParseDiscoveryPacket(mdns_packet& pkt, 
                                 std::string& hostName, 
-                                std::string& hostID, 
                                 std::string& verb, 
                                 std::string& queryID, 
                                 std::string& nonce, 
                                 unsigned short& hostPort, 
                                 const unsigned char** rawQueryID, 
-                                const unsigned char** rawHostID) 
+                                HostId& remoteHostID) 
 {
     // Validate selector
     if (strncmp(pkt.selector, kProtocolSelector, cntof(pkt.selector)) != 0)
@@ -148,8 +148,7 @@ static bool ParseDiscoveryPacket(mdns_packet& pkt,
     verb = pkt.verb;
     if (rawQueryID)
         *rawQueryID = pkt.queryID;
-    if (rawHostID)
-		*rawHostID = pkt.hostID;
+	remoteHostID = pkt.hostID;
 
     if (verb == "response" && std::memcmp(pkt.queryID, g_lastSentQueryID.data(), sizeof(pkt.queryID)) != 0)
         return false;
@@ -157,13 +156,11 @@ static bool ParseDiscoveryPacket(mdns_packet& pkt,
 	hostPort = ntohs(pkt.port);
 
     // Convert queryID and nonce to hex wstring
-    std::ostringstream ossQueryID, ossNonce, ossHostID;
+    std::ostringstream ossQueryID, ossNonce;
     for (int i = 0; i < 32; ++i) {
         ossQueryID << std::hex << std::setw(2) << std::setfill('0') << (int)pkt.queryID[i];
         ossNonce   << std::hex << std::setw(2) << std::setfill('0') << (int)pkt.nonce[i];
-        ossHostID  << std::hex << std::setw(2) << std::setfill('0') << (int)pkt.hostID[i];
     }
-    hostID = ossHostID.str();
     queryID = ossQueryID.str();
     nonce = ossNonce.str();
     return true;
@@ -206,7 +203,7 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
         initPromise.set_value(false);
         return;
     }
-    if (!g_settings.getHostID(g_hostID)) {
+    if (!g_settings.getHostID(g_hostId)) {
         closesocket(sock);
         initPromise.set_value(false);
         return;
@@ -307,26 +304,25 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
             if (!DecryptPacket(recvBuffer.data(), bytesRead, decryptedPacket))
                 continue;
 
-            std::string discoveredHost, discoveredHostID, verb, discoveredQueryID, discoveredNonce;
+            std::string discoveredHost, verb, discoveredQueryID, discoveredNonce;
 			unsigned short discoveredPort = 0;
             const unsigned char* rawQueryID = nullptr;
-            const unsigned char* rawHostID = nullptr;
+            HostId remoteHostId;
             if (!ParseDiscoveryPacket(decryptedPacket,
                 discoveredHost,
-                discoveredHostID,
                 verb,
                 discoveredQueryID,
                 discoveredNonce,
                 discoveredPort,
                 &rawQueryID,
-                &rawHostID))
+                remoteHostId))
             {
                 continue;
             }
 
             if (verb == "query" && rawQueryID != nullptr) {
 				// ignore our own queries
-                if (memcmp(rawHostID, g_hostID.data(), sizeof(g_hostID)) == 0) {
+                if (remoteHostId == g_hostId) {
                     continue;
                 }
                 mdns_packet responsePacket = BuildMDNSPacket(localHostName, "response", rawQueryID);
@@ -337,17 +333,16 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
                 }
             }
 
-            if (g_mdnsCallback && rawHostID) {
+            if (g_mdnsCallback) {
                 char senderIp[INET_ADDRSTRLEN] = {0};
                 inet_ntop(AF_INET, &fromAddr.sin_addr, senderIp, sizeof(senderIp));
 				g_mdnsCallback(discoveredHost.c_str(), 
-                    discoveredHostID.c_str(), 
                     senderIp, 
                     discoveredQueryID.c_str(), 
                     discoveredNonce.c_str(), 
                     verb.c_str(), 
                     discoveredPort, 
-                    rawHostID);
+                    remoteHostId);
             }
         }
     }

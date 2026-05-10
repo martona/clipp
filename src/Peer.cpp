@@ -68,13 +68,13 @@ static bool GetPendingConnectError(SOCKET socket, int& connectError) {
 	return getsockopt(socket, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&connectError), &optionLength) == 0;
 }
 
-Peer::Peer(const wchar_t* hostName, const unsigned char* hostID, const wchar_t* ip, u_short port, VerifiedCallback verifiedCallback, TrafficCallback trafficCallback)
+Peer::Peer(const wchar_t* hostName, const HostId* hostID, const wchar_t* ip, u_short port, VerifiedCallback verifiedCallback, TrafficCallback trafficCallback)
 	: hostName_(hostName), ip_(ip), port_(port),
+	hostID_(*hostID),
 	createdAt_(std::chrono::steady_clock::now()),
 	lastPingReceivedAt_(createdAt_),
 	verifiedCallback_(std::move(verifiedCallback)),
 	trafficCallback_(std::move(trafficCallback)) {
-	std::memcpy(hostID_.data(), hostID, hostID_.size());
 	connType_ = ConnType::Outgoing;
 }
 
@@ -175,7 +175,7 @@ std::wstring Peer::hostName() const {
 	return hostName_;
 }
 
-std::array<unsigned char, 32> Peer::hostID() const {
+HostId Peer::hostID() const {
 	std::lock_guard<std::mutex> lock(dataMutex_);
 	return hostID_;
 }
@@ -208,14 +208,12 @@ void Peer::PushMessage(std::shared_ptr<const ClipboardPayload> payload) {
 void Peer::ReportTraffic(uint64_t bytesSent, uint64_t bytesReceived) {
 	if (!trafficCallback_ || (bytesSent == 0 && bytesReceived == 0)) return;
 
-	std::wstring currentHostName;
-	std::array<unsigned char, 32> currentHostID{};
+	HostId currentHostID;
 	{
 		std::lock_guard<std::mutex> lock(dataMutex_);
-		currentHostName = hostName_;
 		currentHostID = hostID_;
 	}
-	trafficCallback_(currentHostName, currentHostID, bytesSent, bytesReceived);
+	trafficCallback_(currentHostID, bytesSent, bytesReceived);
 }
 
 SOCKET Peer::CurrentSocket() const {
@@ -368,9 +366,9 @@ void Peer::ThreadProcSend() {
 			break;
 		}
 		CryptoChannel channel;
-		std::array<unsigned char, 32> remoteHostId{};
+		HostId remoteHostId;
 		std::string remoteHostNameUtf8;
-		std::array<unsigned char, 32> localHostId{};
+		HostId localHostId;
 		if (!g_settings.getHostID(localHostId)) { break; }
 		char localHostNameA[256] = {};
 		if (gethostname(localHostNameA, sizeof(localHostNameA)) != 0) { break; }
@@ -385,16 +383,14 @@ void Peer::ThreadProcSend() {
 		bool hostIDMismatch = false;
 		bool hostNameMismatch = false;
 		std::wstring expectedHostName;
-		unsigned char expectedHostIDFirstByte = 0;
 		{
 			std::lock_guard<std::mutex> lock(dataMutex_);
 			hostIDMismatch = hostID_ != remoteHostId;
 			hostNameMismatch = hostName_ != remoteHostName;
 			expectedHostName = hostName_;
-			expectedHostIDFirstByte = hostID_[0];
 		}
 		if (hostIDMismatch) {
-			log(__FUNCTION__, Logger::Level::Warning, L"Peer: host ID mismatch; expected %02x... but got %02x...", expectedHostIDFirstByte, remoteHostId[0]);
+			log(__FUNCTION__, Logger::Level::Warning, L"Peer: host ID mismatch");
 			break;
 		}
 		if (hostNameMismatch) {
@@ -485,14 +481,13 @@ void Peer::ThreadProcSend() {
 
 void Peer::ThreadProcRecv() {
 	CryptoChannel channel;
-	std::array<unsigned char, 32> remoteHostId{};
+	HostId remoteHostId;
 	std::string remoteHostNameUtf8;
 	SOCKET socket = CurrentSocket();
 	const SocketIoContext io{ socket, wakeEvent_, stopRequested_ };
 	if (socket == INVALID_SOCKET || !SetSocketBlockingMode(socket, false) || !channel.ServerHandshake(io, remoteHostId, remoteHostNameUtf8)) {
 		log(__FUNCTION__, Logger::Level::Error, L"Client secure handshake failed.");
-	}
-	else {
+	} else {
 		{
 			std::lock_guard<std::mutex> lock(dataMutex_);
 			hostID_ = remoteHostId;
@@ -569,7 +564,7 @@ void Peer::ThreadProcRecv() {
 				}
 
 				if (clipboardReceivedCallback_) {
-					std::array<unsigned char, 32> remoteHostId;
+					HostId remoteHostId;
 					std::wstring remoteHostName;
 					{
 						std::lock_guard<std::mutex> lock(dataMutex_);

@@ -8,15 +8,13 @@
 #include <sodium.h>
 
 #include "platform.h"
+#include "HostId.h"
 
 struct SocketIoContext;
 
 class CryptoChannel {
 public:
-    static constexpr size_t HostIdSize = 32;
     static constexpr size_t HOSTNAME_MAX_BYTES = 256;
-
-    using HostId = std::array<unsigned char, HostIdSize>;
 
     CryptoChannel();
 

@@ -20,7 +20,7 @@ public:
     winrt::Windows::UI::Xaml::Controls::StackPanel View() const;
 
     void UpdateHostName(const std::wstring& hostName);
-    void UpdateHostID(const std::array<unsigned char, 32>& hostID);
+    void UpdateHostID(const HostId& hostID);
     void UpdateIncomingConnection(bool connected);
     void UpdateOutgoingConnection(bool connected);
     void UpdateBytesSent(uint64_t bytesSent);

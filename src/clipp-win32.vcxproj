@@ -201,6 +201,7 @@
   <ItemGroup>
     <ClInclude Include="BlockingQueue.h" />
     <ClInclude Include="ClipboardData.h" />
+    <ClInclude Include="HostId.h" />
     <ClInclude Include="Listener.h" />
     <ClInclude Include="CryptoChannel.h" />
     <ClInclude Include="platform.h" />

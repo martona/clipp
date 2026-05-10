@@ -31,7 +31,7 @@ namespace {
 #pragma pack(push, 1)
     struct HandshakePlaintext {
         unsigned char ephemeralPk[crypto_kx_PUBLICKEYBYTES];
-        unsigned char hostId[CryptoChannel::HostIdSize];
+        unsigned char hostId[HostId::kSize];
         char hostNameUTF8[CryptoChannel::HOSTNAME_MAX_BYTES];
     };
 
@@ -48,11 +48,11 @@ namespace {
     void FillHandshakePlaintext(
         HandshakePlaintext& plaintext,
         const PublicKey& publicKey,
-        const CryptoChannel::HostId& hostId,
+        const HostId& hostId,
         const char* hostNameUtf8)
     {
         std::memcpy(plaintext.ephemeralPk, publicKey.data(), publicKey.size());
-        std::memcpy(plaintext.hostId, hostId.data(), hostId.size());
+        std::memcpy(plaintext.hostId, hostId.data().data(), hostId.data().size());
         strncpys(plaintext.hostNameUTF8, hostNameUtf8);
     }
 
@@ -64,10 +64,10 @@ namespace {
 
     void CopyRemoteIdentity(
         const HandshakePlaintext& plaintext,
-        CryptoChannel::HostId& remoteHostId,
+        HostId& remoteHostId,
         std::string& remoteHostNameUtf8)
     {
-        std::memcpy(remoteHostId.data(), plaintext.hostId, remoteHostId.size());
+        std::memcpy(remoteHostId.data().data(), plaintext.hostId, remoteHostId.data().size());
         remoteHostNameUtf8 = plaintext.hostNameUTF8;
     }
 
@@ -121,7 +121,7 @@ namespace {
         return OpenHandshakeFrame(frame, networkKey, plaintext);
     }
 
-    bool LoadLocalIdentity(CryptoChannel::HostId& hostId, std::array<char, CryptoChannel::HOSTNAME_MAX_BYTES>& hostNameUtf8) {
+    bool LoadLocalIdentity(HostId& hostId, std::array<char, CryptoChannel::HOSTNAME_MAX_BYTES>& hostNameUtf8) {
         if (!g_settings.getHostID(hostId)) {
             return false;
         }
@@ -254,7 +254,7 @@ bool CryptoChannel::ServerHandshake(
     const PublicKey clientPublicKey = CopyPublicKey(remotePlaintext);
     CopyRemoteIdentity(remotePlaintext, remoteHostId, remoteHostNameUtf8);
 
-    HostId localHostId{};
+    HostId localHostId;
     std::array<char, HOSTNAME_MAX_BYTES> localHostNameUtf8{};
     if (!LoadLocalIdentity(localHostId, localHostNameUtf8)) {
         return false;

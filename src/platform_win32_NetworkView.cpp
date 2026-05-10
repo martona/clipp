@@ -88,10 +88,7 @@ void NetworkView::Poll() {
 }
 
 bool NetworkView::ItemLess(const PeerDisplayItem& left, const PeerDisplayItem& right) {
-    if (left.hostID != right.hostID) {
-        return std::lexicographical_compare(left.hostID.begin(), left.hostID.end(), right.hostID.begin(), right.hostID.end());
-    }
-    return left.hostName < right.hostName;
+	return left.hostID < right.hostID;
 }
 
 bool NetworkView::SameHostID(const PeerDisplayItem& left, const PeerDisplayItem& right) {

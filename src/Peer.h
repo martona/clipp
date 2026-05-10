@@ -18,6 +18,8 @@
 #include "BlockingQueue.h"
 #include "ClipboardData.h"
 #include "Logger.h"
+#include "HostId.h"
+
 class CryptoChannel;
 
 class Peer {
@@ -28,12 +30,12 @@ public:
 	} ConnType;
 	ConnType connType_;
 
-	using ClipboardReceivedCallback = std::function<void(const std::wstring&, const std::array<unsigned char, 32>&, ClipboardPayload&)>;
-	using VerifiedCallback = std::function<void(const std::wstring&, const std::array<unsigned char, 32>&, ConnType, std::chrono::steady_clock::time_point)>;
-	using TrafficCallback = std::function<void(const std::wstring&, const std::array<unsigned char, 32>&, uint64_t, uint64_t)>;
+	using ClipboardReceivedCallback = std::function<void(const std::wstring&, HostId&, ClipboardPayload&)>;
+	using VerifiedCallback = std::function<void(const std::wstring&, HostId&, ConnType, std::chrono::steady_clock::time_point)>;
+	using TrafficCallback = std::function<void(const HostId&, uint64_t, uint64_t)>;
 
 	// peers we're connecting to
-	Peer(const wchar_t* hostName, const unsigned char* hostID, const wchar_t* ip, unsigned short port, VerifiedCallback verifiedCallback = nullptr, TrafficCallback trafficCallback = nullptr);
+	Peer(const wchar_t* hostName, const HostId* hostID, const wchar_t* ip, unsigned short port, VerifiedCallback verifiedCallback = nullptr, TrafficCallback trafficCallback = nullptr);
 	// peers that connected to us
 	Peer(SOCKET socket, ClipboardReceivedCallback clipboardReceivedCallback, VerifiedCallback verifiedCallback = nullptr, TrafficCallback trafficCallback = nullptr);
 	~Peer();
@@ -45,7 +47,7 @@ public:
 	void MarkDisplayRegistered();
 
 	std::wstring hostName() const;
-	std::array<unsigned char, 32> hostID() const;
+	HostId hostID() const;
 	std::wstring ip() const;
 	unsigned short port() const;
 	std::chrono::steady_clock::time_point lastPingReceivedAt() const;
@@ -72,7 +74,7 @@ private:
 	std::wstring hostName_;
 	std::wstring ip_;
 	unsigned short port_{};
-	std::array<unsigned char, 32> hostID_{};
+	HostId hostID_;
 	std::chrono::steady_clock::time_point createdAt_;
 	std::chrono::steady_clock::time_point lastPingReceivedAt_;
 

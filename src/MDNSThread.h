@@ -1,16 +1,16 @@
 #pragma once
 
 #include <cstdint>
+#include "HostId.h"
 
 // Callback type: receives discovered host metadata and network name.
 using MDNSCallback = void(*)(const char* hostNameUtf8, 
-							const char* hostIDHex, 
 							const char* senderIpUtf8, 
 							const char* queryIDHex, 
 							const char* nonceHex, 
 							const char* verbUtf8, 
 							unsigned short port, 
-							const unsigned char* rawHostID);
+							const HostId& remoteHostID);
 
 // Starts the mDNS thread. Returns true on success.
 bool StartMDNS(MDNSCallback callback);

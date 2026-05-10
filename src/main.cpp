@@ -191,21 +191,20 @@ void OnClipboardNotification(PlatformWindowHandle hwnd) {
 	g_logger.log(__FUNCTION__, Logger::Level::Debug, "Broadcasted clipboard data to peers (format ID: %u, encoded size: %zu bytes, decoded size: %zu bytes)", clipboardData.formatId, clipboardData.rawData.size(), decodedDataSize);
 }
 
-Listener g_listener([](const std::wstring& hostName, const std::array<unsigned char, 32>& hostID, ClipboardPayload& payload) {
+Listener g_listener([](const std::wstring& hostName, const HostId& hostID, ClipboardPayload& payload) {
     g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Received clipboard data from client %ls (format ID: %u, size: %zu bytes)", hostName.c_str(), payload.formatId, payload.rawData.size());
     SetClipboardData(payload);
 });
 
 void OnMDNSNotification(const char* hostNameUtf8, 
-                        const char* hostID, 
                         const char* senderIp, 
                         const char* queryID, 
                         const char* nonce, 
                         const char* verb, 
                         u_short port, 
-                        const unsigned char* rawHostID) 
+                        const HostId& remoteHostId) 
 {
-    static std::array<unsigned char, 32> ourHostId;
+    HostId ourHostId;
 	static bool ourHostIdInitialized = false;
     if (!ourHostIdInitialized) {
         if (g_settings.getHostID(ourHostId)) {
@@ -218,9 +217,9 @@ void OnMDNSNotification(const char* hostNameUtf8,
 
     g_logger.log(__FUNCTION__, Logger::Level::Debug,
         "mDNS notification received for host: %s / %s\n  from: %s:%hu\n  verb:    %s\n  queryID: %s\n  nonce:   %s",
-        hostNameUtf8, hostID, senderIp, port, verb, queryID, nonce);
+        hostNameUtf8, remoteHostId.ToHexString().c_str(), senderIp, port, verb, queryID, nonce);
 
-    if (memcmp(ourHostId.data(), rawHostID, 32) == 0) {
+    if (ourHostId == remoteHostId) {
         g_logger.log(__FUNCTION__, Logger::Level::Debug, "mDNS notification is from self; ignoring");
         return;
 	}
@@ -230,7 +229,7 @@ void OnMDNSNotification(const char* hostNameUtf8,
     if (hostNameWLen > 0) {
         utf8_to_utf16(hostNameUtf8, strlen(hostNameUtf8), hostNameW.data(), hostNameW.size());
     }
-    g_peerManager.AddPeer(hostNameW.c_str(), rawHostID, Utf8ToWideString(senderIp).c_str(), port);
+    g_peerManager.AddPeer(hostNameW.c_str(), remoteHostId, Utf8ToWideString(senderIp).c_str(), port);
 }
 
 void PrintNetworkKeyHash(const std::array<unsigned char, KeyManager::NetworkKeySize>& networkKey) {
@@ -318,7 +317,7 @@ int main(int argc, char* argv[]) {
     }
     g_logger.log(__FUNCTION__, Logger::Level::Debug, "libsodium initialized successfully.");
 
-    std::array<unsigned char, 32> hostID{};
+    HostId hostID;
     if (!g_settings.ensureHostID(hostID)) {
         g_logger.log(__FUNCTION__, Logger::Level::Error, "Fatal: failed to initialize host ID.");
         return 1;

@@ -4,13 +4,10 @@
 #include <utility>
 
 bool PeerDisplay::LessDisplayItem(const PeerDisplayItem& left, const PeerDisplayItem& right) {
-	if (left.hostID != right.hostID) {
-		return std::lexicographical_compare(left.hostID.begin(), left.hostID.end(), right.hostID.begin(), right.hostID.end());
-	}
-	return left.hostName < right.hostName;
+	return left.hostID < right.hostID;
 }
 
-bool PeerDisplay::HostIdEquals(const PeerDisplayEntry& entry, const std::array<unsigned char, 32>& hostID) {
+bool PeerDisplay::HostIdEquals(const PeerDisplayEntry& entry, const HostId& hostID) {
 	return entry.item.hostID == hostID;
 }
 
@@ -23,7 +20,7 @@ std::vector<PeerDisplayItem> PeerDisplay::SnapshotLocked() const {
 	return snapshot;
 }
 
-void PeerDisplay::NotifyPeer(const std::wstring& hostName, const std::array<unsigned char, 32>& hostID, Peer::ConnType connType, std::chrono::steady_clock::time_point connectedSince) {
+void PeerDisplay::NotifyPeer(const std::wstring& hostName, const HostId& hostID, Peer::ConnType connType, std::chrono::steady_clock::time_point connectedSince) {
 	PeerDisplayUpdate update;
 	std::vector<WatcherRegistration> watchers;
 
@@ -70,7 +67,7 @@ void PeerDisplay::NotifyPeer(const std::wstring& hostName, const std::array<unsi
 	}
 }
 
-void PeerDisplay::NotifyPeerRemoved(const std::wstring& hostName, const std::array<unsigned char, 32>& hostID, Peer::ConnType connType) {
+void PeerDisplay::NotifyPeerRemoved(const HostId& hostID, Peer::ConnType connType) {
 	PeerDisplayUpdate update;
 	std::vector<WatcherRegistration> watchers;
 	bool shouldNotify = false;
@@ -91,10 +88,6 @@ void PeerDisplay::NotifyPeerRemoved(const std::wstring& hostName, const std::arr
 		}
 		found->item.hasIncomingConnection = found->incomingConnectionCount > 0;
 		found->item.hasOutgoingConnection = found->outgoingConnectionCount > 0;
-
-		if (!hostName.empty()) {
-			found->item.hostName = hostName;
-		}
 
 		if (found->incomingConnectionCount > 0 || found->outgoingConnectionCount > 0) {
 			update.type = PeerDisplayUpdate::Type::Updated;
@@ -120,7 +113,7 @@ void PeerDisplay::NotifyPeerRemoved(const std::wstring& hostName, const std::arr
 	}
 }
 
-void PeerDisplay::NotifyPeerBytes(const std::wstring& hostName, const std::array<unsigned char, 32>& hostID, uint64_t bytesSent, uint64_t bytesReceived) {
+void PeerDisplay::NotifyPeerBytes(const HostId& hostID, uint64_t bytesSent, uint64_t bytesReceived) {
 	PeerDisplayUpdate update;
 	std::vector<WatcherRegistration> watchers;
 
@@ -133,9 +126,6 @@ void PeerDisplay::NotifyPeerBytes(const std::wstring& hostName, const std::array
 			return;
 		}
 
-		if (!hostName.empty()) {
-			found->item.hostName = hostName;
-		}
 		found->item.bytesSent += bytesSent;
 		found->item.bytesReceived += bytesReceived;
 
