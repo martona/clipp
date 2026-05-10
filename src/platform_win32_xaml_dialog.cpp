@@ -152,13 +152,12 @@ public:
                 ShowWindow(hwnd_, SW_SHOWNORMAL);
                 SetForegroundWindow(hwnd_);
             } else if (!createError_.empty()) {
-                MessageBoxW(owner, createError_.c_str(), L"Clipp", MB_ICONERROR | MB_OK);
+                DarkMode::DarkMessageBox(owner, createError_.c_str(), L"Clipp", MB_ICONERROR | MB_OK);
             }
-        }
-        catch (const winrt::hresult_error& error) {
-            const std::wstring message = L"Unable to open the XAML Islands dialog. This requires Windows 10 version 1903 or later and the WinRT XAML hosting runtime.\n\nHRESULT: " + std::to_wstring(static_cast<uint32_t>(static_cast<int32_t>(error.code())));
+        } catch (const winrt::hresult_error& error) {
+            const std::wstring message = L"Unable to open the XAML Islands dialog. HRESULT: " + std::to_wstring(error.code());
             g_logger.log(__FUNCTION__, Logger::Level::Error, message.c_str());
-            MessageBoxW(owner, message.c_str(), L"Clipp", MB_ICONERROR | MB_OK);
+            DarkMode::DarkMessageBox(owner, message.c_str(), L"Clipp", MB_ICONERROR | MB_OK);
         }
     }
 
@@ -166,7 +165,6 @@ public:
         if (!hwnd_ || !msg || !xamlSource_) {
             return false;
         }
-
         auto nativeSource = xamlSource_.as<IDesktopWindowXamlSourceNative2>();
         BOOL handled = FALSE;
         return SUCCEEDED(nativeSource->PreTranslateMessage(msg, &handled)) && handled;

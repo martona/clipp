@@ -49,7 +49,6 @@ private:
     int mdnsPort_;
     int tcpPort_;
     std::string networkName_;
-	uint64_t networkNameTimestamp_;
     mutable std::mutex mutex_;
 };
 

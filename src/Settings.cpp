@@ -9,7 +9,6 @@ namespace {
     constexpr wchar_t kMdnsPortName[] = L"MdnsPort";
     constexpr wchar_t kTcpPortName[] = L"TcpPort";
     constexpr wchar_t kNetworkNameName[] = L"NetworkName";
-	constexpr wchar_t kNetworkNameTimestampName[] = L"NetworkNameTimestamp";
     constexpr wchar_t kEncryptedNetworkKeyName[] = L"EncryptedNetworkKey";
     constexpr wchar_t kHostIDName[] = L"HostID";
 }
@@ -19,7 +18,6 @@ Settings::Settings()
 	  listenerIp_(DefaultListenerIp),
       mdnsPort_(DefaultMdnsPort),
       tcpPort_(DefaultTcpPort),
-	  networkNameTimestamp_(0),
       networkName_(GetDefaultNetworkName()) {
     LoadCache();
 }
@@ -137,9 +135,6 @@ bool Settings::LoadCache() {
     if (ReadStringValue(kNetworkNameName, networkName)) {
         networkName_ = networkName;
     }
-    if (ReadUint64Value(kNetworkNameTimestampName, networkNameTimestamp)) {
-        networkNameTimestamp_ = networkNameTimestamp;
-	}
     if (ReadUint32Value(kMdnsPortName, mdns)) {
         mdnsPort_ = mdns;
     }
