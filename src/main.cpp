@@ -188,7 +188,7 @@ void OnClipboardNotification(PlatformWindowHandle hwnd) {
 	}
 	auto payload = std::make_shared<const ClipboardPayload>(clipboardData);
     g_peerManager.BroadcastClipboard(payload);
-	g_logger.log(__FUNCTION__, Logger::Level::Debug, "Broadcasted clipboard data to peers (format ID: %u, encoded size: %zu bytes, decoded size: %zu bytes)", clipboardData.formatId, clipboardData.rawData.size(), decodedDataSize);
+	g_logger.log(__FUNCTION__, Logger::Level::Debug, "Broadcast clipboard data to peers (format ID: %u, encoded size: %zu bytes, decoded size: %zu bytes)", clipboardData.formatId, clipboardData.rawData.size(), decodedDataSize);
 }
 
 Listener g_listener([](const std::wstring& hostName, const HostId& hostID, ClipboardPayload& payload) {
@@ -204,7 +204,7 @@ void OnMDNSNotification(const char* hostNameUtf8,
                         u_short port, 
                         const HostId& remoteHostId) 
 {
-    HostId ourHostId;
+    static HostId ourHostId;
 	static bool ourHostIdInitialized = false;
     if (!ourHostIdInitialized) {
         if (g_settings.getHostID(ourHostId)) {

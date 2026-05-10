@@ -30,8 +30,8 @@ public:
 	} ConnType;
 	ConnType connType_;
 
-	using ClipboardReceivedCallback = std::function<void(const std::wstring&, HostId&, ClipboardPayload&)>;
-	using VerifiedCallback = std::function<void(const std::wstring&, HostId&, ConnType, std::chrono::steady_clock::time_point)>;
+	using ClipboardReceivedCallback = std::function<void(const std::wstring&, const HostId&, ClipboardPayload&)>;
+	using VerifiedCallback = std::function<void(const std::wstring&, const HostId&, ConnType, std::chrono::steady_clock::time_point)>;
 	using TrafficCallback = std::function<void(const HostId&, uint64_t, uint64_t)>;
 
 	// peers we're connecting to
@@ -43,8 +43,6 @@ public:
 	void Start();
 	void Stop();
 	bool isRunning() const;
-	bool isDisplayRegistered() const;
-	void MarkDisplayRegistered();
 
 	std::wstring hostName() const;
 	HostId hostID() const;
@@ -81,7 +79,6 @@ private:
 	std::thread thread_;
 	std::atomic<bool> stopRequested_{ false };
 	std::atomic<bool> running_{ false };
-	std::atomic<bool> displayRegistered_{ false };
 	std::mutex stopMutex_;
 	std::condition_variable stopCV_;
 	

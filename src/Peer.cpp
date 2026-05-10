@@ -162,14 +162,6 @@ bool Peer::isRunning() const {
 	return running_.load();
 }
 
-bool Peer::isDisplayRegistered() const {
-	return displayRegistered_.load();
-}
-
-void Peer::MarkDisplayRegistered() {
-	displayRegistered_.store(true);
-}
-
 std::wstring Peer::hostName() const {
 	std::lock_guard<std::mutex> lock(dataMutex_);
 	return hostName_;
@@ -495,7 +487,6 @@ void Peer::ThreadProcRecv() {
 		}
 		if (verifiedCallback_) {
 			verifiedCallback_(Utf8ToWideString(remoteHostNameUtf8), remoteHostId, connType_, createdAt_);
-			displayRegistered_.store(true);
 		}
 
 		log(__FUNCTION__, Logger::Level::Info, L"Client connected");

@@ -34,7 +34,6 @@ void PeerManager::AddPeer(const wchar_t* hostName, const HostId& hostID, const w
 		[](const HostId& hostID, uint64_t bytesSent, uint64_t bytesReceived) {
 			g_peerDisplay.NotifyPeerBytes(hostID, bytesSent, bytesReceived);
 		});
-	peer->MarkDisplayRegistered();
 	g_peerDisplay.NotifyPeer(peer->hostName(), peer->hostID(), peer->connType_, peer->createdAt());
 	Peer* peerPtr = peer.get();
 	peers_.emplace_back(std::move(peer));
@@ -59,16 +58,16 @@ void PeerManager::AddPeer(SOCKET socket, Peer::ClipboardReceivedCallback clipboa
 	g_logger.log(__FUNCTION__, Logger::Level::Debug, L"PeerManager: added new peer (incoming).");
 }
 
-void PeerManager::RemovePeer(const unsigned char* hostID) {
+void PeerManager::RemovePeer(const HostId& hostID) {
 	std::lock_guard<std::mutex> lock(peersMutex_);
 	peers_.erase(std::remove_if(peers_.begin(), peers_.end(),
 		[hostID](const std::unique_ptr<Peer>& peer) {
-			const auto peerHostID = peer->hostID();
-			const bool matches = peerHostID == hostID;
-			if (matches && peer->isDisplayRegistered()) {
-				g_peerDisplay.NotifyPeerRemoved(peerHostID, peer->connType_);
+			if (peer->hostID() == hostID) {
+				g_peerDisplay.NotifyPeerRemoved(peer->hostID(), peer->connType_);
+				return true;
+			} else {
+				return false;
 			}
-			return matches;
 		}), peers_.end());
 }
 
@@ -77,9 +76,7 @@ void PeerManager::CullPeers() {
 	std::lock_guard<std::mutex> lock(peersMutex_);
 	peers_.erase(std::remove_if(peers_.begin(), peers_.end(), [now](std::unique_ptr<Peer>& peer) {
 		if (!peer->isRunning()) {
-			if (peer->isDisplayRegistered()) {
-				g_peerDisplay.NotifyPeerRemoved(peer->hostID(), peer->connType_);
-			}
+			g_peerDisplay.NotifyPeerRemoved(peer->hostID(), peer->connType_);
 			g_logger.log(__FUNCTION__, Logger::Level::Debug, L"PeerManager: culled stopped peer.");
 			return true;
 		}
@@ -88,9 +85,7 @@ void PeerManager::CullPeers() {
 		const bool dead = age >= std::chrono::minutes(1) && silence >= std::chrono::minutes(1);
 		if (dead) {
 			peer->Stop();
-			if (peer->isDisplayRegistered()) {
-				g_peerDisplay.NotifyPeerRemoved(peer->hostID(), peer->connType_);
-			}
+			g_peerDisplay.NotifyPeerRemoved(peer->hostID(), peer->connType_);
 			g_logger.log(__FUNCTION__, Logger::Level::Debug, L"PeerManager: culled dead peer.");
 		}
 		return dead;
@@ -102,9 +97,7 @@ void PeerManager::ClearPeers() {
 	for (const auto& peer : peers_) {
 		g_logger.log(__FUNCTION__, Logger::Level::Debug, L"PeerManager: clearing peer %ls", peer->hostName().c_str());
 		peer->Stop();
-		if (peer->isDisplayRegistered()) {
-			g_peerDisplay.NotifyPeerRemoved(peer->hostID(), peer->connType_);
-		}
+		g_peerDisplay.NotifyPeerRemoved(peer->hostID(), peer->connType_);
 	}
 	peers_.clear();
 }
