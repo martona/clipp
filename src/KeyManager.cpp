@@ -194,7 +194,6 @@ void KeyManager::ClearNetworkKey() {
     settings_.setEncryptedNetworkKey(std::vector<unsigned char>{});
 #else
     DeleteNetworkKeyItem(CFSTR("NetworkKeyV2"));
-    DeleteNetworkKeyItem(CFSTR("NetworkKey"));
 #endif
 }
 
@@ -288,8 +287,6 @@ bool KeyManager::SetNetworkKey(const std::array<unsigned char, NetworkKeySize>& 
         return false;
     }
 
-    DeleteNetworkKeyItem(CFSTR("NetworkKey"));
-
     std::vector<unsigned char> encryptedBuffer;
 #endif
 
@@ -368,9 +365,6 @@ bool KeyManager::GetNetworkKey(std::array<unsigned char, NetworkKeySize>& networ
 #else
     CFTypeRef outData = nullptr;
     OSStatus status = CopyNetworkKeyData(CFSTR("NetworkKeyV2"), &outData);
-    if (status != errSecSuccess) {
-        status = CopyNetworkKeyData(CFSTR("NetworkKey"), &outData);
-    }
 
     if (status != errSecSuccess || outData == nullptr) {
         if (errorMessage != nullptr) *errorMessage = FormatSecurityError("Failed to read network key from keychain", status);
