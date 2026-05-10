@@ -26,7 +26,7 @@ namespace {
     }
 
     static NSUserDefaults* GetSettingsStore() {
-        return [[NSUserDefaults alloc] initWithSuiteName:@"net.clipp.app"];
+        return [NSUserDefaults standardUserDefaults];
     }
 }
 

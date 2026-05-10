@@ -26,8 +26,8 @@
     #include <termios.h>
     #include <unistd.h>
     #include <signal.h>
-    #include <signal.h>
     #include <pthread.h>
+    #include <thread>
 #endif
 
 Settings g_settings;
@@ -245,6 +245,8 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
+    g_logger.log(__FUNCTION__, Logger::Level::Info, L"==================================================================");
+
     #ifdef _WIN32
         switch (EnsureSingleInstance()) {
             case SingleInstanceResult::Continue:
@@ -306,8 +308,16 @@ int main(int argc, char* argv[]) {
     #ifdef _WIN32
         SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
         TrayIconMessageLoop();
+    #elif defined(__APPLE__)
+        std::thread signalThread([waitset]() mutable {
+            int caughtSignal = 0;
+            if (sigwait(&waitset, &caughtSignal) == 0) {
+                RequestMacOSAppShutdown();
+            }
+        });
+        signalThread.detach();
+        RunMacOSStatusMenu();
     #else
-        // macOS: Instantly sleep the main thread until the blocked signal arrives
         int caughtSignal;
         sigwait(&waitset, &caughtSignal);
     #endif

@@ -1,4 +1,15 @@
 cmake_minimum_required(VERSION 3.20)
+
+if (APPLE AND (NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET OR CMAKE_OSX_DEPLOYMENT_TARGET STREQUAL ""))
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS deployment version" FORCE)
+endif()
+
+if (APPLE)
+    set(VCPKG_OSX_DEPLOYMENT_TARGET "${CMAKE_OSX_DEPLOYMENT_TARGET}" CACHE STRING "Minimum macOS deployment version for vcpkg ports" FORCE)
+    set(CLIPP_MACOS_DEVELOPMENT_TEAM "2262A4CP8N" CACHE STRING "Apple development team ID for signing")
+    set(CLIPP_MACOS_CODE_SIGN_IDENTITY "Apple Development" CACHE STRING "macOS code signing identity")
+endif()
+
 project(clipp)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -11,10 +22,14 @@ if (APPLE)
 endif()
 
 if (WIN32)
-    list(FILTER SOURCES EXCLUDE REGEX "platform_mac_*")
+    list(FILTER SOURCES EXCLUDE REGEX "platform_macos_*")
 endif()
 
-add_executable(clipp ${SOURCES})
+if (APPLE)
+    add_executable(clipp MACOSX_BUNDLE ${SOURCES})
+else()
+    add_executable(clipp ${SOURCES})
+endif()
 
 if (APPLE)
     target_compile_options(clipp PRIVATE "-Wno-deprecated-declarations")
@@ -56,15 +71,14 @@ if (APPLE)
         ${SECURITY_FRAMEWORK}
         ${APPKIT_FRAMEWORK}
     )
+
+    set_target_properties(clipp PROPERTIES
+        MACOSX_BUNDLE_BUNDLE_NAME "Clipp"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "net.clipp.app"
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/macos/Info.plist.in"
+        XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "${CLIPP_MACOS_CODE_SIGN_IDENTITY}"
+        XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Manual"
+        XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${CLIPP_MACOS_DEVELOPMENT_TEAM}"
+        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "net.clipp.app"
+    )
 endif()
-
-#75B684388ADFBC91BED0EDE18049B734D1169C8F "Apple Development: marton@anka.me (9H8YKZJP4X)"
-set(CODE_SIGN_IDENTITY "75B684388ADFBC91BED0EDE18049B734D1169C8F")
-
-#add_executable(clipp main.cpp)
-
-# Add the post-build signing step
-add_custom_command(TARGET clipp POST_BUILD
-    COMMAND /usr/bin/codesign --force --sign "${CODE_SIGN_IDENTITY}" --identifier net.clipp.app $<TARGET_FILE:clipp>
-    COMMENT "Codesigning $<TARGET_FILE:clipp>..."
-)

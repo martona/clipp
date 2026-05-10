@@ -15,6 +15,8 @@
 #ifdef __APPLE__
     #include <CoreFoundation/CoreFoundation.h>
     #include <Security/Security.h>
+    #include <limits.h>
+
     static std::string FormatSecurityError(const char* context, OSStatus status) {
         std::ostringstream oss;
         oss << context << " (OSStatus " << status;
@@ -42,6 +44,78 @@
         CFDictionaryAddValue(query, kSecAttrAccount, account);
 
         return query;
+    }
+
+    static void AddTrustedApplication(CFMutableArrayRef trustedApps, SecTrustedApplicationRef trustedApp) {
+        if (trustedApps == nullptr || trustedApp == nullptr) {
+            return;
+        }
+
+        CFArrayAppendValue(trustedApps, trustedApp);
+    }
+
+    static void AddTrustedApplicationFromPath(CFMutableArrayRef trustedApps, const char* path) {
+        if (trustedApps == nullptr || path == nullptr || path[0] == '\0') {
+            return;
+        }
+
+        SecTrustedApplicationRef trustedApp = nullptr;
+        if (SecTrustedApplicationCreateFromPath(path, &trustedApp) == errSecSuccess) {
+            AddTrustedApplication(trustedApps, trustedApp);
+        }
+
+        if (trustedApp != nullptr) {
+            CFRelease(trustedApp);
+        }
+    }
+
+    static void AddTrustedApplicationFromURL(CFMutableArrayRef trustedApps, CFURLRef url) {
+        if (trustedApps == nullptr || url == nullptr) {
+            return;
+        }
+
+        char path[PATH_MAX]{};
+        if (CFURLGetFileSystemRepresentation(url, true, reinterpret_cast<UInt8*>(path), sizeof(path))) {
+            AddTrustedApplicationFromPath(trustedApps, path);
+        }
+    }
+
+    static SecAccessRef CreateNetworkKeyAccess() {
+        CFMutableArrayRef trustedApps = CFArrayCreateMutable(kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
+        if (trustedApps == nullptr) {
+            return nullptr;
+        }
+
+        SecTrustedApplicationRef currentApp = nullptr;
+        if (SecTrustedApplicationCreateFromPath(nullptr, &currentApp) == errSecSuccess) {
+            AddTrustedApplication(trustedApps, currentApp);
+        }
+
+        if (currentApp != nullptr) {
+            CFRelease(currentApp);
+        }
+
+        CFBundleRef bundle = CFBundleGetMainBundle();
+        if (bundle != nullptr) {
+            CFURLRef bundleURL = CFBundleCopyBundleURL(bundle);
+            AddTrustedApplicationFromURL(trustedApps, bundleURL);
+            if (bundleURL != nullptr) {
+                CFRelease(bundleURL);
+            }
+
+            CFURLRef executableURL = CFBundleCopyExecutableURL(bundle);
+            AddTrustedApplicationFromURL(trustedApps, executableURL);
+            if (executableURL != nullptr) {
+                CFRelease(executableURL);
+            }
+        }
+
+        SecAccessRef access = nullptr;
+        CFArrayRef trustedList = CFArrayGetCount(trustedApps) > 0 ? trustedApps : nullptr;
+        OSStatus status = SecAccessCreate(CFSTR("Clipp network key"), trustedList, &access);
+        CFRelease(trustedApps);
+
+        return status == errSecSuccess ? access : nullptr;
     }
 
     static void AddNoAuthenticationPrompt(CFMutableDictionaryRef query) {
@@ -154,8 +228,16 @@ bool KeyManager::SetNetworkKey(const std::array<unsigned char, NetworkKeySize>& 
         return false;
     }
 
+    SecAccessRef access = CreateNetworkKeyAccess();
+    if (access == nullptr) {
+        CFRelease(plainData);
+        if (errorMessage != nullptr) *errorMessage = "Failed to create keychain access list";
+        return false;
+    }
+
     CFMutableDictionaryRef addQuery = CreateNetworkKeyQuery(CFSTR("NetworkKeyV2"));
     if (addQuery == nullptr) {
+        CFRelease(access);
         CFRelease(plainData);
         if (errorMessage != nullptr) *errorMessage = "Failed to allocate keychain add query";
         return false;
@@ -163,6 +245,7 @@ bool KeyManager::SetNetworkKey(const std::array<unsigned char, NetworkKeySize>& 
 
     CFDictionaryAddValue(addQuery, kSecValueData, plainData);
     CFDictionaryAddValue(addQuery, kSecAttrAccessible, kSecAttrAccessibleAfterFirstUnlock);
+    CFDictionaryAddValue(addQuery, kSecAttrAccess, access);
 
     OSStatus status = SecItemAdd(addQuery, nullptr);
     CFRelease(addQuery);
@@ -170,26 +253,29 @@ bool KeyManager::SetNetworkKey(const std::array<unsigned char, NetworkKeySize>& 
     if (status == errSecDuplicateItem) {
         CFMutableDictionaryRef matchQuery = CreateNetworkKeyQuery(CFSTR("NetworkKeyV2"));
         if (matchQuery == nullptr) {
+            CFRelease(access);
             CFRelease(plainData);
             if (errorMessage != nullptr) *errorMessage = "Failed to allocate keychain match query";
             return false;
         }
-        AddNoAuthenticationPrompt(matchQuery);
 
         CFMutableDictionaryRef updateAttrs = CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
             &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
         if (updateAttrs == nullptr) {
             CFRelease(matchQuery);
+            CFRelease(access);
             CFRelease(plainData);
             if (errorMessage != nullptr) *errorMessage = "Failed to allocate keychain update query";
             return false;
         }
         CFDictionaryAddValue(updateAttrs, kSecValueData, plainData);
+        CFDictionaryAddValue(updateAttrs, kSecAttrAccess, access);
         status = SecItemUpdate(matchQuery, updateAttrs);
         CFRelease(updateAttrs);
         CFRelease(matchQuery);
     }
 
+    CFRelease(access);
     CFRelease(plainData);
 
     if (status != errSecSuccess) {

@@ -169,6 +169,11 @@ static inline void strncpys(char(&dst)[N], const char* src) {
 
 #define cntof(arr) (sizeof(arr) / sizeof(arr[0]))
 
+#if defined(__APPLE__)
+void RunMacOSStatusMenu();
+void RequestMacOSAppShutdown();
+#endif
+
 #ifndef NDEBUG
     #ifdef _WIN32
         #define CLIPP_DEBUG_BREAK() __debugbreak()
