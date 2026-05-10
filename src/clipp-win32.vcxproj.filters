@@ -57,6 +57,9 @@
     <ClCompile Include="platform_win32_NetworkView.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="platform_win32_SettingsPage.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="platform_win32_TerminalLogView.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -135,6 +138,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="platform_win32_NetworkView.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="platform_win32_SettingsPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="platform_win32_TerminalLogView.h">

@@ -39,10 +39,6 @@ winrt::Windows::UI::Xaml::Controls::Grid PlaceholderPage::View() const {
     return root_;
 }
 
-SettingsPage::SettingsPage()
-    : PlaceholderPage(L"Settings", L"Settings controls will be added here in a future update.") {
-}
-
 AboutPage::AboutPage()
     : PlaceholderPage(L"About", L"About Clipp details, version information, and credits will be added here in a future update.") {
 }

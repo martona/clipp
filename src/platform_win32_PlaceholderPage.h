@@ -12,11 +12,6 @@ private:
     winrt::Windows::UI::Xaml::Controls::Grid root_{ nullptr };
 };
 
-class SettingsPage : public PlaceholderPage {
-public:
-    SettingsPage();
-};
-
 class AboutPage : public PlaceholderPage {
 public:
     AboutPage();

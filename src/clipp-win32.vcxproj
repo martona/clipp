@@ -190,6 +190,7 @@
     <ClCompile Include="platform_win32_Settings.cpp" />
     <ClCompile Include="platform_win32_NetworkItem.cpp" />
     <ClCompile Include="platform_win32_NetworkView.cpp" />
+    <ClCompile Include="platform_win32_SettingsPage.cpp" />
     <ClCompile Include="platform_win32_TerminalLogView.cpp" />
     <ClCompile Include="platform_win32_ClippPage.cpp" />
     <ClCompile Include="platform_win32_LogsPage.cpp" />
@@ -208,6 +209,7 @@
     <ClInclude Include="platform_win32_KeyDerivationWorker.h" />
     <ClInclude Include="platform_win32_NetworkItem.h" />
     <ClInclude Include="platform_win32_NetworkView.h" />
+    <ClInclude Include="platform_win32_SettingsPage.h" />
     <ClInclude Include="platform_win32_TerminalLogView.h" />
     <ClInclude Include="platform_win32_ClippPage.h" />
     <ClInclude Include="platform_win32_LogsPage.h" />

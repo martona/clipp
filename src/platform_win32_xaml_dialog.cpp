@@ -5,6 +5,7 @@
 #include "platform_win32_ClippPage.h"
 #include "platform_win32_LogsPage.h"
 #include "platform_win32_PlaceholderPage.h"
+#include "platform_win32_SettingsPage.h"
 
 #include <algorithm>
 #include <cmath>
@@ -235,6 +236,9 @@ private:
                 if (logsPage_) {
                     logsPage_->OnShown();
                 }
+                if (settingsPage_) {
+                    settingsPage_->OnShown();
+                }
             } else {
                 if (clippPage_) {
                     clippPage_->OnHidden();
@@ -460,6 +464,7 @@ private:
             contentPresenter_.Content(clippPage_->View());
             break;
         case PageID::Settings:
+            settingsPage_->OnShown();
             contentPresenter_.Content(settingsPage_->View());
             break;
         case PageID::Logs:

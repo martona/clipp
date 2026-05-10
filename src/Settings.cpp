@@ -123,10 +123,14 @@ bool Settings::getHostID(HostId& value) const {
 bool Settings::LoadCache() {
     std::string multicast;
     std::string networkName;
+    std::string ip;
     int mdns = DefaultMdnsPort;
     int tcp = DefaultTcpPort;
 	uint64_t networkNameTimestamp = 0;
 
+    if (ReadStringValue(kListenerIpName, ip) && !ip.empty()) {
+        listenerIp_ = ip;
+    }
     if (ReadStringValue(kMulticastIpName, multicast) && !multicast.empty()) {
         multicastIp_ = multicast;
     }
