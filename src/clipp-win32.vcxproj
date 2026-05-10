@@ -180,6 +180,7 @@
     <ClCompile Include="Listener.cpp" />
     <ClCompile Include="CryptoChannel.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="NetworkRuntime.cpp" />
     <ClCompile Include="platform_win32_Clipboard.cpp" />
     <ClCompile Include="MDNSThread.cpp" />
     <ClCompile Include="KeyManager.cpp" />
@@ -219,6 +220,7 @@
     <ClInclude Include="KeyManager.h" />
     <ClInclude Include="Logger.h" />
     <ClInclude Include="NetworkDefs.h" />
+    <ClInclude Include="NetworkRuntime.h" />
     <ClInclude Include="Peer.h" />
     <ClInclude Include="PeerDisplay.h" />
     <ClInclude Include="PeerManager.h" />

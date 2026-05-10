@@ -1,0 +1,141 @@
+#include "NetworkRuntime.h"
+
+#include "Clipboard.h"
+#include "Logger.h"
+#include "MDNSThread.h"
+#include "PeerManager.h"
+#include "Settings.h"
+#include "utils.h"
+
+extern PeerManager g_peerManager;
+extern Settings g_settings;
+
+NetworkRuntime::NetworkRuntime()
+    : listener_([this](const std::wstring& hostName, const HostId& hostID, ClipboardPayload& payload) {
+        OnClipboardReceived(hostName, hostID, payload);
+    }) {
+}
+
+NetworkRuntime::~NetworkRuntime() {
+    Stop();
+}
+
+bool NetworkRuntime::Start() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (thread_.joinable() || stopping_) {
+        return false;
+    }
+
+    stopRequested_ = false;
+    thread_ = std::thread(&NetworkRuntime::ThreadProc, this);
+    return true;
+}
+
+void NetworkRuntime::Stop() {
+    std::thread threadToJoin;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!thread_.joinable()) {
+            return;
+        }
+
+        stopRequested_ = true;
+        stopping_ = true;
+        threadToJoin = std::move(thread_);
+    }
+
+    stopCV_.notify_all();
+
+    if (threadToJoin.joinable()) {
+        threadToJoin.join();
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        stopping_ = false;
+    }
+}
+
+bool NetworkRuntime::Restart() {
+    Stop();
+    return Start();
+}
+
+void NetworkRuntime::ThreadProc() {
+    bool mdnsStarted = false;
+    bool listenerStarted = false;
+
+    if (StartMDNS(&NetworkRuntime::OnMDNSNotification)) {
+        mdnsStarted = true;
+    } else {
+        g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to start mDNS thread!");
+    }
+
+    if (listener_.Start()) {
+        listenerStarted = true;
+    } else {
+        g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to start TCP listener thread!");
+    }
+
+    if (mdnsStarted || listenerStarted) {
+        g_logger.log(__FUNCTION__, Logger::Level::Info, "Network runtime started.");
+    }
+
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        stopCV_.wait(lock, [this]() { return stopRequested_; });
+    }
+
+    if (listenerStarted) {
+        listener_.Stop();
+    }
+
+    if (mdnsStarted) {
+        StopMDNS();
+        g_logger.log(__FUNCTION__, Logger::Level::Info, "mDNS stopped.");
+    }
+
+    g_peerManager.ClearPeers();
+    g_logger.log(__FUNCTION__, Logger::Level::Info, "Peer manager cleared.");
+}
+
+void NetworkRuntime::OnClipboardReceived(const std::wstring& hostName, const HostId&, ClipboardPayload& payload) {
+    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Received clipboard data from client %ls (format ID: %u, size: %zu bytes)", hostName.c_str(), payload.formatId, payload.rawData.size());
+    SetClipboardData(payload);
+}
+
+void NetworkRuntime::OnMDNSNotification(const char* hostNameUtf8,
+                                        const char* senderIp,
+                                        const char* queryID,
+                                        const char* nonce,
+                                        const char* verb,
+                                        unsigned short port,
+                                        const HostId& remoteHostId)
+{
+    static HostId ourHostId;
+    static bool ourHostIdInitialized = false;
+    if (!ourHostIdInitialized) {
+        if (g_settings.getHostID(ourHostId)) {
+            ourHostIdInitialized = true;
+        } else {
+            g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to get host ID from settings during mDNS notification handling.");
+            return;
+        }
+    }
+
+    g_logger.log(__FUNCTION__, Logger::Level::Debug,
+        "mDNS notification received for host: %s / %s\n  from: %s:%hu\n  verb:    %s\n  queryID: %s\n  nonce:   %s",
+        hostNameUtf8, remoteHostId.ToHexString().c_str(), senderIp, port, verb, queryID, nonce);
+
+    if (ourHostId == remoteHostId) {
+        g_logger.log(__FUNCTION__, Logger::Level::Debug, "mDNS notification is from self; ignoring");
+        return;
+    }
+
+    size_t hostNameWLen = utf8_to_utf16(hostNameUtf8, strlen(hostNameUtf8), nullptr, 0);
+    std::wstring hostNameW(hostNameWLen, L'\0');
+    if (hostNameWLen > 0) {
+        utf8_to_utf16(hostNameUtf8, strlen(hostNameUtf8), hostNameW.data(), hostNameW.size());
+    }
+    g_peerManager.AddPeer(hostNameW.c_str(), remoteHostId, Utf8ToWideString(senderIp).c_str(), port);
+}

@@ -12,9 +12,13 @@ public:
     static constexpr int DefaultMdnsPort = 15353;
     static constexpr int DefaultTcpPort = 15353;
     static constexpr const char* DefaultMulticastIp = "239.255.10.10";
-	static constexpr const char* DefaultListenerIp = "0.0.0.0";
+    static constexpr const char* DefaultListenerIp = "0.0.0.0";
 
     Settings();
+
+    static bool IsValidPort(int value);
+    static bool IsValidListenerIp(const std::string& value);
+    static bool IsValidMulticastIp(const std::string& value);
 
     std::string multicastIp() const;
 	std::string listenerIp() const;

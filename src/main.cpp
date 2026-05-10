@@ -10,8 +10,7 @@
 
 #include "Logger.h"
 #include "KeyManager.h"
-#include "MDNSThread.h"
-#include "Listener.h"
+#include "NetworkRuntime.h"
 #include "Peer.h"
 #include "PeerManager.h"
 #include "PeerDisplay.h"
@@ -33,6 +32,7 @@
 Settings g_settings;
 PeerDisplay g_peerDisplay;
 PeerManager g_peerManager;
+NetworkRuntime g_networkRuntime;
 
 #ifdef _WIN32
     namespace {
@@ -191,47 +191,6 @@ void OnClipboardNotification(PlatformWindowHandle hwnd) {
 	g_logger.log(__FUNCTION__, Logger::Level::Debug, "Broadcast clipboard data to peers (format ID: %u, encoded size: %zu bytes, decoded size: %zu bytes)", clipboardData.formatId, clipboardData.rawData.size(), decodedDataSize);
 }
 
-Listener g_listener([](const std::wstring& hostName, const HostId& hostID, ClipboardPayload& payload) {
-    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Received clipboard data from client %ls (format ID: %u, size: %zu bytes)", hostName.c_str(), payload.formatId, payload.rawData.size());
-    SetClipboardData(payload);
-});
-
-void OnMDNSNotification(const char* hostNameUtf8, 
-                        const char* senderIp, 
-                        const char* queryID, 
-                        const char* nonce, 
-                        const char* verb, 
-                        u_short port, 
-                        const HostId& remoteHostId) 
-{
-    static HostId ourHostId;
-	static bool ourHostIdInitialized = false;
-    if (!ourHostIdInitialized) {
-        if (g_settings.getHostID(ourHostId)) {
-			ourHostIdInitialized = true;
-        } else {
-            g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to get host ID from settings during mDNS notification handling.");
-            return;
-        }
-	}
-
-    g_logger.log(__FUNCTION__, Logger::Level::Debug,
-        "mDNS notification received for host: %s / %s\n  from: %s:%hu\n  verb:    %s\n  queryID: %s\n  nonce:   %s",
-        hostNameUtf8, remoteHostId.ToHexString().c_str(), senderIp, port, verb, queryID, nonce);
-
-    if (ourHostId == remoteHostId) {
-        g_logger.log(__FUNCTION__, Logger::Level::Debug, "mDNS notification is from self; ignoring");
-        return;
-	}
-
-    size_t hostNameWLen = utf8_to_utf16(hostNameUtf8, strlen(hostNameUtf8), nullptr, 0);
-    std::wstring hostNameW(hostNameWLen, L'\0');
-    if (hostNameWLen > 0) {
-        utf8_to_utf16(hostNameUtf8, strlen(hostNameUtf8), hostNameW.data(), hostNameW.size());
-    }
-    g_peerManager.AddPeer(hostNameW.c_str(), remoteHostId, Utf8ToWideString(senderIp).c_str(), port);
-}
-
 void PrintNetworkKeyHash(const std::array<unsigned char, KeyManager::NetworkKeySize>& networkKey) {
     g_logger.log(__FUNCTION__, Logger::Level::Info, L"Network Key hash: %ls", g_keyManager.GetNetworkKeyHash(&networkKey).c_str());
 }
@@ -331,36 +290,30 @@ int main(int argc, char* argv[]) {
         g_logger.log(__FUNCTION__, Logger::Level::Warning, "No network key configured yet: %s", keyErrorMessage.c_str());
     }
 
-    // Start worker threads
-    if (StartClipboardNotification(OnClipboardNotification)) {
-        if (StartMDNS(OnMDNSNotification)) {
-            if (g_listener.Start()) {
-                g_logger.log(__FUNCTION__, Logger::Level::Info, "Successfully started.");
-
-                #ifdef _WIN32
-                    SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
-                    TrayIconMessageLoop();
-                #else
-                    // macOS: Instantly sleep the main thread until the blocked signal arrives
-                    int caughtSignal;
-                    sigwait(&waitset, &caughtSignal);
-                #endif
-                g_listener.Stop();
-                g_peerManager.ClearPeers();
-				g_logger.log(__FUNCTION__, Logger::Level::Info, "Listener stopped.");
-            } else {
-                g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to start TCP listener thread!");
-            }
-            StopMDNS();
-			g_logger.log(__FUNCTION__, Logger::Level::Info, "mDNS stopped.");
-        } else {
-            g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to start mDNS thread!");
-        }
-        StopClipboardNotification();
-		g_logger.log(__FUNCTION__, Logger::Level::Info, "Clipboard notification stopped.");
-    } else {
+    if (!StartClipboardNotification(OnClipboardNotification)) {
         g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to start clipboard notification thread!");
     }
+
+    if (!g_networkRuntime.Start()) {
+        g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to start network runtime thread!");
+    } else {
+        g_logger.log(__FUNCTION__, Logger::Level::Info, "Successfully started.");
+    }
+
+    #ifdef _WIN32
+        SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
+        TrayIconMessageLoop();
+    #else
+        // macOS: Instantly sleep the main thread until the blocked signal arrives
+        int caughtSignal;
+        sigwait(&waitset, &caughtSignal);
+    #endif
+
+    g_networkRuntime.Stop();
+    g_logger.log(__FUNCTION__, Logger::Level::Info, "Network runtime stopped.");
+
+    StopClipboardNotification();
+    g_logger.log(__FUNCTION__, Logger::Level::Info, "Clipboard notification stopped.");
 
     g_peerManager.ClearPeers();
 	g_logger.log(__FUNCTION__, Logger::Level::Info, "Peer manager cleared.");

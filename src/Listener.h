@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
 #include <mutex>
 #include <thread>
 #include "platform.h"
@@ -19,6 +20,7 @@ public:
 private:
     void ThreadProc();
 	void InterruptibleSleep(std::chrono::milliseconds duration);
+    void CloseListenSocket(SOCKET listenSock);
 
     std::atomic<bool> running_{ false };
     std::mutex stopMutex_;

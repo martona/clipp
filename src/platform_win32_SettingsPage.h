@@ -18,7 +18,8 @@ public:
 private:
     void BuildView();
     void LoadSettingsIntoFields();
-    void ShowRestartMessage();
+    void ApplyNetworkSettingChange();
+    void ShowStatusMessage();
 
     void ValidateTcpPort();
     void ValidateUdpPort();
@@ -28,13 +29,11 @@ private:
     static winrt::hstring ToHString(const std::string& value);
     static std::string TrimAscii(std::string value);
     static bool TryParsePort(const winrt::hstring& text, int& port);
-    static bool IsValidListenerIp(const std::string& value);
-    static bool IsValidMulticastIp(const std::string& value);
 
     winrt::Windows::UI::Xaml::Controls::Grid root_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBox tcpPortField_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBox udpPortField_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBox listenerIpField_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBox multicastIpField_{ nullptr };
-    winrt::Windows::UI::Xaml::Controls::TextBlock restartMessage_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::TextBlock statusMessage_{ nullptr };
 };

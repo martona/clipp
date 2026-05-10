@@ -39,13 +39,19 @@ void Listener::Stop() {
     if (!running_.exchange(false)) {
         return;
     }
+    stopCV_.notify_all();
+
+    SOCKET listenSock = INVALID_SOCKET;
     {
         std::lock_guard<std::mutex> lock(listenSocketMutex_);
         if (listenSocket_ != INVALID_SOCKET) {
-            shutdown(listenSocket_, SD_BOTH);
-            closesocket(listenSocket_);
+            listenSock = listenSocket_;
             listenSocket_ = INVALID_SOCKET;
         }
+    }
+    if (listenSock != INVALID_SOCKET) {
+        shutdown(listenSock, SD_BOTH);
+        closesocket(listenSock);
     }
 
     if (thread_.joinable()) {
@@ -58,6 +64,21 @@ void Listener::Stop() {
 void Listener::InterruptibleSleep(std::chrono::milliseconds duration) {
     std::unique_lock<std::mutex> lock(stopMutex_);
     stopCV_.wait_for(lock, duration, [this]() { return !running_.load(); });
+}
+
+void Listener::CloseListenSocket(SOCKET listenSock) {
+    bool shouldClose = false;
+    {
+        std::lock_guard<std::mutex> lock(listenSocketMutex_);
+        if (listenSocket_ == listenSock) {
+            listenSocket_ = INVALID_SOCKET;
+            shouldClose = true;
+        }
+    }
+
+    if (shouldClose) {
+        closesocket(listenSock);
+    }
 }
 
 void Listener::ThreadProc() {
@@ -82,39 +103,21 @@ void Listener::ThreadProc() {
         bindAddr.sin_port = htons(static_cast<u_short>(g_settings.tcpPort()));
         if (inet_pton(AF_INET, g_settings.listenerIp().c_str(), &bindAddr.sin_addr) != 1) {
             g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Listener: invalid listener IP; retrying.");
-            closesocket(listenSock);
-            {
-                std::lock_guard<std::mutex> lock(listenSocketMutex_);
-                if (listenSocket_ == listenSock) {
-                    listenSocket_ = INVALID_SOCKET;
-                }
-            }
+            CloseListenSocket(listenSock);
             InterruptibleSleep(std::chrono::seconds(5));
             continue;
         }
 
         if (bind(listenSock, reinterpret_cast<sockaddr*>(&bindAddr), sizeof(bindAddr)) == SOCKET_ERROR) {
             g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Listener: bind failed; retrying.");
-            closesocket(listenSock);
-            {
-                std::lock_guard<std::mutex> lock(listenSocketMutex_);
-                if (listenSocket_ == listenSock) {
-                    listenSocket_ = INVALID_SOCKET;
-                }
-            }
+            CloseListenSocket(listenSock);
             InterruptibleSleep(std::chrono::seconds(5));
             continue;
         }
 
         if (listen(listenSock, SOMAXCONN) == SOCKET_ERROR) {
             g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Listener: listen failed; retrying.");
-            closesocket(listenSock);
-            {
-                std::lock_guard<std::mutex> lock(listenSocketMutex_);
-                if (listenSocket_ == listenSock) {
-                    listenSocket_ = INVALID_SOCKET;
-                }
-            }
+            CloseListenSocket(listenSock);
             InterruptibleSleep(std::chrono::seconds(5));
             continue;
         }
@@ -157,12 +160,6 @@ void Listener::ThreadProc() {
             g_logger.log(__FUNCTION__, Logger::Level::Info, L"Accepted incoming TCP client.");
         }
 
-        closesocket(listenSock);
-        {
-            std::lock_guard<std::mutex> lock(listenSocketMutex_);
-            if (listenSocket_ == listenSock) {
-                listenSocket_ = INVALID_SOCKET;
-            }
-        }
+        CloseListenSocket(listenSock);
     }
 }

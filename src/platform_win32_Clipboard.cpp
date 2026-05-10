@@ -437,6 +437,7 @@ static void ClipboardThreadProc(std::promise<bool> initPromise, ClipboardCallbac
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
+	g_hwnd = nullptr;
 }
 
 bool StartClipboardNotification(ClipboardCallback callback) {
