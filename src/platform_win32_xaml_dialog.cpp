@@ -6,6 +6,7 @@
 #include "platform_win32_LogsPage.h"
 #include "platform_win32_PlaceholderPage.h"
 #include "platform_win32_SettingsPage.h"
+#include "platform_win32_AutoStart.h"
 
 #include <algorithm>
 #include <cmath>
@@ -483,6 +484,8 @@ private:
     }
 
     void ExitApplication() {
+        UnregisterClippAutoStart();
+
         if (owner_ && IsWindow(owner_)) {
             PostMessageW(owner_, WM_CLOSE, 0, 0);
             return;

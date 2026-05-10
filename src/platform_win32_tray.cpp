@@ -1,5 +1,6 @@
 #include <Windows.h>
 #include "Logger.h"
+#include "platform_win32_AutoStart.h"
 #include "platform_win32_xaml_dialog.h"
 #include "clipp-win32-darkmode32/DMSubclass.h"
 #pragma comment(lib, "darkmode32.lib")
@@ -78,6 +79,7 @@ LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                 DarkMode::DarkMessageBox(g_trayWindow, L"Clipp v1.0\nSecure cross-platform clipboard sync.", L"About", MB_ICONINFORMATION | MB_OK);
                 break;
             case ID_TRAY_EXIT:
+                UnregisterClippAutoStart();
                 PostMessageW(hwnd, WM_CLOSE, 0, 0);
                 break;
             }

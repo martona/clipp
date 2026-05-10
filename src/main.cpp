@@ -18,6 +18,7 @@
 #include "utils.h"
 
 #ifdef _WIN32
+    #include "platform_win32_AutoStart.h"
     #include <io.h>
     #include <fcntl.h>
     #include <Windows.h>
@@ -253,6 +254,8 @@ int main(int argc, char* argv[]) {
             case SingleInstanceResult::ExitFailure:
                 return 1;
         }
+
+        RegisterClippAutoStart();
 
         WSADATA wsaData;
         if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {

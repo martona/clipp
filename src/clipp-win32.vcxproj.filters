@@ -33,6 +33,9 @@
     <ClCompile Include="platform_win32_Clipboard.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="platform_win32_AutoStart.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="Logger.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -111,6 +114,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="platform.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="platform_win32_AutoStart.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="platform_win32_xaml_dialog.h">
