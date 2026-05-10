@@ -89,7 +89,7 @@ public:
 
 			sockaddr_in fromAddr{};
 			socklen_t fromLen = sizeof(fromAddr);
-			const int received = recvfrom(socket_, buffer.data(), static_cast<int>(buffer.size()), 0,
+			const auto received = recvfrom(socket_, buffer.data(), static_cast<int>(buffer.size()), 0,
 				reinterpret_cast<sockaddr*>(&fromAddr), &fromLen);
 			if (received <= 0)
 				break;
@@ -224,7 +224,7 @@ static std::string SocketPeerIp(SOCKET socket) {
 }
 
 static bool RecvAll(const SocketIoContext& io, char* buffer, int length) {
-	long total = 0;
+	int total = 0;
 	while (total < length) {
 		if (io.stopRequested.load())
 			return false;
@@ -234,9 +234,10 @@ static bool RecvAll(const SocketIoContext& io, char* buffer, int length) {
 		if (waitResult == SocketWaitResult::Woken)
 			continue;
 
-		const int received = recv(io.socket, buffer + total, (int)(length - total), 0);
+		const int remaining = length - total;
+		const auto received = recv(io.socket, buffer + total, remaining, 0);
 		if (received > 0) {
-			total += received;
+			total += static_cast<int>(received);
 			continue;
 		}
 		if (received == 0) {
@@ -252,7 +253,7 @@ static bool RecvAll(const SocketIoContext& io, char* buffer, int length) {
 }
 
 static bool SendAll(const SocketIoContext& io, const char* buffer, int length) {
-	long total = 0;
+	int total = 0;
 	while (total < length) {
 		if (io.stopRequested.load())
 			return false;
@@ -262,10 +263,10 @@ static bool SendAll(const SocketIoContext& io, const char* buffer, int length) {
 		if (waitResult == SocketWaitResult::Woken)
 			continue;
 
-		const int chunkLength = (std::min)(length - static_cast<int>(total), 64 * 1024);
-		const int sent = send(io.socket, buffer + total, chunkLength, 0);
+		const int chunkLength = (std::min)(length - total, 64 * 1024);
+		const auto sent = send(io.socket, buffer + total, chunkLength, 0);
 		if (sent > 0) {
-			total += sent;
+			total += static_cast<int>(sent);
 			continue;
 		}
 		if (sent == 0) {

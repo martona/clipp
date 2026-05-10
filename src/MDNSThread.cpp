@@ -172,9 +172,9 @@ static bool SendDiscoveryPacket(SOCKET sock, const sockaddr_in& targetAddr, cons
     if (!EncryptPacket(pkt, encryptedPacket))
         return false;
 
-    size_t sent = sendto(sock, reinterpret_cast<const char*>(&encryptedPacket), sizeof(encryptedPacket), 0,
+    const auto sent = sendto(sock, reinterpret_cast<const char*>(&encryptedPacket), sizeof(encryptedPacket), 0,
         reinterpret_cast<const sockaddr*>(&targetAddr), sizeof(targetAddr));
-    return sent == sizeof(encryptedPacket);
+    return sent >= 0 && static_cast<size_t>(sent) == sizeof(encryptedPacket);
 }
 
 static void WakeMDNSThread() {
@@ -292,7 +292,7 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
         if (ready > 0 && FD_ISSET(sock, &readfds)) {
             sockaddr_in fromAddr{};
             socklen_t fromLen = sizeof(fromAddr);
-            const int bytesRead = recvfrom(sock, recvBuffer.data(), static_cast<int>(recvBuffer.size()), 0,
+            const auto bytesRead = recvfrom(sock, recvBuffer.data(), static_cast<int>(recvBuffer.size()), 0,
                 reinterpret_cast<sockaddr*>(&fromAddr), &fromLen);
             if (bytesRead <= 0)
                 continue;
@@ -301,7 +301,7 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
                 continue;
 
             mdns_packet decryptedPacket;
-            if (!DecryptPacket(recvBuffer.data(), bytesRead, decryptedPacket))
+            if (!DecryptPacket(recvBuffer.data(), static_cast<size_t>(bytesRead), decryptedPacket))
                 continue;
 
             std::string discoveredHost, verb, discoveredQueryID, discoveredNonce;

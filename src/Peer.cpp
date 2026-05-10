@@ -418,8 +418,8 @@ void Peer::ThreadProcSend() {
 			if (timeoutDuration > std::chrono::steady_clock::duration::zero()) {
 				const auto timeoutMs = std::chrono::duration_cast<std::chrono::milliseconds>(timeoutDuration);
 				timeout.tv_sec = static_cast<long>(timeoutMs.count() / 1000);
-				timeout.tv_usec = static_cast<long>((timeoutMs.count() % 1000) * 1000);
-			}
+					timeout.tv_usec = static_cast<decltype(timeout.tv_usec)>((timeoutMs.count() % 1000) * 1000);
+				}
 
 			const SOCKET maxSock = (std::max)(socket, wakeEvent_.Socket());
 			const int selected = select(static_cast<int>(maxSock) + 1, &readSet, nullptr, nullptr, &timeout);

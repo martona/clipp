@@ -5,7 +5,8 @@ if (APPLE AND (NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET OR CMAKE_OSX_DEPLOYMENT_T
 endif()
 
 if (APPLE)
-    set(VCPKG_OSX_DEPLOYMENT_TARGET "${CMAKE_OSX_DEPLOYMENT_TARGET}" CACHE STRING "Minimum macOS deployment version for vcpkg ports" FORCE)
+    set(VCPKG_OVERLAY_TRIPLETS "${CMAKE_CURRENT_SOURCE_DIR}/src/vcpkg-triplets" CACHE STRING "vcpkg overlay triplet directory" FORCE)
+    set(VCPKG_TARGET_TRIPLET "arm64-osx-macos14" CACHE STRING "vcpkg target triplet" FORCE)
     set(CLIPP_MACOS_DEVELOPMENT_TEAM "2262A4CP8N" CACHE STRING "Apple development team ID for signing")
     set(CLIPP_MACOS_CODE_SIGN_IDENTITY "Apple Development" CACHE STRING "macOS code signing identity")
 endif()
