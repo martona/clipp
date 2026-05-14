@@ -36,6 +36,7 @@ public:
     bool getEncryptedNetworkKey(std::vector<unsigned char>& value) const;
     bool ensureHostID(HostId& value);
     bool getHostID(HostId& value) const;
+    bool resetHostID(HostId& value);
 
 private:
     bool LoadCache();

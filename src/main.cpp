@@ -5,6 +5,7 @@
 #include <iostream>
 #include <sodium.h>
 #include <string>
+#include <string_view>
 
 #include "platform.h"
 
@@ -209,53 +210,112 @@ void PrintNetworkKeyHash(const std::array<unsigned char, KeyManager::NetworkKeyS
     g_logger.log(__FUNCTION__, Logger::Level::Info, L"Network Key hash: %ls", g_keyManager.GetNetworkKeyHash(&networkKey).c_str());
 }
 
+bool InitializeSodium() {
+    if (sodium_init() < 0) {
+        g_logger.log(__FUNCTION__, Logger::Level::Error, "Fatal: libsodium failed to initialize!");
+        return false;
+    }
+    g_logger.log(__FUNCTION__, Logger::Level::Debug, "libsodium initialized successfully.");
+    return true;
+}
+
+int RunSetKeyCommand() {
+    std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
+    std::string keyInput = ReadHiddenLine("Enter a password to derive network key from: ");
+    if (keyInput.empty()) {
+        g_logger.log(__FUNCTION__, Logger::Level::Error, "No input provided.");
+        return 1;
+    }
+    std::string netNameAndPassword = g_settings.networkName();
+    netNameAndPassword += "|";
+    netNameAndPassword += keyInput;
+    bool keyDerived = g_keyManager.DeriveNetworkKey(netNameAndPassword, networkKey);
+    sodium_memzero(keyInput.data(), keyInput.capacity());
+    sodium_memzero(netNameAndPassword.data(), netNameAndPassword.capacity());
+    if (!keyDerived) {
+        g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to derive network key from password.");
+        return 1;
+    }
+
+    PrintNetworkKeyHash(networkKey);
+
+    std::string errorMessage;
+    if (!g_keyManager.SetNetworkKey(networkKey, &errorMessage)) {
+        g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to store network key: %s", errorMessage.c_str());
+        return 1;
+    }
+
+    g_logger.log(__FUNCTION__, Logger::Level::Info, "Network key saved successfully.");
+    return 0;
+}
+
+int RunSetNameCommand() {
+    std::string input = ReadLine("Enter network name: ");
+    if (input.empty()) {
+        g_logger.log(__FUNCTION__, Logger::Level::Error, "No input provided.");
+        return 1;
+    }
+
+    if (!g_settings.set_networkName(input)) {
+        g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to store network name.");
+        return 1;
+    }
+
+    g_logger.log(__FUNCTION__, Logger::Level::Info, "Network name saved successfully.");
+    return 0;
+}
+
+int RunResetHostIDCommand() {
+    HostId hostID;
+    if (!g_settings.resetHostID(hostID)) {
+        g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to reset host ID.");
+        return 1;
+    }
+
+    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Host ID reset successfully: %ls", hostID.ToHexWString().c_str());
+    return 0;
+}
+
+namespace {
+    struct CommandLineCommand {
+        std::string_view name;
+        int (*handler)();
+    };
+
+    constexpr CommandLineCommand kCommandLineCommands[] = {
+        {"setkey", RunSetKeyCommand},
+        {"setname", RunSetNameCommand},
+        {"resethostid", RunResetHostIDCommand},
+    };
+}
+
+static bool TryRunCommandLineCommand(int argc, char* argv[], int& exitCode) {
+    if (argc <= 1 || argv[1] == nullptr) {
+        return false;
+    }
+
+    const std::string_view commandName(argv[1]);
+    for (const CommandLineCommand& command : kCommandLineCommands) {
+        if (commandName == command.name) {
+            exitCode = command.handler();
+            return true;
+        }
+    }
+
+    return false;
+}
+
 int main(int argc, char* argv[]) {
 	
     InitializeConsoleOutput();
 
-    if (argc > 1 && std::string(argv[1]) == "setkey") {
-        std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
-        std::string keyInput = ReadHiddenLine("Enter a password to derive network key from: ");
-		if (keyInput.empty()) {
-            g_logger.log(__FUNCTION__, Logger::Level::Error, "No input provided.");
-            return 1;
-        }
-        std::string netNameAndPassword = g_settings.networkName();
-        netNameAndPassword += "|";
-        netNameAndPassword += keyInput;
-		bool keyDerived = g_keyManager.DeriveNetworkKey(netNameAndPassword, networkKey);
-        sodium_memzero(keyInput.data(), keyInput.capacity());
-        sodium_memzero(netNameAndPassword.data(), netNameAndPassword.capacity());
-        if (!keyDerived) {
-            g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to derive network key from password.");
-            return 1;
-		}
-
-		PrintNetworkKeyHash(networkKey);
-
-        std::string errorMessage;
-        if (!g_keyManager.SetNetworkKey(networkKey, &errorMessage)) {
-            g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to store network key: %s", errorMessage.c_str());
-            return 1;
-        }
-
-        g_logger.log(__FUNCTION__, Logger::Level::Info, "Network key saved successfully.");
-        return 0;
+    if (!InitializeSodium()) {
+        return 1;
     }
-    if (argc > 1 && std::string(argv[1]) == "setname") {
-        std::string input = ReadLine("Enter network name: ");
-        if (input.empty()) {
-            g_logger.log(__FUNCTION__, Logger::Level::Error, "No input provided.");
-            return 1;
-        }
 
-        if (!g_settings.set_networkName(input)) {
-            g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to store network name.");
-            return 1;
-        }
-
-        g_logger.log(__FUNCTION__, Logger::Level::Info, "Network name saved successfully.");
-        return 0;
+    int commandExitCode = 0;
+    if (TryRunCommandLineCommand(argc, argv, commandExitCode)) {
+        return commandExitCode;
     }
 
     g_logger.log(__FUNCTION__, Logger::Level::Info, L"==================================================================");
@@ -292,11 +352,9 @@ int main(int argc, char* argv[]) {
     #endif
 
     // libsodium requires initialization before calling any other functions
-    if (sodium_init() < 0) {
-        g_logger.log(__FUNCTION__, Logger::Level::Error, "Fatal: libsodium failed to initialize!");
+    if (!InitializeSodium()) {
         return exitAfterStartupFailure(1);
     }
-    g_logger.log(__FUNCTION__, Logger::Level::Debug, "libsodium initialized successfully.");
 
     HostId hostID;
     if (!g_settings.ensureHostID(hostID)) {

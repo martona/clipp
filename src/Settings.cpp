@@ -12,6 +12,10 @@ namespace {
     constexpr wchar_t kNetworkNameName[] = L"NetworkName";
     constexpr wchar_t kEncryptedNetworkKeyName[] = L"EncryptedNetworkKey";
     constexpr wchar_t kHostIDName[] = L"HostID";
+
+    void GenerateHostID(HostId& value) {
+        randombytes_buf(value.data().data(), value.data().size());
+    }
 }
 
 bool Settings::IsValidPort(int value) {
@@ -147,8 +151,7 @@ bool Settings::ensureHostID(HostId& value) {
         return true;
     }
 
-    randombytes_buf(value.data().data(), value.data().size());
-    return WriteBinaryValue(kHostIDName, value.data().data(), value.data().size());
+    return resetHostID(value);
 }
 
 bool Settings::getHostID(HostId& value) const {
@@ -158,6 +161,11 @@ bool Settings::getHostID(HostId& value) const {
     }
 
     return value.AssignFromVector(hostID);
+}
+
+bool Settings::resetHostID(HostId& value) {
+    GenerateHostID(value);
+    return WriteBinaryValue(kHostIDName, value.data().data(), value.data().size());
 }
 
 bool Settings::LoadCache() {
