@@ -11,6 +11,7 @@
 
 namespace {
     constexpr uint32_t kMaxCiphertextMessageBytes = 64u * 1024u * 1024u; // 64 MiB
+    constexpr char kHandshakeDoneTag[] = "DONE";
 
     using NetworkKey = std::array<unsigned char, crypto_secretbox_KEYBYTES>;
     using PublicKey = std::array<unsigned char, crypto_kx_PUBLICKEYBYTES>;
@@ -189,6 +190,10 @@ namespace {
         return ciphertextSize > crypto_secretstream_xchacha20poly1305_ABYTES
             && ciphertextSize <= kMaxCiphertextMessageBytes;
     }
+
+    bool TagEquals(const char* lhs, const char* rhs) {
+        return std::memcmp(lhs, rhs, 4) == 0;
+    }
 }
 
 CryptoChannel::CryptoChannel() = default;
@@ -233,7 +238,8 @@ bool CryptoChannel::ClientHandshake(
     }
 
     return SendStreamHeader(io, txState_, sessionKeys.tx)
-        && ReceiveStreamHeader(io, rxState_, sessionKeys.rx);
+        && ReceiveStreamHeader(io, rxState_, sessionKeys.rx)
+        && SendHandshakeDone(io);
 }
 
 bool CryptoChannel::ServerHandshake(
@@ -275,7 +281,17 @@ bool CryptoChannel::ServerHandshake(
     }
 
     return ReceiveStreamHeader(io, rxState_, sessionKeys.rx)
-        && SendStreamHeader(io, txState_, sessionKeys.tx);
+        && SendStreamHeader(io, txState_, sessionKeys.tx)
+        && ReceiveHandshakeDone(io);
+}
+
+bool CryptoChannel::SendHandshakeDone(const SocketIoContext& io) {
+    return SendTaggedMessage(io, kHandshakeDoneTag);
+}
+
+bool CryptoChannel::ReceiveHandshakeDone(const SocketIoContext& io) {
+    char tag[4] = {};
+    return RecvTaggedMessage(io, tag) && TagEquals(tag, kHandshakeDoneTag);
 }
 
 bool CryptoChannel::SendMessage(const SocketIoContext& io, const unsigned char* data, uint32_t dataSize) {

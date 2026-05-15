@@ -38,6 +38,8 @@ public:
 
 private:
     bool LoadNetworkKey(std::array<unsigned char, crypto_secretbox_KEYBYTES>& networkKey);
+    bool SendHandshakeDone(const SocketIoContext& io);
+    bool ReceiveHandshakeDone(const SocketIoContext& io);
 
     crypto_secretstream_xchacha20poly1305_state txState_{};
     crypto_secretstream_xchacha20poly1305_state rxState_{};
