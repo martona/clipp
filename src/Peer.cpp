@@ -68,6 +68,12 @@ static bool GetPendingConnectError(SOCKET socket, int& connectError) {
 	return getsockopt(socket, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&connectError), &optionLength) == 0;
 }
 
+static std::chrono::milliseconds NextPingInterval() {
+	constexpr auto baseInterval = std::chrono::seconds(30);
+	const auto jitter = std::chrono::milliseconds(randombytes_uniform(5001));
+	return std::chrono::duration_cast<std::chrono::milliseconds>(baseInterval) + jitter;
+}
+
 Peer::Peer(const wchar_t* hostName, const HostId* hostID, const wchar_t* ip, u_short port, VerifiedCallback verifiedCallback, TrafficCallback trafficCallback)
 	: hostName_(hostName), ip_(ip), port_(port),
 	hostID_(*hostID),
@@ -401,7 +407,7 @@ void Peer::ThreadProcSend() {
 				}
 				ReportTraffic(4, 0);
 				log(__FUNCTION__, Logger::Level::Debug, L"PING?");
-				nextPingTime = now + std::chrono::seconds(30);
+				nextPingTime = now + NextPingInterval();
 			}
 
 			if (!DrainOutboundMessages(channel, io)) {
