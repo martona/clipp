@@ -206,8 +206,8 @@ void OnClipboardNotification(PlatformWindowHandle hwnd) {
 	g_logger.log(__FUNCTION__, Logger::Level::Debug, "Broadcast clipboard data to peers (format ID: %u, encoded size: %zu bytes, decoded size: %zu bytes)", clipboardData.formatId, clipboardData.rawData.size(), decodedDataSize);
 }
 
-void PrintNetworkKeyHash(const std::array<unsigned char, KeyManager::NetworkKeySize>& networkKey) {
-    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Network Key hash: %ls", g_keyManager.GetNetworkKeyHash(&networkKey).c_str());
+void PrintNetworkFingerprint(const std::array<unsigned char, KeyManager::NetworkKeySize>& networkKey) {
+    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Network fingerprint: %ls", g_keyManager.GetNetworkFingerprintHash(&networkKey).c_str());
 }
 
 bool InitializeSodium() {
@@ -237,7 +237,7 @@ int RunSetKeyCommand() {
         return 1;
     }
 
-    PrintNetworkKeyHash(networkKey);
+    PrintNetworkFingerprint(networkKey);
 
     std::string errorMessage;
     if (!g_keyManager.SetNetworkKey(networkKey, &errorMessage)) {
@@ -362,10 +362,10 @@ int main(int argc, char* argv[]) {
         return exitAfterStartupFailure(1);
     }
 
-    std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
     std::string keyErrorMessage;
-    if (g_keyManager.GetNetworkKey(networkKey, &keyErrorMessage)) {
-        PrintNetworkKeyHash(networkKey);
+    const std::wstring networkFingerprint = g_keyManager.GetNetworkFingerprintHash(nullptr, &keyErrorMessage);
+    if (!networkFingerprint.empty()) {
+        g_logger.log(__FUNCTION__, Logger::Level::Info, L"Network fingerprint: %ls", networkFingerprint.c_str());
     } else {
         g_logger.log(__FUNCTION__, Logger::Level::Warning, "No network key configured yet: %s", keyErrorMessage.c_str());
     }

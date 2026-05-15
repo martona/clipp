@@ -37,7 +37,6 @@ public:
     bool RecvMessage(const SocketIoContext& io, std::vector<unsigned char>& outData);
 
 private:
-    bool LoadNetworkKey(std::array<unsigned char, crypto_secretbox_KEYBYTES>& networkKey);
     bool SendHandshakeDone(const SocketIoContext& io);
     bool ReceiveHandshakeDone(const SocketIoContext& io);
 

@@ -361,7 +361,7 @@ void ClippPage::SetupPasswordFields() {
 
     if (g_keyManager.HaveNetworkKey()) {
         passwordField_.Password(kMaskedPassword);
-        passwordHashText_.Text(g_keyManager.GetNetworkKeyHash());
+        passwordHashText_.Text(g_keyManager.GetNetworkFingerprintHash());
         passwordStatusPanel_.Visibility(Visibility::Visible);
         passwordInfoPanel_.Visibility(Visibility::Collapsed);
     } else {
@@ -376,7 +376,7 @@ void ClippPage::NewPasswordHashReceived() {
     using namespace winrt::Windows::UI::Xaml;
 
     if (g_keyManager.HaveNetworkKey()) {
-        passwordHashText_.Text(g_keyManager.GetNetworkKeyHash());
+        passwordHashText_.Text(g_keyManager.GetNetworkFingerprintHash());
         passwordStatusPanel_.Visibility(Visibility::Visible);
         passwordInfoPanel_.Visibility(Visibility::Collapsed);
     }

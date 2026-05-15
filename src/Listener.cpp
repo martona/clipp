@@ -15,9 +15,9 @@ extern PeerManager g_peerManager;
 extern KeyManager g_keyManager;
 
 static bool HasNetworkKey() {
-    std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
+    std::array<unsigned char, KeyManager::NetworkKeySize> handshakeKey{};
     std::string errorMessage;
-    return g_keyManager.GetNetworkKey(networkKey, &errorMessage);
+    return g_keyManager.GetKey(KeyManager::KeyRole::TcpHandshakeClientToServer, handshakeKey, &errorMessage);
 }
 
 Listener::Listener(ClipboardReceivedCallback clipboardReceivedCallback) { 

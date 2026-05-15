@@ -103,7 +103,7 @@ private:
 		if (messageId == 0 || hwnd == nullptr) return;
 		KeyDerivationResult result{};
         result.derivedKey = std::move(key);
-        result.derivedKeyHash = std::move(g_keyManager.GetNetworkKeyHash(&key));
+        result.derivedKeyHash = std::move(g_keyManager.GetNetworkFingerprintHash(&key));
 		SendMessage(hwnd, messageId, reinterpret_cast<WPARAM>(&result), 0);
     }
 

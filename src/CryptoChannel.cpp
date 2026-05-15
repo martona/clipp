@@ -198,11 +198,6 @@ namespace {
 
 CryptoChannel::CryptoChannel() = default;
 
-bool CryptoChannel::LoadNetworkKey(std::array<unsigned char, crypto_secretbox_KEYBYTES>& networkKey) {
-    std::string errorMessage;
-    return g_keyManager.GetNetworkKey(networkKey, &errorMessage);
-}
-
 bool CryptoChannel::ClientHandshake(
     const SocketIoContext& io,
     const HostId& localHostId,
@@ -210,8 +205,11 @@ bool CryptoChannel::ClientHandshake(
     HostId& remoteHostId,
     std::string& remoteHostNameUtf8)
 {
-    NetworkKey networkKey{};
-    if (!LoadNetworkKey(networkKey)) {
+    NetworkKey clientToServerKey{};
+    NetworkKey serverToClientKey{};
+    std::string keyErrorMessage;
+    if (!g_keyManager.GetKey(KeyManager::KeyRole::TcpHandshakeClientToServer, clientToServerKey, &keyErrorMessage)
+        || !g_keyManager.GetKey(KeyManager::KeyRole::TcpHandshakeServerToClient, serverToClientKey, &keyErrorMessage)) {
         return false;
     }
 
@@ -220,12 +218,12 @@ bool CryptoChannel::ClientHandshake(
 
     HandshakePlaintext localPlaintext{};
     FillHandshakePlaintext(localPlaintext, clientKeys.publicKey, localHostId, localHostNameUtf8.c_str());
-    if (!SendHandshakeFrame(io, localPlaintext, networkKey)) {
+    if (!SendHandshakeFrame(io, localPlaintext, clientToServerKey)) {
         return false;
     }
 
     HandshakePlaintext remotePlaintext{};
-    if (!ReceiveHandshakeFrame(io, networkKey, remotePlaintext)) {
+    if (!ReceiveHandshakeFrame(io, serverToClientKey, remotePlaintext)) {
         return false;
     }
 
@@ -247,13 +245,16 @@ bool CryptoChannel::ServerHandshake(
     HostId& remoteHostId,
     std::string& remoteHostNameUtf8)
 {
-    NetworkKey networkKey{};
-    if (!LoadNetworkKey(networkKey)) {
+    NetworkKey clientToServerKey{};
+    NetworkKey serverToClientKey{};
+    std::string keyErrorMessage;
+    if (!g_keyManager.GetKey(KeyManager::KeyRole::TcpHandshakeClientToServer, clientToServerKey, &keyErrorMessage)
+        || !g_keyManager.GetKey(KeyManager::KeyRole::TcpHandshakeServerToClient, serverToClientKey, &keyErrorMessage)) {
         return false;
     }
 
     HandshakePlaintext remotePlaintext{};
-    if (!ReceiveHandshakeFrame(io, networkKey, remotePlaintext)) {
+    if (!ReceiveHandshakeFrame(io, clientToServerKey, remotePlaintext)) {
         return false;
     }
 
@@ -271,7 +272,7 @@ bool CryptoChannel::ServerHandshake(
 
     HandshakePlaintext localPlaintext{};
     FillHandshakePlaintext(localPlaintext, serverKeys.publicKey, localHostId, localHostNameUtf8.data());
-    if (!SendHandshakeFrame(io, localPlaintext, networkKey)) {
+    if (!SendHandshakeFrame(io, localPlaintext, serverToClientKey)) {
         return false;
     }
 

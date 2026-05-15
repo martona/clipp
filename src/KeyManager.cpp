@@ -179,6 +179,80 @@ static std::vector<unsigned char> HexStringToBytes(const std::string& hex) {
     return bytes;
 }
 
+namespace {
+    static_assert(KeyManager::NetworkKeySize == crypto_kdf_KEYBYTES);
+
+    constexpr std::array<KeyManager::KeyRole, KeyManager::KeyRoleCount> kKeyRoles = {
+        KeyManager::KeyRole::TcpHandshakeClientToServer,
+        KeyManager::KeyRole::TcpHandshakeServerToClient,
+        KeyManager::KeyRole::MDNS,
+        KeyManager::KeyRole::Fingerprint,
+    };
+
+    constexpr std::array<std::array<char, crypto_kdf_CONTEXTBYTES>, KeyManager::KeyRoleCount> kKeyRoleContexts = {{
+        {'C', 'L', 'P', 'C', '2', 'S', '0', '1'},
+        {'C', 'L', 'P', 'S', '2', 'C', '0', '1'},
+        {'C', 'L', 'P', 'M', 'D', 'N', 'S', '1'},
+        {'C', 'L', 'P', 'F', 'N', 'G', 'R', '1'},
+    }};
+
+    size_t KeyRoleIndex(KeyManager::KeyRole role) {
+        switch (role) {
+        case KeyManager::KeyRole::TcpHandshakeClientToServer:
+            return 0;
+        case KeyManager::KeyRole::TcpHandshakeServerToClient:
+            return 1;
+        case KeyManager::KeyRole::MDNS:
+            return 2;
+        case KeyManager::KeyRole::Fingerprint:
+            return 3;
+        default:
+            return KeyManager::KeyRoleCount;
+        }
+    }
+
+    bool DeriveKeyFromRoot(
+        const KeyManager::NetworkKey& rootNetworkKey,
+        KeyManager::KeyRole role,
+        KeyManager::NetworkKey& key,
+        std::string* errorMessage)
+    {
+        // Stable libsodium KDF subkey IDs; changing KeyRole values breaks network compatibility.
+        if (crypto_kdf_derive_from_key(
+                key.data(),
+                key.size(),
+                static_cast<uint64_t>(role),
+                kKeyRoleContexts[KeyRoleIndex(role)].data(),
+                rootNetworkKey.data()) != 0) {
+            if (errorMessage != nullptr) {
+                *errorMessage = "Failed to derive network subkey";
+            }
+            return false;
+        }
+
+        return true;
+    }
+
+    bool CalculateKeyCache(
+        const KeyManager::NetworkKey& rootNetworkKey,
+        std::array<KeyManager::NetworkKey, KeyManager::KeyRoleCount>& keyCache,
+        std::string* errorMessage)
+    {
+        for (KeyManager::KeyRole role : kKeyRoles) {
+            if (!DeriveKeyFromRoot(rootNetworkKey, role, keyCache[KeyRoleIndex(role)], errorMessage)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    void ClearKeyCache(std::array<KeyManager::NetworkKey, KeyManager::KeyRoleCount>& keyCache) {
+        for (KeyManager::NetworkKey& key : keyCache) {
+            sodium_memzero(key.data(), key.size());
+        }
+    }
+}
 
 KeyManager g_keyManager(g_settings);
 
@@ -189,7 +263,7 @@ KeyManager::KeyManager(Settings& settings)
 void KeyManager::ClearNetworkKey() {
     std::lock_guard<std::mutex> lock(mutex_);
     cacheValid_ = false;
-    cachedNetworkKey_.fill(0);
+    ClearKeyCache(cachedKeys_);
 #ifndef __APPLE__
     settings_.setEncryptedNetworkKey(std::vector<unsigned char>{});
 #else
@@ -197,7 +271,7 @@ void KeyManager::ClearNetworkKey() {
 #endif
 }
 
-bool KeyManager::SetNetworkKey(const std::array<unsigned char, NetworkKeySize>& networkKey, std::string* errorMessage) {
+bool KeyManager::SetNetworkKey(const NetworkKey& networkKey, std::string* errorMessage) {
 #ifdef _WIN32
     DATA_BLOB plainData{};
     plainData.pbData = const_cast<BYTE*>(networkKey.data());
@@ -290,47 +364,103 @@ bool KeyManager::SetNetworkKey(const std::array<unsigned char, NetworkKeySize>& 
     std::vector<unsigned char> encryptedBuffer;
 #endif
 
-    std::lock_guard<std::mutex> lock(mutex_);
-
 #ifndef __APPLE__
-    if (!settings_.setEncryptedNetworkKey(encryptedBuffer)) {
-        if (errorMessage != nullptr) {
-            *errorMessage = "Failed to write encrypted key to settings";
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!settings_.setEncryptedNetworkKey(encryptedBuffer)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = "Failed to write encrypted key to settings";
+            }
+            return false;
         }
-        return false;
     }
 #else
     (void)encryptedBuffer;
 #endif
 
-    
-    cachedNetworkKey_ = networkKey;
-    cacheValid_ = true;
-    return true;
+    return CacheDerivedKeysFromRoot(networkKey, errorMessage);
 }
 
 bool KeyManager::HaveNetworkKey() {
-    std::array<unsigned char, NetworkKeySize> networkKey{};
-    bool haveKey = GetNetworkKey(networkKey);
-    sodium_memzero(networkKey.data(), networkKey.size());
+    NetworkKey fingerprintKey{};
+    bool haveKey = GetKey(KeyRole::Fingerprint, fingerprintKey);
+    sodium_memzero(fingerprintKey.data(), fingerprintKey.size());
     return haveKey;
 }
 
-bool KeyManager::GetNetworkKey(std::array<unsigned char, NetworkKeySize>& networkKey, std::string* errorMessage) {
-    std::lock_guard<std::mutex> lock(mutex_);
-
-    if (cacheValid_) {
-        networkKey = cachedNetworkKey_;
-        return true;
+bool KeyManager::GetKey(KeyRole role, NetworkKey& key, std::string* errorMessage) {
+    const size_t keyIndex = KeyRoleIndex(role);
+    if (keyIndex >= KeyRoleCount) {
+        if (errorMessage != nullptr) {
+            *errorMessage = "Unknown network key role";
+        }
+        return false;
     }
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (cacheValid_) {
+            key = cachedKeys_[keyIndex];
+            return true;
+        }
+    }
+
+    if (!LoadRootNetworkKey(errorMessage)) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!cacheValid_) {
+        if (errorMessage != nullptr) {
+            *errorMessage = "Network key cache was not populated";
+        }
+        return false;
+    }
+
+    key = cachedKeys_[keyIndex];
+    return true;
+}
+
+bool KeyManager::CacheDerivedKeysFromRoot(const NetworkKey& rootNetworkKey, std::string* errorMessage) {
+    KeyCache derivedKeys{};
+    if (!CalculateKeyCache(rootNetworkKey, derivedKeys, errorMessage)) {
+        ClearKeyCache(derivedKeys);
+        std::lock_guard<std::mutex> lock(mutex_);
+        cacheValid_ = false;
+        ClearKeyCache(cachedKeys_);
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ClearKeyCache(cachedKeys_);
+        cachedKeys_ = derivedKeys;
+        cacheValid_ = true;
+    }
+    ClearKeyCache(derivedKeys);
+    return true;
+}
+
+bool KeyManager::LoadRootNetworkKey(std::string* errorMessage) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (cacheValid_) {
+            return true;
+        }
+    }
+
+    NetworkKey rootNetworkKey{};
 
 #ifdef _WIN32
     std::vector<unsigned char> encryptedBuffer;
-    if (!settings_.getEncryptedNetworkKey(encryptedBuffer)) {
-        if (errorMessage != nullptr) {
-            *errorMessage = "Failed to read encrypted key from settings";
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!settings_.getEncryptedNetworkKey(encryptedBuffer)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = "Failed to read encrypted key from settings";
+            }
+            return false;
         }
-        return false;
     }
 
     DATA_BLOB encryptedData{};
@@ -360,7 +490,7 @@ bool KeyManager::GetNetworkKey(std::array<unsigned char, NetworkKeySize>& networ
         return false;
     }
 
-    std::copy(plainData.pbData, plainData.pbData + NetworkKeySize, networkKey.begin());
+    std::copy(plainData.pbData, plainData.pbData + NetworkKeySize, rootNetworkKey.begin());
     LocalFree(plainData.pbData);
 #else
     CFTypeRef outData = nullptr;
@@ -382,15 +512,16 @@ bool KeyManager::GetNetworkKey(std::array<unsigned char, NetworkKeySize>& networ
         return false;
     }
 
-    std::copy(CFDataGetBytePtr(plainData), CFDataGetBytePtr(plainData) + NetworkKeySize, networkKey.begin());
+    std::copy(CFDataGetBytePtr(plainData), CFDataGetBytePtr(plainData) + NetworkKeySize, rootNetworkKey.begin());
     CFRelease(outData);
 #endif
-    cachedNetworkKey_ = networkKey;
-    cacheValid_ = true;
-    return true;
+
+    const bool cached = CacheDerivedKeysFromRoot(rootNetworkKey, errorMessage);
+    sodium_memzero(rootNetworkKey.data(), rootNetworkKey.size());
+    return cached;
 }
 
-bool KeyManager::DeriveNetworkKey(const std::string& password, std::array<unsigned char, 32>& outKey) {
+bool KeyManager::DeriveNetworkKey(const std::string& password, NetworkKey& outKey) {
     static const std::vector<unsigned char> staticSalt = HexStringToBytes("9ea1e55abc07c859fd900958d8b7efbe");
     CLIPP_ASSERT(staticSalt.size() == crypto_pwhash_SALTBYTES);
     if (crypto_pwhash(
@@ -421,18 +552,22 @@ static std::wstring FormatHash(const unsigned char* hash, size_t hashLen) {
     return text;
 }
 
-std::wstring KeyManager::GetNetworkKeyHash(const std::array<unsigned char, NetworkKeySize>* networkKey) {
-    std::array<unsigned char, NetworkKeySize> cachedNetworkKey{};
-    if (networkKey == nullptr) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (cacheValid_) {
-            cachedNetworkKey = cachedNetworkKey_;
-            networkKey = &cachedNetworkKey;
-        } else {
+std::wstring KeyManager::GetNetworkFingerprintHash(const NetworkKey* networkKey, std::string* errorMessage) {
+    NetworkKey fingerprintKey{};
+    if (networkKey != nullptr) {
+        KeyCache keyCache{};
+        if (!CalculateKeyCache(*networkKey, keyCache, errorMessage)) {
+            ClearKeyCache(keyCache);
             return L"";
         }
+        fingerprintKey = keyCache[KeyRoleIndex(KeyRole::Fingerprint)];
+        ClearKeyCache(keyCache);
+    } else if (!GetKey(KeyRole::Fingerprint, fingerprintKey, errorMessage)) {
+        return L"";
     }
+
     unsigned char keyHash[16];
-    crypto_generichash(keyHash, sizeof(keyHash), networkKey->data(), networkKey->size(), nullptr, 0);
+    crypto_generichash(keyHash, sizeof(keyHash), fingerprintKey.data(), fingerprintKey.size(), nullptr, 0);
+    sodium_memzero(fingerprintKey.data(), fingerprintKey.size());
     return FormatHash(keyHash, sizeof(keyHash));
 }

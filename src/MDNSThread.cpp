@@ -55,19 +55,16 @@ namespace {
     constexpr auto kBroadcastInterval = std::chrono::minutes(1);
 }
 
-static bool GetNetworkKey(std::array<unsigned char, KeyManager::NetworkKeySize>& networkKey) {
-    std::string errorMessage;
-    return g_keyManager.GetNetworkKey(networkKey, &errorMessage);
-}
-
 static bool HasNetworkKey() {
-    std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
-    return GetNetworkKey(networkKey);
+    std::array<unsigned char, KeyManager::NetworkKeySize> mdnsKey{};
+    std::string errorMessage;
+    return g_keyManager.GetKey(KeyManager::KeyRole::MDNS, mdnsKey, &errorMessage);
 }
 
 static bool EncryptPacket(const mdns_packet& packet, encrypted_mdns_packet& encryptedPacket) {
-    std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
-    if (!GetNetworkKey(networkKey))
+    std::array<unsigned char, KeyManager::NetworkKeySize> mdnsKey{};
+    std::string errorMessage;
+    if (!g_keyManager.GetKey(KeyManager::KeyRole::MDNS, mdnsKey, &errorMessage))
         return false;
 
     randombytes_buf(encryptedPacket.nonce, sizeof(encryptedPacket.nonce));
@@ -76,7 +73,7 @@ static bool EncryptPacket(const mdns_packet& packet, encrypted_mdns_packet& encr
         reinterpret_cast<const unsigned char*>(&packet),
         sizeof(packet),
         encryptedPacket.nonce,
-        networkKey.data()) == 0;
+        mdnsKey.data()) == 0;
 }
 
 static bool DecryptPacket(const char* packet, size_t packetLen, mdns_packet& decryptedPacket) {
@@ -84,8 +81,9 @@ static bool DecryptPacket(const char* packet, size_t packetLen, mdns_packet& dec
         return false;
 
     const encrypted_mdns_packet* encryptedPacket = reinterpret_cast<const encrypted_mdns_packet*>(packet);
-    std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
-    if (!GetNetworkKey(networkKey))
+    std::array<unsigned char, KeyManager::NetworkKeySize> mdnsKey{};
+    std::string errorMessage;
+    if (!g_keyManager.GetKey(KeyManager::KeyRole::MDNS, mdnsKey, &errorMessage))
         return false;
 
     return crypto_secretbox_open_easy(
@@ -93,7 +91,7 @@ static bool DecryptPacket(const char* packet, size_t packetLen, mdns_packet& dec
         encryptedPacket->ciphertext,
         sizeof(encryptedPacket->ciphertext),
         encryptedPacket->nonce,
-        networkKey.data()) == 0;
+        mdnsKey.data()) == 0;
 }
 
 static std::string GetLocalHostName() {
