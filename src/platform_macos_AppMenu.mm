@@ -3,19 +3,40 @@
 #ifdef __APPLE__
 
 #include "Logger.h"
+#include "platform_macos_TerminalLogView.h"
 
 #import <AppKit/AppKit.h>
 #import <ServiceManagement/ServiceManagement.h>
 #import <dispatch/dispatch.h>
 
 #include <atomic>
+#include <memory>
+#include <mutex>
 
 namespace {
 std::atomic_bool g_pendingOpenMainWindow{ false };
 }
 
 @class ClippStatusMenuController;
+@class ClippMainWindowController;
 static ClippStatusMenuController* g_statusMenuController = nil;
+static ClippMainWindowController* g_logReflectorTarget = nil;
+
+static void LogReflectorCallback(const std::wstring& line);
+
+@interface ClippSidebarButtonCell : NSButtonCell
+@end
+
+@implementation ClippSidebarButtonCell
+
+- (NSRect)titleRectForBounds:(NSRect)rect {
+    NSRect titleRect = [super titleRectForBounds:rect];
+    titleRect.origin.x += 9;
+    titleRect.size.width = (std::max)(static_cast<CGFloat>(0), titleRect.size.width - 12);
+    return titleRect;
+}
+
+@end
 
 static void SetMacOSDockIconVisible(BOOL visible) {
     NSApplicationActivationPolicy policy = visible
@@ -75,12 +96,19 @@ bool UnregisterClippAutoStart() {
     return true;
 }
 
-@interface ClippMainWindowController : NSWindowController <NSWindowDelegate>
+@interface ClippMainWindowController : NSWindowController <NSWindowDelegate> {
+@private
+    std::unique_ptr<MacOSTerminalLogView> terminalLogView_;
+    std::mutex terminalLogViewMutex_;
+    bool logReflectorRegistered_;
+}
 @property(nonatomic, strong) NSView* contentContainer;
 @property(nonatomic, strong) NSArray<NSButton*>* pageButtons;
 @property(nonatomic, strong) NSArray<NSView*>* pageViews;
 - (void)showAndActivate;
 - (BOOL)isWindowVisibleOrMiniaturized;
+- (void)reflectLogLine:(const std::wstring&)line;
+- (void)updateSidebarSelectionAppearance;
 @end
 
 @interface ClippStatusMenuController : NSObject <NSApplicationDelegate>
@@ -117,6 +145,7 @@ void RequestMacOSShowMainWindow() {
     self = [super initWithWindow:window];
     if (self) {
         window.delegate = self;
+        logReflectorRegistered_ = false;
         [self buildShell];
         [self selectPage:0];
     }
@@ -205,8 +234,7 @@ void RequestMacOSShowMainWindow() {
                                       body:@"Clipp status, discovered peers, and sync controls will live here."],
         [self makePlaceholderPageWithTitle:@"Settings"
                                       body:@"Network, startup, and clipboard behavior settings will live here."],
-        [self makePlaceholderPageWithTitle:@"Logs"
-                                      body:@"Runtime logs and diagnostic output will live here."],
+        [self makeLogsPage],
         [self makePlaceholderPageWithTitle:@"About"
                                       body:@"About Clipp details, version information, and credits will live here."],
     ];
@@ -215,12 +243,53 @@ void RequestMacOSShowMainWindow() {
 - (NSButton*)makeSidebarButtonWithTitle:(NSString*)title action:(SEL)action {
     NSButton* button = [NSButton buttonWithTitle:title target:self action:action];
     button.translatesAutoresizingMaskIntoConstraints = NO;
-    button.bezelStyle = NSBezelStyleTexturedRounded;
+    button.cell = [[ClippSidebarButtonCell alloc] initTextCell:title];
+    button.target = self;
+    button.action = action;
+    button.bezelStyle = NSBezelStyleRegularSquare;
+    button.bordered = NO;
     button.buttonType = NSButtonTypeToggle;
     button.alignment = NSTextAlignmentLeft;
     button.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
+    button.wantsLayer = YES;
+    button.layer.cornerRadius = 6;
+    button.layer.masksToBounds = YES;
     [button.widthAnchor constraintEqualToConstant:156].active = YES;
+    [button.heightAnchor constraintEqualToConstant:30].active = YES;
     return button;
+}
+
+- (NSAttributedString*)sidebarTitleForButton:(NSButton*)button selected:(BOOL)selected active:(BOOL)active {
+    NSMutableParagraphStyle* paragraph = [[NSMutableParagraphStyle alloc] init];
+    paragraph.alignment = NSTextAlignmentLeft;
+
+    NSColor* textColor = [NSColor labelColor];
+    if (selected && active) {
+        textColor = [NSColor selectedMenuItemTextColor];
+    }
+
+    return [[NSAttributedString alloc] initWithString:button.title
+                                          attributes:@{
+        NSFontAttributeName: [NSFont systemFontOfSize:13 weight:NSFontWeightMedium],
+        NSForegroundColorAttributeName: textColor,
+        NSParagraphStyleAttributeName: paragraph,
+    }];
+}
+
+- (void)updateSidebarSelectionAppearance {
+    const BOOL active = self.window.keyWindow;
+    for (NSButton* button in self.pageButtons) {
+        const BOOL selected = button.state == NSControlStateValueOn;
+        NSColor* fillColor = [NSColor clearColor];
+        if (selected) {
+            fillColor = active
+                ? [NSColor selectedContentBackgroundColor]
+                : [NSColor unemphasizedSelectedContentBackgroundColor];
+        }
+
+        button.layer.backgroundColor = fillColor.CGColor;
+        button.attributedTitle = [self sidebarTitleForButton:button selected:selected active:active];
+    }
 }
 
 - (NSButton*)makeActionButtonWithTitle:(NSString*)title action:(SEL)action {
@@ -268,6 +337,84 @@ void RequestMacOSShowMainWindow() {
     return page;
 }
 
+- (NSView*)makeLogsPage {
+    NSView* page = [[NSView alloc] initWithFrame:NSZeroRect];
+    page.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSTextField* heading = [NSTextField labelWithString:@"Logs"];
+    heading.translatesAutoresizingMaskIntoConstraints = NO;
+    heading.font = [NSFont systemFontOfSize:28 weight:NSFontWeightSemibold];
+    heading.textColor = [NSColor labelColor];
+
+    NSTextField* intro = [NSTextField wrappingLabelWithString:@"Live diagnostic output from Clipp."];
+    intro.translatesAutoresizingMaskIntoConstraints = NO;
+    intro.font = [NSFont systemFontOfSize:14];
+    intro.textColor = [NSColor secondaryLabelColor];
+
+    terminalLogView_ = std::make_unique<MacOSTerminalLogView>();
+    NSScrollView* logView = terminalLogView_->View();
+    logView.translatesAutoresizingMaskIntoConstraints = NO;
+
+    [page addSubview:heading];
+    [page addSubview:intro];
+    [page addSubview:logView];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [heading.leadingAnchor constraintEqualToAnchor:page.leadingAnchor constant:28],
+        [heading.trailingAnchor constraintEqualToAnchor:page.trailingAnchor constant:-28],
+        [heading.topAnchor constraintEqualToAnchor:page.topAnchor constant:28],
+
+        [intro.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
+        [intro.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
+        [intro.topAnchor constraintEqualToAnchor:heading.bottomAnchor constant:8],
+
+        [logView.leadingAnchor constraintEqualToAnchor:page.leadingAnchor constant:28],
+        [logView.trailingAnchor constraintEqualToAnchor:page.trailingAnchor constant:-28],
+        [logView.topAnchor constraintEqualToAnchor:intro.bottomAnchor constant:16],
+        [logView.bottomAnchor constraintEqualToAnchor:page.bottomAnchor constant:-28],
+    ]];
+
+    return page;
+}
+
+- (void)beginLogReflection {
+    if (logReflectorRegistered_) {
+        return;
+    }
+
+    g_logReflectorTarget = self;
+    const auto logHistory = g_logger.AddLogReflector(LogReflectorCallback);
+    {
+        std::lock_guard<std::mutex> lock(terminalLogViewMutex_);
+        if (terminalLogView_) {
+            terminalLogView_->SetAnsiLogText(logHistory);
+        }
+    }
+    logReflectorRegistered_ = true;
+}
+
+- (void)endLogReflection {
+    if (!logReflectorRegistered_) {
+        return;
+    }
+
+    g_logger.RemoveLogReflector(LogReflectorCallback);
+    if (g_logReflectorTarget == self) {
+        g_logReflectorTarget = nil;
+    }
+    logReflectorRegistered_ = false;
+}
+
+- (void)reflectLogLine:(const std::wstring&)line {
+    auto lineCopy = std::make_shared<std::wstring>(line);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        std::lock_guard<std::mutex> lock(terminalLogViewMutex_);
+        if (logReflectorRegistered_ && terminalLogView_) {
+            terminalLogView_->AppendAnsiLogText(*lineCopy);
+        }
+    });
+}
+
 - (void)selectPageFromButton:(id)sender {
     NSButton* button = static_cast<NSButton*>(sender);
     [self selectPage:button.tag];
@@ -281,6 +428,7 @@ void RequestMacOSShowMainWindow() {
     for (NSButton* button in self.pageButtons) {
         button.state = button.tag == pageIndex ? NSControlStateValueOn : NSControlStateValueOff;
     }
+    [self updateSidebarSelectionAppearance];
 
     for (NSView* subview in self.contentContainer.subviews) {
         [subview removeFromSuperview];
@@ -294,6 +442,12 @@ void RequestMacOSShowMainWindow() {
         [page.topAnchor constraintEqualToAnchor:self.contentContainer.topAnchor],
         [page.bottomAnchor constraintEqualToAnchor:self.contentContainer.bottomAnchor],
     ]];
+
+    if (pageIndex == 2) {
+        [self beginLogReflection];
+    } else {
+        [self endLogReflection];
+    }
 }
 
 - (void)showAndActivate {
@@ -305,6 +459,7 @@ void RequestMacOSShowMainWindow() {
     [self.window center];
     [self.window makeKeyAndOrderFront:nil];
     [[NSApplication sharedApplication] activateIgnoringOtherApps:YES];
+    [self.window makeFirstResponder:nil];
 }
 
 - (void)minimizeToMenuBar:(id)sender {
@@ -313,8 +468,19 @@ void RequestMacOSShowMainWindow() {
     SetMacOSDockIconVisible(NO);
 }
 
+- (void)windowDidBecomeKey:(NSNotification*)notification {
+    (void)notification;
+    [self updateSidebarSelectionAppearance];
+}
+
+- (void)windowDidResignKey:(NSNotification*)notification {
+    (void)notification;
+    [self updateSidebarSelectionAppearance];
+}
+
 - (void)exitApplication:(id)sender {
     (void)sender;
+    [self endLogReflection];
     RequestMacOSAppShutdown(true);
 }
 
@@ -329,6 +495,12 @@ void RequestMacOSShowMainWindow() {
 }
 
 @end
+
+static void LogReflectorCallback(const std::wstring& line) {
+    if (g_logReflectorTarget != nil) {
+        [g_logReflectorTarget reflectLogLine:line];
+    }
+}
 
 @implementation ClippStatusMenuController
 
