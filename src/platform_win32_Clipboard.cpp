@@ -41,6 +41,53 @@ static void LogLastError(const char* function, const wchar_t* message) {
     g_logger.log(function, Logger::Level::Warning, L"%ls (GetLastError=%lu)", message, GetLastError());
 }
 
+static UINT ClippOriginClipboardFormat() {
+    static const UINT format = RegisterClipboardFormatW(L"ClippOriginMarker");
+    return format;
+}
+
+static bool SetClippOriginClipboardMarker() {
+    const UINT format = ClippOriginClipboardFormat();
+    if (format == 0) {
+        LogLastError(__FUNCTION__, L"Failed to register Clipp clipboard origin format");
+        return false;
+    }
+
+    static constexpr uint32_t marker = 0x50504c43u; // "CLPP" little-endian
+    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, sizeof(marker));
+    if (!hMem) {
+        LogLastError(__FUNCTION__, L"Failed to allocate Clipp clipboard origin marker");
+        return false;
+    }
+
+    void* dst = GlobalLock(hMem);
+    if (!dst) {
+        LogLastError(__FUNCTION__, L"Failed to lock Clipp clipboard origin marker");
+        GlobalFree(hMem);
+        return false;
+    }
+
+    std::memcpy(dst, &marker, sizeof(marker));
+    GlobalUnlock(hMem);
+
+    if (!::SetClipboardData(format, hMem)) {
+        LogLastError(__FUNCTION__, L"Failed to set Clipp clipboard origin marker");
+        GlobalFree(hMem);
+        return false;
+    }
+
+    return true;
+}
+
+static bool ClipboardHasClippOriginMarker() {
+    const UINT format = ClippOriginClipboardFormat();
+    if (format == 0) {
+        return false;
+    }
+
+    return IsClipboardFormatAvailable(format) != FALSE;
+}
+
 static unsigned char ScaleMaskComponent(uint32_t pixel, uint32_t mask) {
     if (mask == 0) return 0;
 
@@ -467,6 +514,12 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
     for (int i = 0; i < 5; ++i) {
         if (OpenClipboard(hwnd)) {
             opened = true;
+            if (ClipboardHasClippOriginMarker()) {
+                g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Ignoring clipboard notification for Clipp-originated clipboard contents.");
+                CloseClipboard();
+                break;
+            }
+
             // 1. Try to read Text
             if (IsClipboardFormatAvailable(CF_UNICODETEXT)) {
                 HANDLE hData = GetClipboardData(CF_UNICODETEXT);
@@ -650,6 +703,10 @@ void SetClipboardData(ClipboardPayload& payload) {
             }
             else {
                 g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Unsupported clipboard payload format ID %u; nothing written", payload.formatId);
+            }
+
+            if (wroteClipboard && !SetClippOriginClipboardMarker()) {
+                g_logger.log(__FUNCTION__, Logger::Level::Warning, L"System clipboard was written without Clipp origin marker.");
             }
 
             CloseClipboard();
