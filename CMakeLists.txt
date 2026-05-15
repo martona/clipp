@@ -5,15 +5,46 @@ if (APPLE AND (NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET OR CMAKE_OSX_DEPLOYMENT_T
 endif()
 
 if (APPLE)
-    set(VCPKG_OVERLAY_TRIPLETS "${CMAKE_CURRENT_SOURCE_DIR}/src/vcpkg-triplets" CACHE STRING "vcpkg overlay triplet directory" FORCE)
-    set(VCPKG_TARGET_TRIPLET "arm64-osx-macos14" CACHE STRING "vcpkg target triplet" FORCE)
-    set(CLIPP_MACOS_DEVELOPMENT_TEAM "2262A4CP8N" CACHE STRING "Apple development team ID for signing")
-    set(CLIPP_MACOS_CODE_SIGN_IDENTITY "Apple Development" CACHE STRING "macOS code signing identity")
+    set(VCPKG_OVERLAY_TRIPLETS "${CMAKE_CURRENT_SOURCE_DIR}/src/vcpkg-triplets" CACHE PATH "vcpkg overlay triplet directory")
+
+    if (NOT DEFINED VCPKG_TARGET_TRIPLET OR VCPKG_TARGET_TRIPLET STREQUAL "")
+        execute_process(
+            COMMAND uname -m
+            OUTPUT_VARIABLE CLIPP_HOST_ARCH
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+        if (CLIPP_HOST_ARCH STREQUAL "arm64")
+            set(VCPKG_TARGET_TRIPLET "arm64-osx-macos14" CACHE STRING "vcpkg target triplet" FORCE)
+        elseif (CLIPP_HOST_ARCH STREQUAL "x86_64")
+            set(VCPKG_TARGET_TRIPLET "x64-osx-macos14" CACHE STRING "vcpkg target triplet" FORCE)
+        else()
+            message(FATAL_ERROR "Unsupported macOS architecture: ${CLIPP_HOST_ARCH}")
+        endif()
+    endif()
+
+    if (NOT DEFINED CMAKE_OSX_ARCHITECTURES OR CMAKE_OSX_ARCHITECTURES STREQUAL "")
+        if (VCPKG_TARGET_TRIPLET MATCHES "^arm64-")
+            set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "macOS target architecture" FORCE)
+        elseif (VCPKG_TARGET_TRIPLET MATCHES "^x64-")
+            set(CMAKE_OSX_ARCHITECTURES "x86_64" CACHE STRING "macOS target architecture" FORCE)
+        endif()
+    endif()
+
+    option(CLIPP_MACOS_ENABLE_CODE_SIGNING "Enable macOS code signing for Xcode generator builds" OFF)
+    set(CLIPP_MACOS_DEVELOPMENT_TEAM "" CACHE STRING "Apple development team ID for signing")
+    set(CLIPP_MACOS_CODE_SIGN_IDENTITY "" CACHE STRING "Apple code signing identity")
 endif()
 
 project(clipp)
 
 set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+if (APPLE)
+    enable_language(OBJCXX)
+    set(CMAKE_OBJCXX_STANDARD 20)
+    set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
+endif()
 
 file(GLOB SOURCES "src/*.cpp" "src/*.mm" "src/*.h")
 list(FILTER SOURCES EXCLUDE REGEX "vcpkg_installed")
@@ -79,9 +110,20 @@ if (APPLE)
         MACOSX_BUNDLE_BUNDLE_NAME "Clipp"
         MACOSX_BUNDLE_GUI_IDENTIFIER "net.clipp.app"
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/macos/Info.plist.in"
-        XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "${CLIPP_MACOS_CODE_SIGN_IDENTITY}"
-        XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Manual"
-        XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${CLIPP_MACOS_DEVELOPMENT_TEAM}"
         XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "net.clipp.app"
     )
+
+    if (CMAKE_GENERATOR STREQUAL "Xcode")
+        if (CLIPP_MACOS_ENABLE_CODE_SIGNING)
+            set_target_properties(clipp PROPERTIES
+                XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "${CLIPP_MACOS_CODE_SIGN_IDENTITY}"
+                XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Manual"
+                XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${CLIPP_MACOS_DEVELOPMENT_TEAM}"
+            )
+        else()
+            set_target_properties(clipp PROPERTIES
+                XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
+            )
+        endif()
+    endif()
 endif()
