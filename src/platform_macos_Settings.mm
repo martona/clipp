@@ -1,7 +1,6 @@
 #include "Settings.h"
-#include "platform.h"
+#include "platform_macos_UiHelpers.h"
 #include <cstring>
-#include <cwchar>
 #include <unistd.h>
 #include <pwd.h>
 
@@ -9,29 +8,13 @@
 #import <Foundation/Foundation.h>
 
 namespace {
-    static NSString* ToNSString(const wchar_t* valueName) {
-        if (valueName == nullptr) {
-            return nil;
-        }
-
-        const size_t utf8Len = utf16_to_utf8(valueName, std::wcslen(valueName), nullptr, 0);
-        if (utf8Len == 0) {
-            return @"";
-        }
-
-        std::string utf8;
-        utf8.resize(utf8Len);
-        utf16_to_utf8(valueName, std::wcslen(valueName), utf8.data(), utf8Len);
-        return [NSString stringWithUTF8String:utf8.c_str()];
-    }
-
     static NSUserDefaults* GetSettingsStore() {
         return [NSUserDefaults standardUserDefaults];
     }
 }
 
 bool Settings::ReadStringValue(const wchar_t* valueName, std::string& outValue) {
-    NSString* key = ToNSString(valueName);
+    NSString* key = MacOSToNSString(valueName);
     if (key == nil) {
         return false;
     }
@@ -47,7 +30,7 @@ bool Settings::ReadStringValue(const wchar_t* valueName, std::string& outValue) 
 }
 
 bool Settings::ReadUint32Value(const wchar_t* valueName, int& outValue) {
-    NSString* key = ToNSString(valueName);
+    NSString* key = MacOSToNSString(valueName);
     if (key == nil) {
         return false;
     }
@@ -63,7 +46,7 @@ bool Settings::ReadUint32Value(const wchar_t* valueName, int& outValue) {
 }
 
 bool Settings::ReadUint64Value(const wchar_t* valueName, uint64_t& outValue) {
-    NSString* key = ToNSString(valueName);
+    NSString* key = MacOSToNSString(valueName);
     if (key == nil) {
         return false;
     }
@@ -79,7 +62,7 @@ bool Settings::ReadUint64Value(const wchar_t* valueName, uint64_t& outValue) {
 }
 
 bool Settings::WriteStringValue(const wchar_t* valueName, const std::string& value) {
-    NSString* key = ToNSString(valueName);
+    NSString* key = MacOSToNSString(valueName);
     if (key == nil) {
         return false;
     }
@@ -90,7 +73,7 @@ bool Settings::WriteStringValue(const wchar_t* valueName, const std::string& val
 }
 
 bool Settings::WriteUint32Value(const wchar_t* valueName, int value) {
-    NSString* key = ToNSString(valueName);
+    NSString* key = MacOSToNSString(valueName);
     if (key == nil) {
         return false;
     }
@@ -101,7 +84,7 @@ bool Settings::WriteUint32Value(const wchar_t* valueName, int value) {
 }
 
 bool Settings::WriteUint64Value(const wchar_t* valueName, uint64_t value) {
-    NSString* key = ToNSString(valueName);
+    NSString* key = MacOSToNSString(valueName);
     if (key == nil) {
         return false;
     }
@@ -113,7 +96,7 @@ bool Settings::WriteUint64Value(const wchar_t* valueName, uint64_t value) {
 }
 
 bool Settings::WriteBinaryValue(const wchar_t* valueName, const unsigned char* data, size_t len) {
-    NSString* key = ToNSString(valueName);
+    NSString* key = MacOSToNSString(valueName);
     if (key == nil || data == nullptr) {
         return false;
     }
@@ -125,7 +108,7 @@ bool Settings::WriteBinaryValue(const wchar_t* valueName, const unsigned char* d
 }
 
 bool Settings::ReadBinaryValue(const wchar_t* valueName, std::vector<unsigned char>& outValue) {
-    NSString* key = ToNSString(valueName);
+    NSString* key = MacOSToNSString(valueName);
     if (key == nil) {
         return false;
     }

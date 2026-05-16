@@ -1,8 +1,9 @@
 #pragma once
 
+#include "KeyManager.h"
 #include "PeerDisplay.h"
 #include "PeerManager.h"
-#include "platform_win32_KeyDerivationWorker.h"
+#include "platform/uiClippPage.h"
 #include "platform_win32_NetworkView.h"
 
 #include <memory>
@@ -29,7 +30,7 @@ public:
     void OnShown();
     void OnHidden();
     void OnDestroy();
-    void OnDerivedKey(KeyDerivationWorker::KeyDerivationResult* result);
+    void OnDerivedKey(const KeyManager::NetworkKey* key);
     void OnPeerDisplayUpdate();
 
 private:
@@ -43,6 +44,7 @@ private:
     void EndPeerNotifications();
     void SetupPasswordFields();
     void NewPasswordHashReceived();
+    void PostDerivedKey(const KeyManager::NetworkKey& key);
 
     static void PeerDisplayWatcher(const PeerDisplayUpdate& update, void* userData);
 
@@ -63,6 +65,6 @@ private:
     winrt::Windows::UI::Xaml::DispatcherTimer networkPollTimer_{ nullptr };
 
     std::unique_ptr<NetworkView> networkView_;
-    KeyDerivationWorker keyDerivationWorker_;
+    uiClippPage::KeyDerivationWorker keyDerivationWorker_;
     std::size_t peerDisplayWatcherID_ = 0;
 };

@@ -2,24 +2,12 @@
 
 #ifdef __APPLE__
 
-#include "platform.h"
+#include "platform_macos_UiHelpers.h"
 
 #import <AppKit/AppKit.h>
 
 namespace {
 constexpr unsigned int kMaxTerminalLogLines = 5000;
-
-NSString* ToNSString(const std::wstring& text) {
-    const size_t utf8Len = utf16_to_utf8(text.c_str(), text.size(), nullptr, 0);
-    if (utf8Len == 0) {
-        return @"";
-    }
-
-    std::string utf8;
-    utf8.resize(utf8Len);
-    utf16_to_utf8(text.c_str(), text.size(), utf8.data(), utf8.size());
-    return [NSString stringWithUTF8String:utf8.c_str()];
-}
 
 NSColor* DefaultTextColor() {
     return [NSColor colorWithCalibratedWhite:0.82 alpha:1.0];
@@ -136,7 +124,7 @@ void MacOSTerminalLogView::AppendAnsiLine(const std::wstring& line) {
         if (currentText.empty()) {
             return;
         }
-        NSAttributedString* run = [[NSAttributedString alloc] initWithString:ToNSString(currentText)
+        NSAttributedString* run = [[NSAttributedString alloc] initWithString:MacOSToNSString(currentText)
                                                                   attributes:AttributesForColor(currentColor)];
         [attributedLine appendAttributedString:run];
         currentText.clear();

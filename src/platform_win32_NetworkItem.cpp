@@ -1,10 +1,12 @@
 #include "platform_win32_NetworkItem.h"
 
+#include "platform/uiClippPage.h"
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
+#include <string_view>
 
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Foundation.h>
@@ -18,8 +20,6 @@
 #include "HostId.h"
 
 namespace {
-constexpr uint64_t kMaxByteCounter = 999'999'999'999;
-
 winrt::Windows::UI::Xaml::Controls::ColumnDefinition MakeColumn(double value, winrt::Windows::UI::Xaml::GridUnitType type) {
     winrt::Windows::UI::Xaml::Controls::ColumnDefinition column;
     column.Width(winrt::Windows::UI::Xaml::GridLength{ value, type });
@@ -55,6 +55,10 @@ winrt::Windows::UI::Xaml::Controls::TextBlock AddDetailRow(
     grid.Children().Append(label);
     grid.Children().Append(value);
     return value;
+}
+
+std::wstring ToWideAscii(std::string_view text) {
+    return std::wstring(text.begin(), text.end());
 }
 }
 
@@ -217,7 +221,7 @@ void NetworkItemView::RefreshConnectedFor(std::chrono::steady_clock::time_point 
 }
 
 std::wstring NetworkItemView::DisplayHostName(const std::wstring& hostName) {
-    return hostName.empty() ? L"(unknown host)" : hostName;
+    return uiClippPage::DisplayHostNameOrUnknown(hostName);
 }
 
 std::wstring NetworkItemView::FormatHostID(const std::array<unsigned char, 32>& hostID) {
@@ -235,51 +239,13 @@ std::wstring NetworkItemView::FormatHostID(const std::array<unsigned char, 32>& 
 }
 
 std::wstring NetworkItemView::FormatByteCounter(uint64_t bytes) {
-    if (bytes > kMaxByteCounter) {
-        return L"+++,+++,+++,+++";
-    }
-
-    std::wstring digits = std::to_wstring(bytes);
-    std::wstring counter;
-    counter.reserve(digits.size() + ((digits.size() - 1) / 3));
-    for (std::size_t i = 0; i < digits.size(); ++i) {
-        if (i > 0 && ((digits.size() - i) % 3) == 0) {
-            counter.push_back(L',');
-        }
-        counter.push_back(digits[i]);
-    }
-    return counter;
+    return ToWideAscii(uiClippPage::FormatByteCounter(bytes));
 }
 
 std::wstring NetworkItemView::FormatConnectionState(bool connected) {
-    return connected ? L"Connected" : L"Not connected";
+    return ToWideAscii(uiClippPage::FormatConnectionState(connected));
 }
 
 std::wstring NetworkItemView::FormatConnectedFor(std::chrono::steady_clock::time_point connectedSince, std::chrono::steady_clock::time_point now) {
-    if (connectedSince == std::chrono::steady_clock::time_point{}) {
-        return L"Not connected";
-    }
-
-    if (now < connectedSince) {
-        now = connectedSince;
-    }
-
-    auto seconds = std::chrono::duration_cast<std::chrono::seconds>(now - connectedSince).count();
-    const auto days = seconds / (60 * 60 * 24);
-    seconds %= (60 * 60 * 24);
-    const auto hours = seconds / (60 * 60);
-    seconds %= (60 * 60);
-    const auto minutes = seconds / 60;
-    seconds %= 60;
-
-    wchar_t timeBuffer[32]{};
-    swprintf_s(timeBuffer, L"%02lld:%02lld:%02lld", hours, minutes, seconds);
-
-    std::wstring text = L"Connected for ";
-    if (days > 0) {
-        text += std::to_wstring(days);
-        text += days == 1 ? L" day, " : L" days, ";
-    }
-    text += timeBuffer;
-    return text;
+    return ToWideAscii(uiClippPage::FormatConnectedFor(connectedSince, now));
 }

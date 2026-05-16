@@ -208,8 +208,8 @@
     <ClInclude Include="Listener.h" />
     <ClInclude Include="CryptoChannel.h" />
     <ClInclude Include="platform.h" />
+    <ClInclude Include="platform\uiClippPage.h" />
     <ClInclude Include="platform_win32_AutoStart.h" />
-    <ClInclude Include="platform_win32_KeyDerivationWorker.h" />
     <ClInclude Include="platform_win32_NetworkItem.h" />
     <ClInclude Include="platform_win32_NetworkView.h" />
     <ClInclude Include="platform_win32_SettingsPage.h" />

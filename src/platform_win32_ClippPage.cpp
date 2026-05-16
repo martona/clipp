@@ -4,9 +4,12 @@
 #include "Logger.h"
 #include "MDNSThread.h"
 #include "Settings.h"
+#include "platform/uiClippPage.h"
 #include "utils.h"
 
 #include <string>
+
+#include <sodium.h>
 
 #include <winrt/Windows.UI.h>
 #include <winrt/Windows.UI.Text.h>
@@ -28,8 +31,10 @@ ClippPage::ClippPage(HWND notificationTarget, UINT derivedKeyMessage, UINT peerD
     , derivedKeyMessage_(derivedKeyMessage)
     , peerDisplayUpdateMessage_(peerDisplayUpdateMessage)
     , peerDisplay_(peerDisplay)
-    , peerManager_(peerManager) {
-    keyDerivationWorker_.SetNotificationTarget(notificationTarget_, derivedKeyMessage_);
+    , peerManager_(peerManager)
+    , keyDerivationWorker_([this](const KeyManager::NetworkKey& key) {
+        PostDerivedKey(key);
+    }) {
     BuildView();
 }
 
@@ -143,8 +148,7 @@ void ClippPage::BuildNetworkSecretSection(winrt::Windows::UI::Xaml::Controls::St
         const std::string networkName = g_settings.networkName();
         g_logger.log(__FUNCTION__, Logger::Level::Debug, "Generating key with secret (network name: %s)", networkName.c_str());
         std::string newPassword = winrt::to_string(pwd);
-        std::string netNameAndPassword = networkName + "|";
-        netNameAndPassword += newPassword;
+        std::string netNameAndPassword = uiClippPage::BuildKeyDerivationInput(networkName, newPassword);
         keyDerivationWorker_.RequestKeyDerivation(netNameAndPassword);
         sodium_memzero(newPassword.data(), newPassword.capacity());
         sodium_memzero(netNameAndPassword.data(), netNameAndPassword.capacity());
@@ -287,13 +291,13 @@ void ClippPage::OnDestroy() {
     networkPollTimer_ = nullptr;
 }
 
-void ClippPage::OnDerivedKey(KeyDerivationWorker::KeyDerivationResult* result) {
-    if (!result) {
+void ClippPage::OnDerivedKey(const KeyManager::NetworkKey* key) {
+    if (!key) {
         return;
     }
 
     g_settings.set_networkName(g_settings.networkName());
-    g_keyManager.SetNetworkKey(result->derivedKey);
+    g_keyManager.SetNetworkKey(*key);
     MDNSNotifyNetworkKeyChange();
     peerManager_.ClearPeers();
 
@@ -380,6 +384,14 @@ void ClippPage::NewPasswordHashReceived() {
         passwordStatusPanel_.Visibility(Visibility::Visible);
         passwordInfoPanel_.Visibility(Visibility::Collapsed);
     }
+}
+
+void ClippPage::PostDerivedKey(const KeyManager::NetworkKey& key) {
+    if (notificationTarget_ == nullptr || derivedKeyMessage_ == 0) {
+        return;
+    }
+
+    SendMessage(notificationTarget_, derivedKeyMessage_, reinterpret_cast<WPARAM>(&key), 0);
 }
 
 void ClippPage::PeerDisplayWatcher(const PeerDisplayUpdate&, void* userData) {

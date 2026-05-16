@@ -5,6 +5,7 @@
 #include "NetworkRuntime.h"
 #include "Settings.h"
 #include "platform/uiSettingsPage.h"
+#include "platform_macos_UiHelpers.h"
 
 #import <AppKit/AppKit.h>
 
@@ -43,37 +44,6 @@ namespace {
     constexpr CGFloat kSectionInsetX = 18.0;
     constexpr CGFloat kSectionInsetY = 14.0;
 
-    static NSString* ToNSString(const std::string& value) {
-        NSString* text = [NSString stringWithUTF8String:value.c_str()];
-        return text != nil ? text : @"";
-    }
-
-    static std::string ToStdString(NSString* value) {
-        if (value == nil) {
-            return {};
-        }
-
-        const char* utf8 = value.UTF8String;
-        return utf8 != nullptr ? std::string(utf8) : std::string();
-    }
-
-    static NSTextField* MakeLabel(NSString* text) {
-        NSTextField* label = [NSTextField labelWithString:text];
-        label.translatesAutoresizingMaskIntoConstraints = NO;
-        label.font = [NSFont systemFontOfSize:13];
-        label.textColor = [NSColor labelColor];
-        return label;
-    }
-
-    static NSTextField* MakeTextField(CGFloat width) {
-        NSTextField* field = [NSTextField textFieldWithString:@""];
-        field.translatesAutoresizingMaskIntoConstraints = NO;
-        field.font = [NSFont systemFontOfSize:13];
-        field.alignment = NSTextAlignmentLeft;
-        [field.widthAnchor constraintEqualToConstant:width].active = YES;
-        return field;
-    }
-
     static void AddSettingRow(
         NSView* section,
         NSTextField* label,
@@ -97,18 +67,6 @@ namespace {
             [constraints addObject:[field.topAnchor constraintEqualToAnchor:section.topAnchor constant:kSectionInsetY]];
         } else {
             [constraints addObject:[field.topAnchor constraintEqualToAnchor:previousField.bottomAnchor constant:12.0]];
-        }
-    }
-
-    static void SetFieldText(NSTextField* field, const std::string& value) {
-        if (field != nil) {
-            field.stringValue = ToNSString(value);
-        }
-    }
-
-    static void SetFieldText(NSTextField* field, int value) {
-        if (field != nil) {
-            field.stringValue = [NSString stringWithFormat:@"%d", value];
         }
     }
 }
@@ -167,18 +125,12 @@ void MacOSSettingsPage::BuildView() {
     networkHeader.font = [NSFont systemFontOfSize:16 weight:NSFontWeightSemibold];
     networkHeader.textColor = [NSColor labelColor];
 
-    NSBox* section = [[NSBox alloc] initWithFrame:NSZeroRect];
-    section.translatesAutoresizingMaskIntoConstraints = NO;
-    section.boxType = NSBoxCustom;
-    section.titlePosition = NSNoTitle;
-    section.borderType = NSNoBorder;
-    section.cornerRadius = 10.0;
-    section.fillColor = [NSColor alternatingContentBackgroundColors][1];
+    NSBox* section = MacOSMakeGroupBox();
 
-    tcpPortField_ = MakeTextField(110.0);
-    udpPortField_ = MakeTextField(110.0);
-    listenerIpField_ = MakeTextField(190.0);
-    multicastIpField_ = MakeTextField(190.0);
+    tcpPortField_ = MacOSMakeFixedWidthTextField(110.0);
+    udpPortField_ = MacOSMakeFixedWidthTextField(110.0);
+    listenerIpField_ = MacOSMakeFixedWidthTextField(190.0);
+    multicastIpField_ = MacOSMakeFixedWidthTextField(190.0);
     fieldDelegate_ = [[MacOSSettingsPageFieldDelegate alloc] initWithOwner:this];
     tcpPortField_.delegate = fieldDelegate_;
     udpPortField_.delegate = fieldDelegate_;
@@ -186,10 +138,10 @@ void MacOSSettingsPage::BuildView() {
     multicastIpField_.delegate = fieldDelegate_;
 
     NSMutableArray<NSLayoutConstraint*>* rowConstraints = [NSMutableArray array];
-    AddSettingRow(section, MakeLabel(@"TCP Port"), tcpPortField_, nil, rowConstraints);
-    AddSettingRow(section, MakeLabel(@"UDP Port"), udpPortField_, tcpPortField_, rowConstraints);
-    AddSettingRow(section, MakeLabel(@"Listener IP"), listenerIpField_, udpPortField_, rowConstraints);
-    AddSettingRow(section, MakeLabel(@"Multicast IP"), multicastIpField_, listenerIpField_, rowConstraints);
+    AddSettingRow(section, MacOSMakeLabel(@"TCP Port"), tcpPortField_, nil, rowConstraints);
+    AddSettingRow(section, MacOSMakeLabel(@"UDP Port"), udpPortField_, tcpPortField_, rowConstraints);
+    AddSettingRow(section, MacOSMakeLabel(@"Listener IP"), listenerIpField_, udpPortField_, rowConstraints);
+    AddSettingRow(section, MacOSMakeLabel(@"Multicast IP"), multicastIpField_, listenerIpField_, rowConstraints);
     [rowConstraints addObject:[multicastIpField_.bottomAnchor constraintEqualToAnchor:section.bottomAnchor constant:-kSectionInsetY]];
 
     [root_ addSubview:heading];
@@ -200,10 +152,7 @@ void MacOSSettingsPage::BuildView() {
     statusContainer_.translatesAutoresizingMaskIntoConstraints = NO;
     statusContainer_.hidden = YES;
 
-    statusMessage_ = [NSTextField wrappingLabelWithString:@"Network settings applied."];
-    statusMessage_.translatesAutoresizingMaskIntoConstraints = NO;
-    statusMessage_.font = [NSFont systemFontOfSize:13];
-    statusMessage_.textColor = [NSColor secondaryLabelColor];
+    statusMessage_ = MacOSMakeWrappingLabel(@"Network settings applied.", 13.0, [NSColor secondaryLabelColor]);
     [statusContainer_ addSubview:statusMessage_];
     [root_ addSubview:statusContainer_];
 
@@ -237,10 +186,10 @@ void MacOSSettingsPage::LoadSettingsIntoFields() {
         return;
     }
 
-    SetFieldText(tcpPortField_, g_settings.tcpPort());
-    SetFieldText(udpPortField_, g_settings.mdnsPort());
-    SetFieldText(listenerIpField_, g_settings.listenerIp());
-    SetFieldText(multicastIpField_, g_settings.multicastIp());
+    MacOSSetFieldText(tcpPortField_, g_settings.tcpPort());
+    MacOSSetFieldText(udpPortField_, g_settings.mdnsPort());
+    MacOSSetFieldText(listenerIpField_, g_settings.listenerIp());
+    MacOSSetFieldText(multicastIpField_, g_settings.multicastIp());
 }
 
 void MacOSSettingsPage::ApplyNetworkSettingChange() {
@@ -257,57 +206,57 @@ void MacOSSettingsPage::ShowStatusMessage() {
 void MacOSSettingsPage::ValidateTcpPort() {
     int port = 0;
     const int currentValue = g_settings.tcpPort();
-    if (!uiSettingsPage::TryParsePort(ToStdString(tcpPortField_.stringValue), port)) {
-        SetFieldText(tcpPortField_, currentValue);
+    if (!uiSettingsPage::TryParsePort(MacOSToStdString(tcpPortField_.stringValue), port)) {
+        MacOSSetFieldText(tcpPortField_, currentValue);
         return;
     }
 
     if (port != currentValue && g_settings.set_tcpPort(port)) {
         ApplyNetworkSettingChange();
     }
-    SetFieldText(tcpPortField_, g_settings.tcpPort());
+    MacOSSetFieldText(tcpPortField_, g_settings.tcpPort());
 }
 
 void MacOSSettingsPage::ValidateUdpPort() {
     int port = 0;
     const int currentValue = g_settings.mdnsPort();
-    if (!uiSettingsPage::TryParsePort(ToStdString(udpPortField_.stringValue), port)) {
-        SetFieldText(udpPortField_, currentValue);
+    if (!uiSettingsPage::TryParsePort(MacOSToStdString(udpPortField_.stringValue), port)) {
+        MacOSSetFieldText(udpPortField_, currentValue);
         return;
     }
 
     if (port != currentValue && g_settings.set_mdnsPort(port)) {
         ApplyNetworkSettingChange();
     }
-    SetFieldText(udpPortField_, g_settings.mdnsPort());
+    MacOSSetFieldText(udpPortField_, g_settings.mdnsPort());
 }
 
 void MacOSSettingsPage::ValidateListenerIp() {
-    const std::string value = uiSettingsPage::TrimAscii(ToStdString(listenerIpField_.stringValue));
+    const std::string value = uiSettingsPage::TrimAscii(MacOSToStdString(listenerIpField_.stringValue));
     const std::string currentValue = g_settings.listenerIp();
     if (!Settings::IsValidListenerIp(value)) {
-        SetFieldText(listenerIpField_, currentValue);
+        MacOSSetFieldText(listenerIpField_, currentValue);
         return;
     }
 
     if (value != currentValue && g_settings.set_listenerIp(value)) {
         ApplyNetworkSettingChange();
     }
-    SetFieldText(listenerIpField_, g_settings.listenerIp());
+    MacOSSetFieldText(listenerIpField_, g_settings.listenerIp());
 }
 
 void MacOSSettingsPage::ValidateMulticastIp() {
-    const std::string value = uiSettingsPage::TrimAscii(ToStdString(multicastIpField_.stringValue));
+    const std::string value = uiSettingsPage::TrimAscii(MacOSToStdString(multicastIpField_.stringValue));
     const std::string currentValue = g_settings.multicastIp();
     if (!Settings::IsValidMulticastIp(value)) {
-        SetFieldText(multicastIpField_, currentValue);
+        MacOSSetFieldText(multicastIpField_, currentValue);
         return;
     }
 
     if (value != currentValue && g_settings.set_multicastIp(value)) {
         ApplyNetworkSettingChange();
     }
-    SetFieldText(multicastIpField_, g_settings.multicastIp());
+    MacOSSetFieldText(multicastIpField_, g_settings.multicastIp());
 }
 
 #endif

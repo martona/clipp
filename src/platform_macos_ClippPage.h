@@ -17,8 +17,10 @@
 @class NSScrollView;
 
 class MacOSClippPageState;
-class MacOSKeyDerivationWorker;
 class MacOSNetworkView;
+namespace uiClippPage {
+class KeyDerivationWorker;
+}
 
 class MacOSClippPage {
 public:
@@ -73,7 +75,7 @@ private:
 
     std::function<void()> keyViewChangedHandler_;
     std::shared_ptr<MacOSClippPageState> pageState_;
-    std::unique_ptr<MacOSKeyDerivationWorker> keyDerivationWorker_;
+    std::unique_ptr<uiClippPage::KeyDerivationWorker> keyDerivationWorker_;
     std::unique_ptr<MacOSNetworkView> networkView_;
     std::size_t peerDisplayWatcherID_ = 0;
     uint64_t passwordDebounceGeneration_ = 0;

@@ -6,20 +6,14 @@
 #include "MDNSThread.h"
 #include "PeerManager.h"
 #include "Settings.h"
-#include "platform.h"
+#include "platform/uiClippPage.h"
+#include "platform_macos_NetworkView.h"
+#include "platform_macos_UiHelpers.h"
 
-#include <algorithm>
-#include <array>
 #include <atomic>
-#include <chrono>
-#include <condition_variable>
 #include <cstdint>
-#include <cstdio>
-#include <mutex>
 #include <string>
-#include <thread>
 #include <utility>
-#include <vector>
 
 #include <sodium.h>
 
@@ -30,8 +24,6 @@ extern Settings g_settings;
 extern KeyManager g_keyManager;
 extern PeerDisplay g_peerDisplay;
 extern PeerManager g_peerManager;
-
-class MacOSNetworkItemView;
 
 @interface MacOSClippPageFieldDelegate : NSObject <NSTextFieldDelegate> {
 @private
@@ -87,132 +79,11 @@ class MacOSNetworkItemView;
 
 @end
 
-@interface MacOSNetworkItemTarget : NSObject {
-@private
-    MacOSNetworkItemView* owner_;
-}
-- (instancetype)initWithOwner:(MacOSNetworkItemView*)owner;
-- (void)toggleDisclosure:(id)sender;
-@end
-
 namespace {
 constexpr CGFloat kPageInset = 28.0;
 constexpr CGFloat kSectionInsetX = 18.0;
 constexpr CGFloat kSectionInsetY = 14.0;
 constexpr char kMaskedPassword[] = "****************";
-constexpr uint64_t kMaxByteCounter = 999'999'999'999;
-
-NSString* ToNSString(const std::string& value) {
-    NSString* text = [NSString stringWithUTF8String:value.c_str()];
-    return text != nil ? text : @"";
-}
-
-NSString* ToNSString(const std::wstring& value) {
-    const size_t utf8Len = utf16_to_utf8(value.c_str(), value.size(), nullptr, 0);
-    if (utf8Len == 0) {
-        return @"";
-    }
-
-    std::string utf8;
-    utf8.resize(utf8Len);
-    utf16_to_utf8(value.c_str(), value.size(), utf8.data(), utf8.size());
-    return ToNSString(utf8);
-}
-
-std::string ToStdString(NSString* value) {
-    if (value == nil) {
-        return {};
-    }
-
-    const char* utf8 = value.UTF8String;
-    return utf8 != nullptr ? std::string(utf8) : std::string();
-}
-
-NSTextField* MakeLabel(NSString* text) {
-    NSTextField* label = [NSTextField labelWithString:text];
-    label.translatesAutoresizingMaskIntoConstraints = NO;
-    label.font = [NSFont systemFontOfSize:13];
-    label.textColor = [NSColor labelColor];
-    return label;
-}
-
-NSTextField* MakeWrappingLabel(NSString* text, CGFloat fontSize, NSColor* color) {
-    NSTextField* label = [NSTextField wrappingLabelWithString:text];
-    label.translatesAutoresizingMaskIntoConstraints = NO;
-    label.font = [NSFont systemFontOfSize:fontSize];
-    label.textColor = color;
-    return label;
-}
-
-NSTextField* MakeTextField(CGFloat width) {
-    NSTextField* field = [NSTextField textFieldWithString:@""];
-    field.translatesAutoresizingMaskIntoConstraints = NO;
-    field.font = [NSFont systemFontOfSize:13];
-    field.alignment = NSTextAlignmentLeft;
-    [field.widthAnchor constraintGreaterThanOrEqualToConstant:width].active = YES;
-    return field;
-}
-
-NSSecureTextField* MakeSecureTextField(CGFloat width) {
-    NSSecureTextField* field = [[NSSecureTextField alloc] initWithFrame:NSZeroRect];
-    field.translatesAutoresizingMaskIntoConstraints = NO;
-    field.font = [NSFont systemFontOfSize:13];
-    field.alignment = NSTextAlignmentLeft;
-    field.contentType = NSTextContentTypePassword;
-    [field.widthAnchor constraintGreaterThanOrEqualToConstant:width].active = YES;
-    [field.heightAnchor constraintEqualToConstant:22.0].active = YES;
-    return field;
-}
-
-NSBox* MakeGroupBox() {
-    NSBox* box = [[NSBox alloc] initWithFrame:NSZeroRect];
-    box.translatesAutoresizingMaskIntoConstraints = NO;
-    box.boxType = NSBoxCustom;
-    box.titlePosition = NSNoTitle;
-    box.borderType = NSNoBorder;
-    box.cornerRadius = 10.0;
-    box.fillColor = [NSColor alternatingContentBackgroundColors][1];
-    return box;
-}
-
-NSImage* MakeSymbolImage(NSString* symbolName, NSString* accessibilityDescription, CGFloat pointSize, NSColor* tintColor) {
-    NSImage* image = [NSImage imageWithSystemSymbolName:symbolName accessibilityDescription:accessibilityDescription];
-    if (image == nil) {
-        return nil;
-    }
-
-    NSImageSymbolConfiguration* config = [NSImageSymbolConfiguration configurationWithPointSize:pointSize weight:NSFontWeightMedium];
-    image = [image imageWithSymbolConfiguration:config];
-    [image setTemplate:YES];
-    (void)tintColor;
-    return image;
-}
-
-NSImageView* MakeSymbolImageView(NSString* symbolName, NSString* accessibilityDescription, NSColor* tintColor) {
-    NSImageView* imageView = [[NSImageView alloc] initWithFrame:NSZeroRect];
-    imageView.translatesAutoresizingMaskIntoConstraints = NO;
-    imageView.image = MakeSymbolImage(symbolName, accessibilityDescription, 16.0, tintColor);
-    imageView.contentTintColor = tintColor;
-    imageView.imageScaling = NSImageScaleProportionallyDown;
-    [imageView.widthAnchor constraintEqualToConstant:22.0].active = YES;
-    [imageView.heightAnchor constraintEqualToConstant:22.0].active = YES;
-    return imageView;
-}
-
-NSButton* MakeIconButton(NSString* symbolName, NSString* accessibilityDescription, id target, SEL action) {
-    NSButton* button = [NSButton buttonWithImage:MakeSymbolImage(symbolName, accessibilityDescription, 13.0, [NSColor secondaryLabelColor])
-                                          target:target
-                                          action:action];
-    button.translatesAutoresizingMaskIntoConstraints = NO;
-    button.bezelStyle = NSBezelStyleRegularSquare;
-    button.bordered = NO;
-    button.imagePosition = NSImageOnly;
-    button.contentTintColor = [NSColor secondaryLabelColor];
-    button.toolTip = accessibilityDescription;
-    [button.widthAnchor constraintEqualToConstant:28.0].active = YES;
-    [button.heightAnchor constraintEqualToConstant:28.0].active = YES;
-    return button;
-}
 
 void AddInputRow(
     NSView* section,
@@ -240,76 +111,8 @@ void AddInputRow(
     }
 }
 
-void SetFieldText(NSTextField* field, NSString* value) {
-    if (field == nil) {
-        return;
-    }
-
-    field.stringValue = value != nil ? value : @"";
-}
-
-NSString* DisplayHostName(const std::wstring& hostName) {
-    return hostName.empty() ? @"(unknown host)" : ToNSString(hostName);
-}
-
-NSString* FormatByteCounter(uint64_t bytes) {
-    if (bytes > kMaxByteCounter) {
-        return @"+++,+++,+++,+++";
-    }
-
-    std::string digits = std::to_string(bytes);
-    std::string counter;
-    counter.reserve(digits.size() + ((digits.size() - 1) / 3));
-    for (std::size_t i = 0; i < digits.size(); ++i) {
-        if (i > 0 && ((digits.size() - i) % 3) == 0) {
-            counter.push_back(',');
-        }
-        counter.push_back(digits[i]);
-    }
-
-    return ToNSString(counter);
-}
-
-NSString* FormatConnectionState(bool connected) {
-    return connected ? @"Connected" : @"Not connected";
-}
-
-std::string FormatConnectedFor(std::chrono::steady_clock::time_point connectedSince, std::chrono::steady_clock::time_point now) {
-    if (connectedSince == std::chrono::steady_clock::time_point{}) {
-        return "Not connected";
-    }
-
-    if (now < connectedSince) {
-        now = connectedSince;
-    }
-
-    auto seconds = std::chrono::duration_cast<std::chrono::seconds>(now - connectedSince).count();
-    const auto days = seconds / (60 * 60 * 24);
-    seconds %= (60 * 60 * 24);
-    const auto hours = seconds / (60 * 60);
-    seconds %= (60 * 60);
-    const auto minutes = seconds / 60;
-    seconds %= 60;
-
-    char timeBuffer[32]{};
-    std::snprintf(timeBuffer,
-                  sizeof(timeBuffer),
-                  "%02lld:%02lld:%02lld",
-                  static_cast<long long>(hours),
-                  static_cast<long long>(minutes),
-                  static_cast<long long>(seconds));
-
-    std::string text = "Connected for ";
-    if (days > 0) {
-        text += std::to_string(days);
-        text += days == 1 ? " day, " : " days, ";
-    }
-    text += timeBuffer;
-    return text;
-}
-
 bool IsMaskedPasswordPlaceholder(NSTextField* field) {
-    return field != nil && ToStdString(field.stringValue) == kMaskedPassword;
+    return field != nil && MacOSToStdString(field.stringValue) == kMaskedPassword;
 }
 }
 
@@ -317,512 +120,11 @@ struct MacOSClippPageState {
     std::atomic_bool alive{ true };
 };
 
-class MacOSKeyDerivationWorker {
-public:
-    using ResultHandler = std::function<void(const KeyManager::NetworkKey&)>;
-
-    explicit MacOSKeyDerivationWorker(ResultHandler resultHandler)
-        : resultHandler_(std::move(resultHandler))
-        , workerThread_(&MacOSKeyDerivationWorker::WorkerLoop, this) {
-    }
-
-    ~MacOSKeyDerivationWorker() {
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            stopRequested_ = true;
-            sodium_memzero(pendingPassword_.data(), pendingPassword_.capacity());
-            pendingPassword_.clear();
-        }
-        cv_.notify_one();
-        if (workerThread_.joinable()) {
-            workerThread_.join();
-        }
-    }
-
-    void RequestKeyDerivation(const std::string& password) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        sodium_memzero(pendingPassword_.data(), pendingPassword_.capacity());
-        pendingPassword_ = password;
-        ++currentGeneration_;
-        hasPendingWork_ = true;
-        cv_.notify_one();
-    }
-
-private:
-    void WorkerLoop() {
-        while (true) {
-            std::string targetPassword;
-            uint64_t targetGeneration = 0;
-
-            {
-                std::unique_lock<std::mutex> lock(mutex_);
-                cv_.wait(lock, [this]() {
-                    return hasPendingWork_ || stopRequested_;
-                });
-
-                if (stopRequested_) {
-                    break;
-                }
-
-                targetPassword = pendingPassword_;
-                targetGeneration = currentGeneration_;
-                sodium_memzero(pendingPassword_.data(), pendingPassword_.capacity());
-                pendingPassword_.clear();
-                hasPendingWork_ = false;
-            }
-
-            KeyManager::NetworkKey newKey{};
-            const bool success = g_keyManager.DeriveNetworkKey(targetPassword, newKey);
-            sodium_memzero(targetPassword.data(), targetPassword.capacity());
-
-            bool shouldApply = false;
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                shouldApply = success && targetGeneration == currentGeneration_ && !stopRequested_;
-            }
-
-            if (shouldApply && resultHandler_) {
-                resultHandler_(newKey);
-            }
-            sodium_memzero(newKey.data(), newKey.size());
-        }
-    }
-
-    ResultHandler resultHandler_;
-    std::thread workerThread_;
-    std::mutex mutex_;
-    std::condition_variable cv_;
-    bool stopRequested_ = false;
-    bool hasPendingWork_ = false;
-    std::string pendingPassword_;
-    uint64_t currentGeneration_ = 0;
-};
-
-class MacOSNetworkItemView {
-public:
-    explicit MacOSNetworkItemView(const PeerDisplayItem& item)
-        : disclosureTarget_([[MacOSNetworkItemTarget alloc] initWithOwner:this]) {
-        BuildView();
-        UpdateHostName(item.hostName);
-        UpdateIncomingConnection(item.hasIncomingConnection);
-        UpdateOutgoingConnection(item.hasOutgoingConnection);
-        UpdateBytesSent(item.bytesSent);
-        UpdateBytesReceived(item.bytesReceived);
-        UpdateConnectedSince(item.connectedSince);
-    }
-
-    NSView* View() const {
-        return card_;
-    }
-
-    NSButton* DisclosureButton() const {
-        return disclosureButton_;
-    }
-
-    void ToggleDisclosure() {
-        detailsPanel_.hidden = !detailsPanel_.hidden;
-        UpdateDisclosureImage();
-        [card_ layoutSubtreeIfNeeded];
-    }
-
-    void UpdateHostName(const std::wstring& hostName) {
-        SetFieldText(title_, DisplayHostName(hostName));
-    }
-
-    void UpdateHostID(const HostId&) {
-    }
-
-    void UpdateIncomingConnection(bool connected) {
-        incomingIcon_.hidden = !connected;
-        SetFieldText(incomingValue_, FormatConnectionState(connected));
-    }
-
-    void UpdateOutgoingConnection(bool connected) {
-        outgoingIcon_.hidden = !connected;
-        SetFieldText(outgoingValue_, FormatConnectionState(connected));
-    }
-
-    void UpdateBytesSent(uint64_t bytesSent) {
-        SetFieldText(bytesSentValue_, FormatByteCounter(bytesSent));
-    }
-
-    void UpdateBytesReceived(uint64_t bytesReceived) {
-        SetFieldText(bytesReceivedValue_, FormatByteCounter(bytesReceived));
-    }
-
-    void UpdateConnectedSince(std::chrono::steady_clock::time_point connectedSince) {
-        connectedSince_ = connectedSince;
-        connectedForText_.clear();
-        RefreshConnectedFor();
-    }
-
-    void RefreshConnectedFor(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) {
-        const std::string text = FormatConnectedFor(connectedSince_, now);
-        if (connectedForText_ != text) {
-            connectedForText_ = text;
-            SetFieldText(subtitle_, ToNSString(text));
-        }
-    }
-
-private:
-    NSTextField* AddDetailRow(NSGridView* grid, NSInteger rowIndex, NSString* labelText) {
-        NSTextField* label = MakeLabel(labelText);
-        label.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-
-        NSTextField* value = MakeLabel(@"");
-        value.textColor = [NSColor secondaryLabelColor];
-
-        [grid addRowWithViews:@[label, value]];
-        NSGridRow* row = [grid rowAtIndex:rowIndex];
-        row.yPlacement = NSGridCellPlacementCenter;
-        return value;
-    }
-
-    void BuildView() {
-        card_ = MakeGroupBox();
-
-        NSStackView* cardStack = [[NSStackView alloc] initWithFrame:NSZeroRect];
-        cardStack.translatesAutoresizingMaskIntoConstraints = NO;
-        cardStack.orientation = NSUserInterfaceLayoutOrientationVertical;
-        cardStack.alignment = NSLayoutAttributeLeading;
-        cardStack.distribution = NSStackViewDistributionFill;
-        cardStack.spacing = 0.0;
-        cardStack.detachesHiddenViews = YES;
-
-        NSView* headerRow = [[NSView alloc] initWithFrame:NSZeroRect];
-        headerRow.translatesAutoresizingMaskIntoConstraints = NO;
-
-        NSImageView* networkIcon = MakeSymbolImageView(@"network", @"Network", [NSColor secondaryLabelColor]);
-        NSStackView* titleStack = CreateTitleStack();
-        NSStackView* statusStack = CreateStatusStack();
-        NSButton* disclosureButton = CreateDisclosureButton();
-
-        [titleStack setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
-        [titleStack setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
-        [statusStack setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
-        [statusStack setContentCompressionResistancePriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
-
-        [headerRow addSubview:networkIcon];
-        [headerRow addSubview:titleStack];
-        [headerRow addSubview:statusStack];
-        [headerRow addSubview:disclosureButton];
-
-        detailsPanel_ = [[NSView alloc] initWithFrame:NSZeroRect];
-        detailsPanel_.translatesAutoresizingMaskIntoConstraints = NO;
-        detailsPanel_.hidden = YES;
-
-        NSGridView* detailsGrid = [[NSGridView alloc] initWithFrame:NSZeroRect];
-        detailsGrid.translatesAutoresizingMaskIntoConstraints = NO;
-        detailsGrid.columnSpacing = 24.0;
-        detailsGrid.rowSpacing = 7.0;
-
-        bytesSentValue_ = AddDetailRow(detailsGrid, 0, @"Bytes sent:");
-        bytesReceivedValue_ = AddDetailRow(detailsGrid, 1, @"Bytes received:");
-        incomingValue_ = AddDetailRow(detailsGrid, 2, @"Incoming:");
-        outgoingValue_ = AddDetailRow(detailsGrid, 3, @"Outgoing:");
-        [detailsGrid columnAtIndex:0].xPlacement = NSGridCellPlacementLeading;
-        [detailsGrid columnAtIndex:1].xPlacement = NSGridCellPlacementLeading;
-
-        [detailsPanel_ addSubview:detailsGrid];
-        [cardStack addArrangedSubview:headerRow];
-        [cardStack addArrangedSubview:detailsPanel_];
-        [card_ addSubview:cardStack];
-
-        [NSLayoutConstraint activateConstraints:@[
-            [cardStack.leadingAnchor constraintEqualToAnchor:card_.leadingAnchor],
-            [cardStack.trailingAnchor constraintEqualToAnchor:card_.trailingAnchor],
-            [cardStack.topAnchor constraintEqualToAnchor:card_.topAnchor],
-            [cardStack.bottomAnchor constraintEqualToAnchor:card_.bottomAnchor],
-
-            [headerRow.widthAnchor constraintEqualToAnchor:cardStack.widthAnchor],
-            [headerRow.heightAnchor constraintGreaterThanOrEqualToConstant:64.0],
-
-            [networkIcon.leadingAnchor constraintEqualToAnchor:headerRow.leadingAnchor constant:16.0],
-            [networkIcon.centerYAnchor constraintEqualToAnchor:headerRow.centerYAnchor],
-
-            [titleStack.leadingAnchor constraintEqualToAnchor:networkIcon.trailingAnchor constant:12.0],
-            [titleStack.centerYAnchor constraintEqualToAnchor:headerRow.centerYAnchor],
-            [titleStack.topAnchor constraintGreaterThanOrEqualToAnchor:headerRow.topAnchor constant:12.0],
-            [titleStack.bottomAnchor constraintLessThanOrEqualToAnchor:headerRow.bottomAnchor constant:-12.0],
-
-            [statusStack.leadingAnchor constraintGreaterThanOrEqualToAnchor:titleStack.trailingAnchor constant:12.0],
-            [statusStack.trailingAnchor constraintEqualToAnchor:disclosureButton.leadingAnchor constant:-10.0],
-            [statusStack.centerYAnchor constraintEqualToAnchor:headerRow.centerYAnchor],
-
-            [disclosureButton.trailingAnchor constraintEqualToAnchor:headerRow.trailingAnchor constant:-12.0],
-            [disclosureButton.centerYAnchor constraintEqualToAnchor:headerRow.centerYAnchor],
-
-            [detailsPanel_.widthAnchor constraintEqualToAnchor:cardStack.widthAnchor],
-
-            [detailsGrid.leadingAnchor constraintEqualToAnchor:detailsPanel_.leadingAnchor constant:56.0],
-            [detailsGrid.trailingAnchor constraintLessThanOrEqualToAnchor:detailsPanel_.trailingAnchor constant:-16.0],
-            [detailsGrid.topAnchor constraintEqualToAnchor:detailsPanel_.topAnchor constant:6.0],
-            [detailsGrid.bottomAnchor constraintEqualToAnchor:detailsPanel_.bottomAnchor constant:-16.0],
-        ]];
-
-        UpdateDisclosureImage();
-    }
-
-    NSStackView* CreateTitleStack() {
-        NSStackView* textStack = [[NSStackView alloc] initWithFrame:NSZeroRect];
-        textStack.translatesAutoresizingMaskIntoConstraints = NO;
-        textStack.orientation = NSUserInterfaceLayoutOrientationVertical;
-        textStack.alignment = NSLayoutAttributeLeading;
-        textStack.distribution = NSStackViewDistributionFill;
-        textStack.spacing = 2.0;
-
-        title_ = MakeLabel(@"");
-        title_.font = [NSFont systemFontOfSize:14 weight:NSFontWeightSemibold];
-
-        subtitle_ = MakeLabel(@"");
-        subtitle_.font = [NSFont systemFontOfSize:12];
-        subtitle_.textColor = [NSColor secondaryLabelColor];
-
-        [textStack addArrangedSubview:title_];
-        [textStack addArrangedSubview:subtitle_];
-        return textStack;
-    }
-
-    NSStackView* CreateStatusStack() {
-        NSStackView* statusStack = [[NSStackView alloc] initWithFrame:NSZeroRect];
-        statusStack.translatesAutoresizingMaskIntoConstraints = NO;
-        statusStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-        statusStack.alignment = NSLayoutAttributeCenterY;
-        statusStack.distribution = NSStackViewDistributionFill;
-        statusStack.spacing = 4.0;
-
-        incomingIcon_ = MakeSymbolImageView(@"arrow.down.circle.fill", @"Incoming connection", [NSColor systemGreenColor]);
-        outgoingIcon_ = MakeSymbolImageView(@"arrow.up.circle.fill", @"Outgoing connection", [NSColor systemBlueColor]);
-
-        [statusStack addArrangedSubview:incomingIcon_];
-        [statusStack addArrangedSubview:outgoingIcon_];
-        return statusStack;
-    }
-
-    NSButton* CreateDisclosureButton() {
-        disclosureButton_ = MakeIconButton(@"chevron.right", @"Peer details", disclosureTarget_, @selector(toggleDisclosure:));
-        return disclosureButton_;
-    }
-
-    void UpdateDisclosureImage() {
-        NSString* symbol = detailsPanel_.hidden ? @"chevron.right" : @"chevron.down";
-        disclosureButton_.image = MakeSymbolImage(symbol, @"Peer details", 13.0, [NSColor secondaryLabelColor]);
-    }
-
-    NSView* card_ = nullptr;
-    NSTextField* title_ = nullptr;
-    NSTextField* subtitle_ = nullptr;
-    NSImageView* incomingIcon_ = nullptr;
-    NSImageView* outgoingIcon_ = nullptr;
-    NSButton* disclosureButton_ = nullptr;
-    NSView* detailsPanel_ = nullptr;
-    NSTextField* bytesSentValue_ = nullptr;
-    NSTextField* bytesReceivedValue_ = nullptr;
-    NSTextField* incomingValue_ = nullptr;
-    NSTextField* outgoingValue_ = nullptr;
-    MacOSNetworkItemTarget* disclosureTarget_ = nullptr;
-    std::chrono::steady_clock::time_point connectedSince_{};
-    std::string connectedForText_;
-};
-
-@implementation MacOSNetworkItemTarget
-
-- (instancetype)initWithOwner:(MacOSNetworkItemView*)owner {
-    self = [super init];
-    if (self) {
-        owner_ = owner;
-    }
-    return self;
-}
-
-- (void)toggleDisclosure:(id)sender {
-    (void)sender;
-    if (owner_ != nullptr) {
-        owner_->ToggleDisclosure();
-    }
-}
-
-@end
-
-class MacOSNetworkView {
-public:
-    MacOSNetworkView(PeerDisplay& peerDisplay, std::function<void()> keyViewChangedHandler)
-        : peerDisplay_(peerDisplay)
-        , keyViewChangedHandler_(std::move(keyViewChangedHandler)) {
-        BuildView();
-    }
-
-    NSView* View() const {
-        return container_;
-    }
-
-    void Poll() {
-        auto items = peerDisplay_.Query();
-        std::sort(items.begin(), items.end(), ItemLess);
-
-        const auto now = std::chrono::steady_clock::now();
-        bool keyViewsChanged = false;
-
-        for (std::size_t index = entries_.size(); index > 0; --index) {
-            const auto entryIndex = index - 1;
-            const auto found = std::find_if(items.begin(), items.end(), [&](const PeerDisplayItem& item) {
-                return SameHostID(entries_[entryIndex].item, item);
-            });
-            if (found == items.end()) {
-                NSView* view = entries_[entryIndex].view->View();
-                [itemsPanel_ removeArrangedSubview:view];
-                [view removeFromSuperview];
-                entries_.erase(entries_.begin() + entryIndex);
-                keyViewsChanged = true;
-            }
-        }
-
-        for (std::size_t itemIndex = 0; itemIndex < items.size(); ++itemIndex) {
-            const auto& item = items[itemIndex];
-            const auto existingIndex = FindEntryByHostID(item);
-            if (existingIndex == entries_.size()) {
-                Entry entry;
-                entry.item = item;
-                entry.view = std::make_unique<MacOSNetworkItemView>(item);
-                entry.view->RefreshConnectedFor(now);
-                NSView* entryView = entry.view->View();
-                [itemsPanel_ insertArrangedSubview:entryView atIndex:static_cast<NSUInteger>(itemIndex)];
-                [entryView.widthAnchor constraintEqualToAnchor:itemsPanel_.widthAnchor].active = YES;
-                entries_.insert(entries_.begin() + itemIndex, std::move(entry));
-                keyViewsChanged = true;
-                continue;
-            }
-
-            if (existingIndex != itemIndex) {
-                auto entry = std::move(entries_[existingIndex]);
-                entries_.erase(entries_.begin() + existingIndex);
-                [itemsPanel_ removeArrangedSubview:entry.view->View()];
-                [entry.view->View() removeFromSuperview];
-
-                const auto insertIndex = itemIndex > entries_.size() ? entries_.size() : itemIndex;
-                [itemsPanel_ insertArrangedSubview:entry.view->View() atIndex:static_cast<NSUInteger>(insertIndex)];
-                entries_.insert(entries_.begin() + insertIndex, std::move(entry));
-                keyViewsChanged = true;
-            }
-
-            UpdateEntry(entries_[itemIndex], item, now);
-        }
-
-        SetEmptyMessageVisible(entries_.empty());
-        if (keyViewsChanged && keyViewChangedHandler_) {
-            keyViewChangedHandler_();
-        }
-    }
-
-    void AppendKeyViews(NSMutableArray<NSView*>* keyViews) const {
-        for (const auto& entry : entries_) {
-            NSButton* disclosureButton = entry.view->DisclosureButton();
-            if (disclosureButton != nil) {
-                [keyViews addObject:disclosureButton];
-            }
-        }
-    }
-
-private:
-    struct Entry {
-        PeerDisplayItem item;
-        std::unique_ptr<MacOSNetworkItemView> view;
-    };
-
-    void BuildView() {
-        container_ = [[NSStackView alloc] initWithFrame:NSZeroRect];
-        container_.translatesAutoresizingMaskIntoConstraints = NO;
-        container_.orientation = NSUserInterfaceLayoutOrientationVertical;
-        container_.alignment = NSLayoutAttributeLeading;
-        container_.distribution = NSStackViewDistributionFill;
-        container_.spacing = 8.0;
-        container_.detachesHiddenViews = YES;
-
-        NSTextField* heading = [NSTextField labelWithString:@"Peers"];
-        heading.translatesAutoresizingMaskIntoConstraints = NO;
-        heading.font = [NSFont systemFontOfSize:16 weight:NSFontWeightSemibold];
-        heading.textColor = [NSColor labelColor];
-
-        emptyMessage_ = MakeWrappingLabel(@"Make sure your devices are using the exact same network name and secret. Both are case-sensitive.",
-                                          13.0,
-                                          [NSColor secondaryLabelColor]);
-
-        itemsPanel_ = [[NSStackView alloc] initWithFrame:NSZeroRect];
-        itemsPanel_.translatesAutoresizingMaskIntoConstraints = NO;
-        itemsPanel_.orientation = NSUserInterfaceLayoutOrientationVertical;
-        itemsPanel_.alignment = NSLayoutAttributeLeading;
-        itemsPanel_.distribution = NSStackViewDistributionFill;
-        itemsPanel_.spacing = 8.0;
-
-        [container_ addArrangedSubview:heading];
-        [container_ addArrangedSubview:emptyMessage_];
-        [container_ addArrangedSubview:itemsPanel_];
-
-        [heading.widthAnchor constraintLessThanOrEqualToAnchor:container_.widthAnchor].active = YES;
-        [emptyMessage_.widthAnchor constraintEqualToAnchor:container_.widthAnchor].active = YES;
-        [itemsPanel_.widthAnchor constraintEqualToAnchor:container_.widthAnchor].active = YES;
-    }
-
-    static bool ItemLess(const PeerDisplayItem& left, const PeerDisplayItem& right) {
-        return left.hostID < right.hostID;
-    }
-
-    static bool SameHostID(const PeerDisplayItem& left, const PeerDisplayItem& right) {
-        return left.hostID == right.hostID;
-    }
-
-    std::size_t FindEntryByHostID(const PeerDisplayItem& item) const {
-        const auto found = std::find_if(entries_.begin(), entries_.end(), [&](const Entry& entry) {
-            return SameHostID(entry.item, item);
-        });
-        return found == entries_.end() ? entries_.size() : static_cast<std::size_t>(found - entries_.begin());
-    }
-
-    void SetEmptyMessageVisible(bool visible) {
-        emptyMessage_.hidden = !visible;
-    }
-
-    void UpdateEntry(Entry& entry, const PeerDisplayItem& item, std::chrono::steady_clock::time_point now) {
-        if (entry.item.hostName != item.hostName) {
-            entry.view->UpdateHostName(item.hostName);
-        }
-        if (entry.item.hostID != item.hostID) {
-            entry.view->UpdateHostID(item.hostID);
-        }
-        if (entry.item.hasIncomingConnection != item.hasIncomingConnection) {
-            entry.view->UpdateIncomingConnection(item.hasIncomingConnection);
-        }
-        if (entry.item.hasOutgoingConnection != item.hasOutgoingConnection) {
-            entry.view->UpdateOutgoingConnection(item.hasOutgoingConnection);
-        }
-        if (entry.item.bytesSent != item.bytesSent) {
-            entry.view->UpdateBytesSent(item.bytesSent);
-        }
-        if (entry.item.bytesReceived != item.bytesReceived) {
-            entry.view->UpdateBytesReceived(item.bytesReceived);
-        }
-        if (entry.item.connectedSince != item.connectedSince) {
-            entry.view->UpdateConnectedSince(item.connectedSince);
-        } else {
-            entry.view->RefreshConnectedFor(now);
-        }
-
-        entry.item = item;
-    }
-
-    PeerDisplay& peerDisplay_;
-    std::function<void()> keyViewChangedHandler_;
-    NSStackView* container_ = nullptr;
-    NSTextField* emptyMessage_ = nullptr;
-    NSStackView* itemsPanel_ = nullptr;
-    std::vector<Entry> entries_;
-};
-
 MacOSClippPage::MacOSClippPage(std::function<void()> keyViewChangedHandler)
     : keyViewChangedHandler_(std::move(keyViewChangedHandler))
     , pageState_(std::make_shared<MacOSClippPageState>()) {
     auto state = pageState_;
-    keyDerivationWorker_ = std::make_unique<MacOSKeyDerivationWorker>([this, state](const KeyManager::NetworkKey& key) {
+    keyDerivationWorker_ = std::make_unique<uiClippPage::KeyDerivationWorker>([this, state](const KeyManager::NetworkKey& key) {
         auto keyCopy = std::make_shared<KeyManager::NetworkKey>(key);
         dispatch_async(dispatch_get_main_queue(), ^{
             if (state->alive.load()) {
@@ -849,7 +151,7 @@ void MacOSClippPage::OnShown() {
         return;
     }
 
-    SetFieldText(networkNameField_, ToNSString(g_settings.networkName()));
+    MacOSSetFieldText(networkNameField_, MacOSToNSString(g_settings.networkName()));
     SetupPasswordFields();
     BeginPeerNotifications();
     StartNetworkPollTimer();
@@ -917,7 +219,7 @@ void MacOSClippPage::ConnectKeyViewLoop(NSView* nextKeyView) {
 void MacOSClippPage::OnFieldEditingBegan(NSTextField* field) {
     if (field == passwordField_ && IsMaskedPasswordPlaceholder(passwordField_)) {
         suppressPasswordChange_ = true;
-        SetFieldText(passwordField_, @"");
+        MacOSSetFieldText(passwordField_, @"");
         suppressPasswordChange_ = false;
     }
 }
@@ -927,7 +229,7 @@ void MacOSClippPage::OnFieldEditingChanged(NSTextField* field) {
         return;
     }
 
-    const std::string password = ToStdString(passwordField_.stringValue);
+    const std::string password = MacOSToStdString(passwordField_.stringValue);
     if (password == kMaskedPassword) {
         return;
     }
@@ -942,7 +244,7 @@ void MacOSClippPage::OnFieldEditingChanged(NSTextField* field) {
 void MacOSClippPage::OnFieldEditingEnded(NSTextField* field) {
     if (field == networkNameField_) {
         ApplyNetworkNameChange();
-    } else if (field == passwordField_ && ToStdString(passwordField_.stringValue).empty()) {
+    } else if (field == passwordField_ && MacOSToStdString(passwordField_.stringValue).empty()) {
         StopPasswordDebounceTimer();
         SetupPasswordFields();
     }
@@ -986,7 +288,7 @@ void MacOSClippPage::BuildView() {
     heading.font = [NSFont systemFontOfSize:28 weight:NSFontWeightSemibold];
     heading.textColor = [NSColor labelColor];
 
-    NSTextField* intro = MakeWrappingLabel(@"Secure cross-platform clipboard sync with peer-to-peer networking.",
+    NSTextField* intro = MacOSMakeWrappingLabel(@"Secure cross-platform clipboard sync with peer-to-peer networking.",
                                            14.0,
                                            [NSColor secondaryLabelColor]);
 
@@ -995,32 +297,32 @@ void MacOSClippPage::BuildView() {
     networkHeader.font = [NSFont systemFontOfSize:16 weight:NSFontWeightSemibold];
     networkHeader.textColor = [NSColor labelColor];
 
-    NSBox* section = MakeGroupBox();
-    networkNameField_ = MakeTextField(240.0);
+    NSBox* section = MacOSMakeGroupBox();
+    networkNameField_ = MacOSMakeTextField(240.0);
     networkNameField_.contentType = NSTextContentTypeUsername;
-    passwordField_ = MakeSecureTextField(240.0);
+    passwordField_ = MacOSMakeSecureTextField(240.0);
     fieldDelegate_ = [[MacOSClippPageFieldDelegate alloc] initWithOwner:this];
     networkNameField_.delegate = fieldDelegate_;
     passwordField_.delegate = fieldDelegate_;
 
     NSMutableArray<NSLayoutConstraint*>* sectionConstraints = [NSMutableArray array];
-    AddInputRow(section, MakeLabel(@"Name"), networkNameField_, nil, sectionConstraints);
-    AddInputRow(section, MakeLabel(@"Secret"), passwordField_, networkNameField_, sectionConstraints);
+    AddInputRow(section, MacOSMakeLabel(@"Name"), networkNameField_, nil, sectionConstraints);
+    AddInputRow(section, MacOSMakeLabel(@"Secret"), passwordField_, networkNameField_, sectionConstraints);
     [sectionConstraints addObject:[passwordField_.bottomAnchor constraintEqualToAnchor:section.bottomAnchor constant:-kSectionInsetY]];
     [NSLayoutConstraint activateConstraints:sectionConstraints];
 
-    passwordStatusPanel_ = MakeGroupBox();
-    NSImageView* keyIcon = MakeSymbolImageView(@"key.fill", @"Network key", [NSColor secondaryLabelColor]);
+    passwordStatusPanel_ = MacOSMakeGroupBox();
+    NSImageView* keyIcon = MacOSMakeSymbolImageView(@"key.fill", @"Network key", [NSColor secondaryLabelColor]);
     NSStackView* hashStack = [[NSStackView alloc] initWithFrame:NSZeroRect];
     hashStack.translatesAutoresizingMaskIntoConstraints = NO;
     hashStack.orientation = NSUserInterfaceLayoutOrientationVertical;
     hashStack.alignment = NSLayoutAttributeLeading;
     hashStack.spacing = 3.0;
 
-    passwordHashText_ = MakeWrappingLabel(@"", 13.0, [NSColor labelColor]);
+    passwordHashText_ = MacOSMakeWrappingLabel(@"", 13.0, [NSColor labelColor]);
     passwordHashText_.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
 
-    NSTextField* hashExplainer = MakeWrappingLabel(@"Network key fingerprint. Used only on this screen; not in itself a secret.",
+    NSTextField* hashExplainer = MacOSMakeWrappingLabel(@"Network key fingerprint. Used only on this screen; not in itself a secret.",
                                                    12.0,
                                                    [NSColor secondaryLabelColor]);
     [hashStack addArrangedSubview:passwordHashText_];
@@ -1039,9 +341,9 @@ void MacOSClippPage::BuildView() {
         [hashStack.bottomAnchor constraintEqualToAnchor:passwordStatusPanel_.bottomAnchor constant:-kSectionInsetY],
     ]];
 
-    passwordInfoPanel_ = MakeGroupBox();
-    NSImageView* infoIcon = MakeSymbolImageView(@"info.circle.fill", @"Info", [NSColor secondaryLabelColor]);
-    passwordInfoText_ = MakeWrappingLabel(@"", 13.0, [NSColor secondaryLabelColor]);
+    passwordInfoPanel_ = MacOSMakeGroupBox();
+    NSImageView* infoIcon = MacOSMakeSymbolImageView(@"info.circle.fill", @"Info", [NSColor secondaryLabelColor]);
+    passwordInfoText_ = MacOSMakeWrappingLabel(@"", 13.0, [NSColor secondaryLabelColor]);
 
     [passwordInfoPanel_ addSubview:infoIcon];
     [passwordInfoPanel_ addSubview:passwordInfoText_];
@@ -1094,7 +396,7 @@ void MacOSClippPage::BuildView() {
         [networkView.widthAnchor constraintEqualToAnchor:contentStack.widthAnchor],
     ]];
 
-    SetFieldText(networkNameField_, ToNSString(g_settings.networkName()));
+    MacOSSetFieldText(networkNameField_, MacOSToNSString(g_settings.networkName()));
 }
 
 void MacOSClippPage::SetupPasswordFields() {
@@ -1104,13 +406,13 @@ void MacOSClippPage::SetupPasswordFields() {
 
     suppressPasswordChange_ = true;
     if (g_keyManager.HaveNetworkKey()) {
-        SetFieldText(passwordField_, @(kMaskedPassword));
-        SetFieldText(passwordHashText_, ToNSString(g_keyManager.GetNetworkFingerprintHash()));
+        MacOSSetFieldText(passwordField_, @(kMaskedPassword));
+        MacOSSetFieldText(passwordHashText_, MacOSToNSString(g_keyManager.GetNetworkFingerprintHash()));
         passwordStatusPanel_.hidden = NO;
         passwordInfoPanel_.hidden = YES;
     } else {
-        SetFieldText(passwordField_, @"");
-        SetFieldText(passwordInfoText_, @"Enter network secret to create or join a network.");
+        MacOSSetFieldText(passwordField_, @"");
+        MacOSSetFieldText(passwordInfoText_, @"Enter network secret to create or join a network.");
         passwordStatusPanel_.hidden = YES;
         passwordInfoPanel_.hidden = NO;
     }
@@ -1122,17 +424,17 @@ void MacOSClippPage::NewPasswordHashReceived() {
         return;
     }
 
-    SetFieldText(passwordHashText_, ToNSString(g_keyManager.GetNetworkFingerprintHash()));
+    MacOSSetFieldText(passwordHashText_, MacOSToNSString(g_keyManager.GetNetworkFingerprintHash()));
     passwordStatusPanel_.hidden = NO;
     passwordInfoPanel_.hidden = YES;
 }
 
 void MacOSClippPage::ApplyNetworkNameChange() {
-    const std::string newName = ToStdString(networkNameField_.stringValue);
+    const std::string newName = MacOSToStdString(networkNameField_.stringValue);
     const std::string currentName = g_settings.networkName();
 
     if (newName.empty()) {
-        SetFieldText(networkNameField_, ToNSString(currentName));
+        MacOSSetFieldText(networkNameField_, MacOSToNSString(currentName));
         return;
     }
 
@@ -1177,16 +479,15 @@ void MacOSClippPage::DerivePasswordFromCurrentField() {
     passwordInfoPanel_.hidden = NO;
 
     if (passwordText.length < 8) {
-        SetFieldText(passwordInfoText_, @"Password must be at least 8 characters.");
+        MacOSSetFieldText(passwordInfoText_, @"Password must be at least 8 characters.");
         return;
     }
 
-    SetFieldText(passwordInfoText_, @"... working ...");
+    MacOSSetFieldText(passwordInfoText_, @"... working ...");
 
     const std::string networkName = g_settings.networkName();
-    std::string password = ToStdString(passwordField_.stringValue);
-    std::string keyInput = networkName + "|";
-    keyInput += password;
+    std::string password = MacOSToStdString(passwordField_.stringValue);
+    std::string keyInput = uiClippPage::BuildKeyDerivationInput(networkName, password);
     keyDerivationWorker_->RequestKeyDerivation(keyInput);
     sodium_memzero(password.data(), password.capacity());
     sodium_memzero(keyInput.data(), keyInput.capacity());
@@ -1199,7 +500,7 @@ void MacOSClippPage::OnDerivedKey(const KeyManager::NetworkKey& key) {
     if (!g_keyManager.SetNetworkKey(key, &errorMessage)) {
         passwordStatusPanel_.hidden = YES;
         passwordInfoPanel_.hidden = NO;
-        SetFieldText(passwordInfoText_, ToNSString("Unable to store network key: " + errorMessage));
+        MacOSSetFieldText(passwordInfoText_, MacOSToNSString("Unable to store network key: " + errorMessage));
         return;
     }
 

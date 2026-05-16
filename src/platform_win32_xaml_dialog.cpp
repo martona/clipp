@@ -286,7 +286,7 @@ private:
 
         default:
             if (msg == derivedKeyMessage_) {
-                auto* result = reinterpret_cast<KeyDerivationWorker::KeyDerivationResult*>(wParam);
+                auto* result = reinterpret_cast<const KeyManager::NetworkKey*>(wParam);
                 if (clippPage_) {
                     clippPage_->OnDerivedKey(result);
                 }
