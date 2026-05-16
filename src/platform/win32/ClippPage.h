@@ -4,7 +4,7 @@
 #include "PeerDisplay.h"
 #include "PeerManager.h"
 #include "platform/uiClippPage.h"
-#include "platform_win32_NetworkView.h"
+#include "NetworkView.h"
 
 #include <memory>
 

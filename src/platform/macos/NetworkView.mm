@@ -1,8 +1,8 @@
-#include "platform_macos_NetworkView.h"
+#include "NetworkView.h"
 
 #ifdef __APPLE__
 
-#include "platform_macos_UiHelpers.h"
+#include "UiHelpers.h"
 
 #include <algorithm>
 #include <chrono>

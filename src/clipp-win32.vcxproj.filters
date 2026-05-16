@@ -30,10 +30,10 @@
     <ClCompile Include="CryptoChannel.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="platform_win32_Clipboard.cpp">
+    <ClCompile Include="platform\win32\Clipboard.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="platform_win32_AutoStart.cpp">
+    <ClCompile Include="platform\win32\AutoStart.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Logger.cpp">
@@ -54,34 +54,34 @@
     <ClCompile Include="NetworkRuntime.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="platform_win32_Settings.cpp">
+    <ClCompile Include="platform\win32\Settings.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="platform_win32_NetworkItem.cpp">
+    <ClCompile Include="platform\win32\NetworkItem.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="platform_win32_NetworkView.cpp">
+    <ClCompile Include="platform\win32\NetworkView.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="platform_win32_SettingsPage.cpp">
+    <ClCompile Include="platform\win32\SettingsPage.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="platform_win32_TerminalLogView.cpp">
+    <ClCompile Include="platform\win32\TerminalLogView.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="platform_win32_ClippPage.cpp">
+    <ClCompile Include="platform\win32\ClippPage.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="platform_win32_LogsPage.cpp">
+    <ClCompile Include="platform\win32\LogsPage.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="platform_win32_PlaceholderPage.cpp">
+    <ClCompile Include="platform\win32\PlaceholderPage.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="platform_win32_tray.cpp">
+    <ClCompile Include="platform\win32\tray.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="platform_win32_xaml_dialog.cpp">
+    <ClCompile Include="platform\win32\xaml_dialog.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -116,10 +116,10 @@
     <ClInclude Include="platform.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="platform_win32_AutoStart.h">
+    <ClInclude Include="platform\win32\AutoStart.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="platform_win32_xaml_dialog.h">
+    <ClInclude Include="platform\win32\xaml_dialog.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Logger.h">
@@ -146,25 +146,28 @@
     <ClInclude Include="platform\uiClippPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="platform_win32_NetworkItem.h">
+    <ClInclude Include="platform\uiSettingsPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="platform_win32_NetworkView.h">
+    <ClInclude Include="platform\win32\NetworkItem.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="platform_win32_SettingsPage.h">
+    <ClInclude Include="platform\win32\NetworkView.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="platform_win32_TerminalLogView.h">
+    <ClInclude Include="platform\win32\SettingsPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="platform_win32_ClippPage.h">
+    <ClInclude Include="platform\win32\TerminalLogView.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="platform_win32_LogsPage.h">
+    <ClInclude Include="platform\win32\ClippPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="platform_win32_PlaceholderPage.h">
+    <ClInclude Include="platform\win32\LogsPage.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="platform\win32\PlaceholderPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="utils_socket.h">

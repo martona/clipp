@@ -2,11 +2,11 @@
 #include "PeerDisplay.h"
 #include "PeerManager.h"
 #include "clipp-win32-darkmode32/DMSubclass.h"
-#include "platform_win32_ClippPage.h"
-#include "platform_win32_LogsPage.h"
-#include "platform_win32_PlaceholderPage.h"
-#include "platform_win32_SettingsPage.h"
-#include "platform_win32_AutoStart.h"
+#include "ClippPage.h"
+#include "LogsPage.h"
+#include "PlaceholderPage.h"
+#include "SettingsPage.h"
+#include "AutoStart.h"
 
 #include <algorithm>
 #include <cmath>
@@ -35,7 +35,7 @@
 #include <winrt/Windows.UI.Xaml.Media.h>
 #include <winrt/base.h>
 
-#include "platform_win32_xaml_dialog.h"
+#include "xaml_dialog.h"
 
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "runtimeobject.lib")

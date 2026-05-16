@@ -98,6 +98,8 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ObjectFileName>$(IntDir)%(RelativeDir)</ObjectFileName>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -118,6 +120,8 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ObjectFileName>$(IntDir)%(RelativeDir)</ObjectFileName>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -137,6 +141,8 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ObjectFileName>$(IntDir)%(RelativeDir)</ObjectFileName>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -158,6 +164,8 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ObjectFileName>$(IntDir)%(RelativeDir)</ObjectFileName>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -181,24 +189,24 @@
     <ClCompile Include="CryptoChannel.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="NetworkRuntime.cpp" />
-    <ClCompile Include="platform_win32_Clipboard.cpp" />
-    <ClCompile Include="platform_win32_AutoStart.cpp" />
+    <ClCompile Include="platform\win32\Clipboard.cpp" />
+    <ClCompile Include="platform\win32\AutoStart.cpp" />
     <ClCompile Include="MDNSThread.cpp" />
     <ClCompile Include="KeyManager.cpp" />
     <ClCompile Include="Logger.cpp" />
     <ClCompile Include="Peer.cpp" />
     <ClCompile Include="PeerDisplay.cpp" />
     <ClCompile Include="PeerManager.cpp" />
-    <ClCompile Include="platform_win32_Settings.cpp" />
-    <ClCompile Include="platform_win32_NetworkItem.cpp" />
-    <ClCompile Include="platform_win32_NetworkView.cpp" />
-    <ClCompile Include="platform_win32_SettingsPage.cpp" />
-    <ClCompile Include="platform_win32_TerminalLogView.cpp" />
-    <ClCompile Include="platform_win32_ClippPage.cpp" />
-    <ClCompile Include="platform_win32_LogsPage.cpp" />
-    <ClCompile Include="platform_win32_PlaceholderPage.cpp" />
-    <ClCompile Include="platform_win32_tray.cpp" />
-    <ClCompile Include="platform_win32_xaml_dialog.cpp" />
+    <ClCompile Include="platform\win32\Settings.cpp" />
+    <ClCompile Include="platform\win32\NetworkItem.cpp" />
+    <ClCompile Include="platform\win32\NetworkView.cpp" />
+    <ClCompile Include="platform\win32\SettingsPage.cpp" />
+    <ClCompile Include="platform\win32\TerminalLogView.cpp" />
+    <ClCompile Include="platform\win32\ClippPage.cpp" />
+    <ClCompile Include="platform\win32\LogsPage.cpp" />
+    <ClCompile Include="platform\win32\PlaceholderPage.cpp" />
+    <ClCompile Include="platform\win32\tray.cpp" />
+    <ClCompile Include="platform\win32\xaml_dialog.cpp" />
     <ClCompile Include="Settings.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -209,15 +217,16 @@
     <ClInclude Include="CryptoChannel.h" />
     <ClInclude Include="platform.h" />
     <ClInclude Include="platform\uiClippPage.h" />
-    <ClInclude Include="platform_win32_AutoStart.h" />
-    <ClInclude Include="platform_win32_NetworkItem.h" />
-    <ClInclude Include="platform_win32_NetworkView.h" />
-    <ClInclude Include="platform_win32_SettingsPage.h" />
-    <ClInclude Include="platform_win32_TerminalLogView.h" />
-    <ClInclude Include="platform_win32_ClippPage.h" />
-    <ClInclude Include="platform_win32_LogsPage.h" />
-    <ClInclude Include="platform_win32_PlaceholderPage.h" />
-    <ClInclude Include="platform_win32_xaml_dialog.h" />
+    <ClInclude Include="platform\uiSettingsPage.h" />
+    <ClInclude Include="platform\win32\AutoStart.h" />
+    <ClInclude Include="platform\win32\NetworkItem.h" />
+    <ClInclude Include="platform\win32\NetworkView.h" />
+    <ClInclude Include="platform\win32\SettingsPage.h" />
+    <ClInclude Include="platform\win32\TerminalLogView.h" />
+    <ClInclude Include="platform\win32\ClippPage.h" />
+    <ClInclude Include="platform\win32\LogsPage.h" />
+    <ClInclude Include="platform\win32\PlaceholderPage.h" />
+    <ClInclude Include="platform\win32\xaml_dialog.h" />
     <ClInclude Include="MDNSThread.h" />
     <ClInclude Include="KeyManager.h" />
     <ClInclude Include="Logger.h" />

@@ -1,8 +1,8 @@
-#include "platform_macos_TerminalLogView.h"
+#include "TerminalLogView.h"
 
 #ifdef __APPLE__
 
-#include "platform_macos_UiHelpers.h"
+#include "UiHelpers.h"
 
 #import <AppKit/AppKit.h>
 

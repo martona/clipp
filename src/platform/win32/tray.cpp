@@ -1,7 +1,7 @@
 #include <Windows.h>
 #include "Logger.h"
-#include "platform_win32_AutoStart.h"
-#include "platform_win32_xaml_dialog.h"
+#include "AutoStart.h"
+#include "xaml_dialog.h"
 #include "clipp-win32-darkmode32/DMSubclass.h"
 #pragma comment(lib, "darkmode32.lib")
 
@@ -56,8 +56,8 @@ LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                 AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
                 AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, L"Exit");
 
-                // 2. Windows bug workaround: You must bring the hidden window 
-                // to the foreground before showing the menu, or it won't disappear 
+                // 2. Windows bug workaround: You must bring the hidden window
+                // to the foreground before showing the menu, or it won't disappear
                 // when the user clicks away.
                 SetForegroundWindow(hwnd);
 

@@ -1,4 +1,4 @@
-#include "platform_win32_SettingsPage.h"
+#include "SettingsPage.h"
 
 #include "NetworkRuntime.h"
 #include "Settings.h"

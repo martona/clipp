@@ -1,7 +1,7 @@
 #pragma once
 
 #include "PeerDisplay.h"
-#include "platform_win32_NetworkItem.h"
+#include "NetworkItem.h"
 
 #include <cstddef>
 #include <memory>

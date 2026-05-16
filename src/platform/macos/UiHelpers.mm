@@ -1,4 +1,4 @@
-#include "platform_macos_UiHelpers.h"
+#include "UiHelpers.h"
 
 #ifdef __APPLE__
 

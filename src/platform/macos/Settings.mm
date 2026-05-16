@@ -1,5 +1,5 @@
 #include "Settings.h"
-#include "platform_macos_UiHelpers.h"
+#include "UiHelpers.h"
 #include <cstring>
 #include <unistd.h>
 #include <pwd.h>

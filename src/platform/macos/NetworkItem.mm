@@ -1,9 +1,9 @@
-#include "platform_macos_NetworkItem.h"
+#include "NetworkItem.h"
 
 #ifdef __APPLE__
 
 #include "platform/uiClippPage.h"
-#include "platform_macos_UiHelpers.h"
+#include "UiHelpers.h"
 
 #include <chrono>
 #include <cstdint>

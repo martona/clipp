@@ -1,4 +1,4 @@
-#include "platform_win32_PlaceholderPage.h"
+#include "PlaceholderPage.h"
 
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.UI.Text.h>

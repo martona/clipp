@@ -1,4 +1,4 @@
-#include "platform_win32_NetworkItem.h"
+#include "NetworkItem.h"
 
 #include "platform/uiClippPage.h"
 

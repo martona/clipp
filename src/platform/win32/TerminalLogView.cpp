@@ -1,4 +1,4 @@
-#include "platform_win32_TerminalLogView.h"
+#include "TerminalLogView.h"
 
 #include <cstdint>
 

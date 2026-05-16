@@ -1,4 +1,4 @@
-#include "platform_win32_AutoStart.h"
+#include "AutoStart.h"
 
 #include "Logger.h"
 

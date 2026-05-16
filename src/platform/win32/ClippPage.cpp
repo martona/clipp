@@ -1,4 +1,4 @@
-#include "platform_win32_ClippPage.h"
+#include "ClippPage.h"
 
 #include "KeyManager.h"
 #include "Logger.h"

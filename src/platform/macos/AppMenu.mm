@@ -3,9 +3,9 @@
 #ifdef __APPLE__
 
 #include "Logger.h"
-#include "platform_macos_ClippPage.h"
-#include "platform_macos_SettingsPage.h"
-#include "platform_macos_TerminalLogView.h"
+#include "ClippPage.h"
+#include "SettingsPage.h"
+#include "TerminalLogView.h"
 
 #import <AppKit/AppKit.h>
 #import <ServiceManagement/ServiceManagement.h>

@@ -45,7 +45,7 @@ static void ClipboardThreadProc(std::promise<bool> initPromise, ClipboardCallbac
         @autoreleasepool {
             NSPasteboard* pb = [NSPasteboard generalPasteboard];
             NSInteger currentCount = [pb changeCount];
-            
+
             if (currentCount != g_lastChangeCount.load()) {
                 g_lastChangeCount.store(currentCount);
                 if (g_clipboardCallback) {
@@ -78,7 +78,7 @@ ClipboardPayload ReadClipboardData(PlatformWindowHandle hwnd) {
 
     @autoreleasepool {
         NSPasteboard* pb = [NSPasteboard generalPasteboard];
-        
+
         // Try to read Text
         NSString* text = [pb stringForType:NSPasteboardTypeString];
         if (text) {

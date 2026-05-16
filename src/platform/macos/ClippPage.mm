@@ -1,4 +1,4 @@
-#include "platform_macos_ClippPage.h"
+#include "ClippPage.h"
 
 #ifdef __APPLE__
 
@@ -7,8 +7,8 @@
 #include "PeerManager.h"
 #include "Settings.h"
 #include "platform/uiClippPage.h"
-#include "platform_macos_NetworkView.h"
-#include "platform_macos_UiHelpers.h"
+#include "NetworkView.h"
+#include "UiHelpers.h"
 
 #include <atomic>
 #include <cstdint>

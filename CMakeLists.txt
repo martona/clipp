@@ -46,15 +46,25 @@ if (APPLE)
     set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
 endif()
 
-file(GLOB SOURCES "src/*.cpp" "src/*.mm" "src/*.h")
-list(FILTER SOURCES EXCLUDE REGEX "vcpkg_installed")
+file(GLOB SOURCES CONFIGURE_DEPENDS
+    "src/*.cpp"
+    "src/*.mm"
+    "src/*.h"
+    "src/platform/*.h"
+)
 
 if (APPLE)
-    list(FILTER SOURCES EXCLUDE REGEX "platform_win32_*")
-endif()
-
-if (WIN32)
-    list(FILTER SOURCES EXCLUDE REGEX "platform_macos_*")
+    file(GLOB PLATFORM_SOURCES CONFIGURE_DEPENDS
+        "src/platform/macos/*.h"
+        "src/platform/macos/*.mm"
+    )
+    list(APPEND SOURCES ${PLATFORM_SOURCES})
+elseif (WIN32)
+    file(GLOB PLATFORM_SOURCES CONFIGURE_DEPENDS
+        "src/platform/win32/*.cpp"
+        "src/platform/win32/*.h"
+    )
+    list(APPEND SOURCES ${PLATFORM_SOURCES})
 endif()
 
 if (APPLE)
@@ -62,6 +72,8 @@ if (APPLE)
 else()
     add_executable(clipp ${SOURCES})
 endif()
+
+target_include_directories(clipp PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
 if (APPLE)
     target_compile_options(clipp PRIVATE "-Wno-deprecated-declarations")
@@ -76,7 +88,7 @@ find_package(lodepng CONFIG REQUIRED)
 ## Force CMake to print the absolute path where it found the configuration, then crash
 #message(FATAL_ERROR ">>> GHOST CACHE LOCATED AT: ${unofficial-sodium_DIR} <<<")
 
-target_link_libraries(clipp PRIVATE 
+target_link_libraries(clipp PRIVATE
     unofficial-sodium::sodium
     xxHash::xxhash
     zstd::libzstd
@@ -109,7 +121,7 @@ if (APPLE)
     set_target_properties(clipp PROPERTIES
         MACOSX_BUNDLE_BUNDLE_NAME "Clipp"
         MACOSX_BUNDLE_GUI_IDENTIFIER "net.clipp.app"
-        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/macos/Info.plist.in"
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/macos/Info.plist.in"
         XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "net.clipp.app"
     )
 

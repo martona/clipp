@@ -3,7 +3,7 @@
 #ifdef __APPLE__
 
 #include "PeerDisplay.h"
-#include "platform_macos_NetworkItem.h"
+#include "NetworkItem.h"
 
 #include <chrono>
 #include <cstddef>

@@ -1,11 +1,11 @@
-#include "platform_macos_SettingsPage.h"
+#include "SettingsPage.h"
 
 #ifdef __APPLE__
 
 #include "NetworkRuntime.h"
 #include "Settings.h"
 #include "platform/uiSettingsPage.h"
-#include "platform_macos_UiHelpers.h"
+#include "UiHelpers.h"
 
 #import <AppKit/AppKit.h>
 

@@ -1,4 +1,4 @@
-#include "platform_win32_LogsPage.h"
+#include "LogsPage.h"
 
 #include "Logger.h"
 

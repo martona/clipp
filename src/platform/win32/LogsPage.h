@@ -1,6 +1,6 @@
 #pragma once
 
-#include "platform_win32_TerminalLogView.h"
+#include "TerminalLogView.h"
 
 #include <memory>
 #include <mutex>
