@@ -7,7 +7,7 @@
 #import <AppKit/AppKit.h>
 
 namespace {
-constexpr unsigned int kMaxTerminalLogLines = 5000;
+constexpr unsigned int kMaxTerminalLogLines = 1000;
 
 NSColor* DefaultTextColor() {
     return [NSColor colorWithCalibratedWhite:0.82 alpha:1.0];

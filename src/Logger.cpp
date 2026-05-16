@@ -11,7 +11,7 @@
 
 Logger g_logger;
 
-static constexpr size_t kMaxRetainedLogLines = 5000;
+static constexpr size_t kMaxRetainedLogLines = 1000;
 
 Logger::LogHistory Logger::AddLogReflector(LogReflectorCallback callback) {
     std::lock_guard<std::mutex> lock(mutex_);

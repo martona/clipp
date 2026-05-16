@@ -8,7 +8,7 @@
 #include <winrt/Windows.UI.Xaml.Documents.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
 
-static constexpr uint32_t kMaxTerminalLogLines = 5000;
+static constexpr uint32_t kMaxTerminalLogLines = 1000;
 
 TerminalLogView::TerminalLogView() {
     using namespace winrt::Windows::UI::Xaml;
