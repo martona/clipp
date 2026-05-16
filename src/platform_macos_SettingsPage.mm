@@ -11,6 +11,33 @@
 extern Settings g_settings;
 extern NetworkRuntime g_networkRuntime;
 
+@interface MacOSSettingsPageFieldDelegate : NSObject <NSTextFieldDelegate> {
+@private
+    MacOSSettingsPage* owner_;
+}
+- (instancetype)initWithOwner:(MacOSSettingsPage*)owner;
+@end
+
+@implementation MacOSSettingsPageFieldDelegate
+
+- (instancetype)initWithOwner:(MacOSSettingsPage*)owner {
+    self = [super init];
+    if (self) {
+        owner_ = owner;
+    }
+    return self;
+}
+
+- (void)controlTextDidEndEditing:(NSNotification*)notification {
+    if (owner_ == nullptr || ![notification.object isKindOfClass:[NSTextField class]]) {
+        return;
+    }
+
+    owner_->OnFieldEditingEnded(static_cast<NSTextField*>(notification.object));
+}
+
+@end
+
 namespace {
     constexpr CGFloat kPageInset = 28.0;
     constexpr CGFloat kSectionInsetX = 18.0;
@@ -114,6 +141,18 @@ void MacOSSettingsPage::ConnectKeyViewLoop(NSView* nextKeyView) {
     multicastIpField_.nextKeyView = nextKeyView;
 }
 
+void MacOSSettingsPage::OnFieldEditingEnded(NSTextField* field) {
+    if (field == tcpPortField_) {
+        ValidateTcpPort();
+    } else if (field == udpPortField_) {
+        ValidateUdpPort();
+    } else if (field == listenerIpField_) {
+        ValidateListenerIp();
+    } else if (field == multicastIpField_) {
+        ValidateMulticastIp();
+    }
+}
+
 void MacOSSettingsPage::BuildView() {
     root_ = [[NSView alloc] initWithFrame:NSZeroRect];
     root_.translatesAutoresizingMaskIntoConstraints = NO;
@@ -140,6 +179,11 @@ void MacOSSettingsPage::BuildView() {
     udpPortField_ = MakeTextField(110.0);
     listenerIpField_ = MakeTextField(190.0);
     multicastIpField_ = MakeTextField(190.0);
+    fieldDelegate_ = [[MacOSSettingsPageFieldDelegate alloc] initWithOwner:this];
+    tcpPortField_.delegate = fieldDelegate_;
+    udpPortField_.delegate = fieldDelegate_;
+    listenerIpField_.delegate = fieldDelegate_;
+    multicastIpField_.delegate = fieldDelegate_;
 
     NSMutableArray<NSLayoutConstraint*>* rowConstraints = [NSMutableArray array];
     AddSettingRow(section, MakeLabel(@"TCP Port"), tcpPortField_, nil, rowConstraints);

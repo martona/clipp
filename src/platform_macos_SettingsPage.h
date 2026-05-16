@@ -4,6 +4,7 @@
 
 @class NSView;
 @class NSTextField;
+@class MacOSSettingsPageFieldDelegate;
 
 class MacOSSettingsPage {
 public:
@@ -17,6 +18,7 @@ public:
     void OnShown();
     NSView* FirstKeyView() const;
     void ConnectKeyViewLoop(NSView* nextKeyView);
+    void OnFieldEditingEnded(NSTextField* field);
 
 private:
     void BuildView();
@@ -36,6 +38,7 @@ private:
     NSTextField* listenerIpField_ = nullptr;
     NSTextField* multicastIpField_ = nullptr;
     NSTextField* statusMessage_ = nullptr;
+    MacOSSettingsPageFieldDelegate* fieldDelegate_ = nullptr;
 };
 
 #endif
