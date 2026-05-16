@@ -12,7 +12,7 @@ DEV_DIR="$(xcode-select -p 2>/dev/null)" || {
 
 if [[ "$DEV_DIR" == */Xcode.app/Contents/Developer ]]; then
     USE_XCODE=1
-    BUILD_DIR="${BUILD_DIR:-build-xcode}"
+    BUILD_DIR="${BUILD_DIR:-build}"
     APP_PATH="$BUILD_DIR/$CONFIG/clipp.app"
 else
     USE_XCODE=0

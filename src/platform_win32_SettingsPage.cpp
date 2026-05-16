@@ -3,9 +3,8 @@
 #include "NetworkRuntime.h"
 #include "Settings.h"
 #include "platform.h"
+#include "platform/uiSettingsPage.h"
 
-#include <charconv>
-#include <cstdint>
 #include <string>
 
 #include <winrt/Windows.Foundation.Collections.h>
@@ -198,7 +197,7 @@ void SettingsPage::ShowStatusMessage() {
 void SettingsPage::ValidateTcpPort() {
     int port = 0;
     const int currentValue = g_settings.tcpPort();
-    if (!TryParsePort(tcpPortField_.Text(), port)) {
+    if (!uiSettingsPage::TryParsePort(winrt::to_string(tcpPortField_.Text()), port)) {
         tcpPortField_.Text(winrt::to_hstring(currentValue));
         return;
     }
@@ -212,7 +211,7 @@ void SettingsPage::ValidateTcpPort() {
 void SettingsPage::ValidateUdpPort() {
     int port = 0;
     const int currentValue = g_settings.mdnsPort();
-    if (!TryParsePort(udpPortField_.Text(), port)) {
+    if (!uiSettingsPage::TryParsePort(winrt::to_string(udpPortField_.Text()), port)) {
         udpPortField_.Text(winrt::to_hstring(currentValue));
         return;
     }
@@ -224,7 +223,7 @@ void SettingsPage::ValidateUdpPort() {
 }
 
 void SettingsPage::ValidateListenerIp() {
-    const std::string value = TrimAscii(winrt::to_string(listenerIpField_.Text()));
+    const std::string value = uiSettingsPage::TrimAscii(winrt::to_string(listenerIpField_.Text()));
     const std::string currentValue = g_settings.listenerIp();
     if (!Settings::IsValidListenerIp(value)) {
         listenerIpField_.Text(ToHString(currentValue));
@@ -238,7 +237,7 @@ void SettingsPage::ValidateListenerIp() {
 }
 
 void SettingsPage::ValidateMulticastIp() {
-    const std::string value = TrimAscii(winrt::to_string(multicastIpField_.Text()));
+    const std::string value = uiSettingsPage::TrimAscii(winrt::to_string(multicastIpField_.Text()));
     const std::string currentValue = g_settings.multicastIp();
     if (!Settings::IsValidMulticastIp(value)) {
         multicastIpField_.Text(ToHString(currentValue));
@@ -253,32 +252,4 @@ void SettingsPage::ValidateMulticastIp() {
 
 winrt::hstring SettingsPage::ToHString(const std::string& value) {
     return winrt::to_hstring(value);
-}
-
-std::string SettingsPage::TrimAscii(std::string value) {
-    const auto first = value.find_first_not_of(" \t\r\n");
-    if (first == std::string::npos) {
-        return {};
-    }
-
-    const auto last = value.find_last_not_of(" \t\r\n");
-    return value.substr(first, last - first + 1);
-}
-
-bool SettingsPage::TryParsePort(const winrt::hstring& text, int& port) {
-    const std::string value = TrimAscii(winrt::to_string(text));
-    if (value.empty() || value.size() > 5) {
-        return false;
-    }
-
-    int parsed = 0;
-    const char* begin = value.data();
-    const char* end = begin + value.size();
-    const auto result = std::from_chars(begin, end, parsed);
-    if (result.ec != std::errc{} || result.ptr != end || !Settings::IsValidPort(parsed)) {
-        return false;
-    }
-
-    port = parsed;
-    return true;
 }

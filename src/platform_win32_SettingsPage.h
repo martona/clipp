@@ -27,8 +27,6 @@ private:
     void ValidateMulticastIp();
 
     static winrt::hstring ToHString(const std::string& value);
-    static std::string TrimAscii(std::string value);
-    static bool TryParsePort(const winrt::hstring& text, int& port);
 
     winrt::Windows::UI::Xaml::Controls::Grid root_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBox tcpPortField_{ nullptr };
