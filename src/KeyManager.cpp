@@ -295,6 +295,8 @@ bool KeyManager::SetNetworkKey(const NetworkKey& networkKey, std::string* errorM
     std::vector<unsigned char> encryptedBuffer(encryptedData.pbData, encryptedData.pbData + encryptedData.cbData);
     LocalFree(encryptedData.pbData);
 #else
+    DeleteNetworkKeyItem(CFSTR("NetworkKeyV2"));
+
     CFDataRef plainData = CFDataCreate(kCFAllocatorDefault, networkKey.data(), networkKey.size());
     if (plainData == nullptr) {
         if (errorMessage != nullptr) *errorMessage = "Failed to create keychain payload";
@@ -322,31 +324,6 @@ bool KeyManager::SetNetworkKey(const NetworkKey& networkKey, std::string* errorM
 
     OSStatus status = SecItemAdd(addQuery, nullptr);
     CFRelease(addQuery);
-
-    if (status == errSecDuplicateItem) {
-        CFMutableDictionaryRef matchQuery = CreateNetworkKeyQuery(CFSTR("NetworkKeyV2"));
-        if (matchQuery == nullptr) {
-            CFRelease(access);
-            CFRelease(plainData);
-            if (errorMessage != nullptr) *errorMessage = "Failed to allocate keychain match query";
-            return false;
-        }
-
-        CFMutableDictionaryRef updateAttrs = CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
-            &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-        if (updateAttrs == nullptr) {
-            CFRelease(matchQuery);
-            CFRelease(access);
-            CFRelease(plainData);
-            if (errorMessage != nullptr) *errorMessage = "Failed to allocate keychain update query";
-            return false;
-        }
-        CFDictionaryAddValue(updateAttrs, kSecValueData, plainData);
-        CFDictionaryAddValue(updateAttrs, kSecAttrAccess, access);
-        status = SecItemUpdate(matchQuery, updateAttrs);
-        CFRelease(updateAttrs);
-        CFRelease(matchQuery);
-    }
 
     CFRelease(access);
     CFRelease(plainData);

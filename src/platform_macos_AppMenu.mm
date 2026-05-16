@@ -3,6 +3,7 @@
 #ifdef __APPLE__
 
 #include "Logger.h"
+#include "platform_macos_ClippPage.h"
 #include "platform_macos_SettingsPage.h"
 #include "platform_macos_TerminalLogView.h"
 
@@ -117,10 +118,12 @@ bool UnregisterClippAutoStart() {
 
 @interface ClippMainWindowController : NSWindowController <NSWindowDelegate> {
 @private
+    std::unique_ptr<MacOSClippPage> clippPage_;
     std::unique_ptr<MacOSSettingsPage> settingsPage_;
     std::unique_ptr<MacOSTerminalLogView> terminalLogView_;
     std::mutex terminalLogViewMutex_;
     bool logReflectorRegistered_;
+    NSInteger currentPageIndex_;
 }
 @property(nonatomic, strong) NSView* contentContainer;
 @property(nonatomic, strong) NSArray<NSButton*>* pageButtons;
@@ -131,6 +134,8 @@ bool UnregisterClippAutoStart() {
 - (void)reflectLogLine:(const std::wstring&)line;
 - (void)updateSidebarSelectionAppearance;
 - (void)updateKeyViewLoopForPage:(NSInteger)pageIndex;
+- (void)activateCurrentPage;
+- (void)deactivateCurrentPage;
 @end
 
 @interface ClippStatusMenuController : NSObject <NSApplicationDelegate>
@@ -168,6 +173,7 @@ void RequestMacOSShowMainWindow() {
     if (self) {
         window.delegate = self;
         logReflectorRegistered_ = false;
+        currentPageIndex_ = -1;
         [self buildShell];
         [self selectPage:0];
     }
@@ -252,10 +258,13 @@ void RequestMacOSShowMainWindow() {
         [actionStack.bottomAnchor constraintEqualToAnchor:sidebar.bottomAnchor],
     ]];
 
+    __unsafe_unretained ClippMainWindowController* controller = self;
+    clippPage_ = std::make_unique<MacOSClippPage>([controller]() {
+        [controller updateKeyViewLoopForPage:0];
+    });
     settingsPage_ = std::make_unique<MacOSSettingsPage>();
     self.pageViews = @[
-        [self makePlaceholderPageWithTitle:@"Clipp"
-                                      body:@"Clipp status, discovered peers, and sync controls will live here."],
+        clippPage_->View(),
         settingsPage_->View(),
         [self makeLogsPage],
         [self makePlaceholderPageWithTitle:@"About"
@@ -451,6 +460,14 @@ void RequestMacOSShowMainWindow() {
 
     const BOOL preserveWindowFrame = self.window.visible && !self.window.miniaturized;
     const NSRect windowFrame = self.window.frame;
+    const NSInteger previousPageIndex = currentPageIndex_;
+
+    if (previousPageIndex == 0 && pageIndex != 0 && clippPage_) {
+        clippPage_->OnHidden();
+    }
+    if (previousPageIndex == 2 && pageIndex != 2) {
+        [self endLogReflection];
+    }
 
     for (NSButton* button in self.pageButtons) {
         button.state = button.tag == pageIndex ? NSControlStateValueOn : NSControlStateValueOff;
@@ -474,13 +491,15 @@ void RequestMacOSShowMainWindow() {
     if (pageIndex == 1 && settingsPage_) {
         settingsPage_->OnShown();
     }
+    if (pageIndex == 0 && clippPage_) {
+        clippPage_->OnShown();
+    }
 
+    currentPageIndex_ = pageIndex;
     [self updateKeyViewLoopForPage:pageIndex];
 
     if (pageIndex == 2) {
         [self beginLogReflection];
-    } else {
-        [self endLogReflection];
     }
 
     if (preserveWindowFrame) {
@@ -497,17 +516,41 @@ void RequestMacOSShowMainWindow() {
     [keyViews addObjectsFromArray:self.actionButtons];
     ConnectKeyViewSequence(keyViews);
 
-    if (pageIndex != 1 || settingsPage_ == nullptr || self.pageButtons.count < 2) {
+    if (pageIndex == 0 && clippPage_ != nullptr && self.pageButtons.count >= 2) {
+        NSView* clippButton = self.pageButtons[0];
+        NSView* nextAfterClipp = self.pageButtons[1];
+        clippButton.nextKeyView = clippPage_->FirstKeyView();
+        clippPage_->ConnectKeyViewLoop(nextAfterClipp);
         return;
     }
 
-    NSView* settingsButton = self.pageButtons[1];
-    NSView* nextAfterSettings = self.pageButtons.count > 2
-        ? self.pageButtons[2]
-        : (self.actionButtons.count > 0 ? self.actionButtons[0] : self.pageButtons[0]);
+    if (pageIndex == 1 && settingsPage_ != nullptr && self.pageButtons.count >= 2) {
+        NSView* settingsButton = self.pageButtons[1];
+        NSView* nextAfterSettings = self.pageButtons.count > 2
+            ? self.pageButtons[2]
+            : (self.actionButtons.count > 0 ? self.actionButtons[0] : self.pageButtons[0]);
 
-    settingsButton.nextKeyView = settingsPage_->FirstKeyView();
-    settingsPage_->ConnectKeyViewLoop(nextAfterSettings);
+        settingsButton.nextKeyView = settingsPage_->FirstKeyView();
+        settingsPage_->ConnectKeyViewLoop(nextAfterSettings);
+    }
+}
+
+- (void)activateCurrentPage {
+    if (currentPageIndex_ == 0 && clippPage_) {
+        clippPage_->OnShown();
+    } else if (currentPageIndex_ == 1 && settingsPage_) {
+        settingsPage_->OnShown();
+    } else if (currentPageIndex_ == 2) {
+        [self beginLogReflection];
+    }
+}
+
+- (void)deactivateCurrentPage {
+    if (currentPageIndex_ == 0 && clippPage_) {
+        clippPage_->OnHidden();
+    } else if (currentPageIndex_ == 2) {
+        [self endLogReflection];
+    }
 }
 
 - (void)showAndActivate {
@@ -520,10 +563,12 @@ void RequestMacOSShowMainWindow() {
     [self.window makeKeyAndOrderFront:nil];
     [[NSApplication sharedApplication] activateIgnoringOtherApps:YES];
     [self.window makeFirstResponder:nil];
+    [self activateCurrentPage];
 }
 
 - (void)minimizeToMenuBar:(id)sender {
     (void)sender;
+    [self deactivateCurrentPage];
     [self.window orderOut:nil];
     SetMacOSDockIconVisible(NO);
 }
@@ -538,9 +583,22 @@ void RequestMacOSShowMainWindow() {
     [self updateSidebarSelectionAppearance];
 }
 
+- (void)windowDidMiniaturize:(NSNotification*)notification {
+    (void)notification;
+    [self deactivateCurrentPage];
+}
+
+- (void)windowDidDeminiaturize:(NSNotification*)notification {
+    (void)notification;
+    [self activateCurrentPage];
+}
+
 - (void)exitApplication:(id)sender {
     (void)sender;
-    [self endLogReflection];
+    [self deactivateCurrentPage];
+    if (clippPage_) {
+        clippPage_->OnDestroy();
+    }
     RequestMacOSAppShutdown(true);
 }
 
