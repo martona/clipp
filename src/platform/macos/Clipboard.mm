@@ -5,17 +5,14 @@
 #include <thread>
 #include <atomic>
 #include <chrono>
-#include <mutex>
 #include <future>
 #include <cstring>
-#include <xxhash.h>
+#include "ClipboardHashGuard.h"
 
 static std::thread g_clipboardThread;
 static std::atomic<bool> g_stopClipboardThread{false};
 static std::atomic<NSInteger> g_lastChangeCount{0};
-
-static std::mutex g_hashMutex;
-static XXH128_hash_t g_lastClipboardHash{ 0, 0 };
+static ClipboardHashGuard g_clipboardHashGuard;
 
 static ClipboardCallback g_clipboardCallback = nullptr;
 
@@ -88,23 +85,33 @@ ClipboardPayload ReadClipboardData(PlatformWindowHandle hwnd) {
                 const unsigned char* bytes = static_cast<const unsigned char*>([data bytes]);
                 payload.rawData.assign(bytes, bytes + [data length]);
                 payload.rawData.push_back('\0');
-                return payload;
             }
         }
 
         // Try to read PNG image data. Network image payloads are already PNG,
         // and macOS exposes PNG pasteboard data as public.png.
-        NSData* pngData = [pb dataForType:NSPasteboardTypePNG];
+        NSData* pngData = nil;
+        if (payload.formatId == 0) {
+            pngData = [pb dataForType:NSPasteboardTypePNG];
+        }
         if (pngData) {
             payload.formatId = CF_DIB;
             const unsigned char* bytes = static_cast<const unsigned char*>([pngData bytes]);
             payload.rawData.assign(bytes, bytes + [pngData length]);
             if (IsPngStream(payload.rawData)) {
                 g_logger.log(__FUNCTION__, Logger::Level::Info, L"Read PNG image from system clipboard (PNG payload: %zu bytes)", payload.rawData.size());
-                return payload;
             }
+            else {
+                g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Ignoring PNG pasteboard data with invalid PNG signature (%zu bytes)", payload.rawData.size());
+                payload.formatId = 0;
+                payload.rawData.clear();
+            }
+        }
+    }
 
-            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Ignoring PNG pasteboard data with invalid PNG signature (%zu bytes)", payload.rawData.size());
+    if (payload.formatId != 0) {
+        if (!g_clipboardHashGuard.AcceptCurrent(payload)) {
+            g_logger.log(__FUNCTION__, Logger::Level::Debug, "Ignoring clipboard notification for already-current clipboard contents.");
             payload.formatId = 0;
             payload.rawData.clear();
         }
@@ -114,13 +121,9 @@ ClipboardPayload ReadClipboardData(PlatformWindowHandle hwnd) {
 }
 
 void SetClipboardData(ClipboardPayload& payload) {
-    XXH128_hash_t newHash = XXH3_128bits(payload.rawData.data(), payload.rawData.size());
-    {
-        std::lock_guard<std::mutex> lock(g_hashMutex);
-        if (newHash.high64 == g_lastClipboardHash.high64 && newHash.low64 == g_lastClipboardHash.low64) {
-            g_logger.log(__FUNCTION__, Logger::Level::Info, "Clipboard hash match, not setting clipboard data");
-            return;
-        }
+    if (g_clipboardHashGuard.IsCurrent(payload)) {
+        g_logger.log(__FUNCTION__, Logger::Level::Info, "Clipboard contents already current; not setting clipboard data");
+        return;
     }
 
     @autoreleasepool {
@@ -160,8 +163,7 @@ void SetClipboardData(ClipboardPayload& payload) {
             // Fast-forward our known changeCount so we don't trigger a recursive network broadcast of our own change
             g_lastChangeCount.store([pb changeCount]);
 
-            std::lock_guard<std::mutex> lock(g_hashMutex);
-            g_lastClipboardHash = newHash;
+            g_clipboardHashGuard.RememberCurrent(payload);
         }
         else {
             g_logger.log(__FUNCTION__, Logger::Level::Warning, L"System clipboard write did not complete (format ID: %u, payload size: %zu bytes)", payload.formatId, payload.rawData.size());

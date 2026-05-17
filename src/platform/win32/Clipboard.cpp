@@ -8,14 +8,13 @@
 #include <vector>
 #include <utility>
 #include <lodepng.h>
-#include <xxhash.h>
+#include "ClipboardHashGuard.h"
 #include "Logger.h"
 #include "ScopedTimer.h"
 
 static std::thread g_clipboardThread;
 static HWND g_hwnd = nullptr;
-static std::mutex g_hashMutex;
-static XXH128_hash_t g_lastClipboardHash{ 0, 0 };
+static ClipboardHashGuard g_clipboardHashGuard;
 
 #define CLIPBOARD_DEBOUNCE_TIMER_ID 1
 #define CLIPBOARD_DEBOUNCE_INTERVAL_MS 250
@@ -599,17 +598,21 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
         g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to open system clipboard for reading after retries");
     }
 
+    if (payload.formatId != 0) {
+        if (!g_clipboardHashGuard.AcceptCurrent(payload)) {
+            g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Ignoring clipboard notification for already-current clipboard contents.");
+            payload.formatId = 0;
+            payload.rawData.clear();
+        }
+    }
+
     return payload;
 }
 
 void SetClipboardData(ClipboardPayload& payload) {
-    XXH128_hash_t newHash = XXH3_128bits(payload.rawData.data(), payload.rawData.size());
-    {
-        std::lock_guard<std::mutex> lock(g_hashMutex);
-        if (newHash.high64 == g_lastClipboardHash.high64 && newHash.low64 == g_lastClipboardHash.low64) {
-            g_logger.log(__FUNCTION__, Logger::Level::Info, L"Clipboard hash match, not setting clipboard data");
-            return;
-        }
+    if (g_clipboardHashGuard.IsCurrent(payload)) {
+        g_logger.log(__FUNCTION__, Logger::Level::Info, L"Clipboard contents already current; not setting clipboard data");
+        return;
     }
 
     bool opened = false;
@@ -644,8 +647,6 @@ void SetClipboardData(ClipboardPayload& payload) {
                                 else {
                                     wroteClipboard = true;
                                     g_logger.log(__FUNCTION__, Logger::Level::Info, L"Wrote CF_UNICODETEXT to system clipboard (UTF-8 payload: %zu bytes, UTF-16 bytes: %zu)", payload.rawData.size(), static_cast<size_t>(wideBytes));
-                                    std::lock_guard<std::mutex> lock(g_hashMutex);
-                                    g_lastClipboardHash = newHash;
                                 }
                             }
                             else {
@@ -687,8 +688,6 @@ void SetClipboardData(ClipboardPayload& payload) {
                             else {
                                 wroteClipboard = true;
                                 g_logger.log(__FUNCTION__, Logger::Level::Info, L"Wrote CF_DIB to system clipboard from PNG payload (PNG: %zu bytes, DIB: %zu bytes)", payload.rawData.size(), bytes);
-                                std::lock_guard<std::mutex> lock(g_hashMutex);
-                                g_lastClipboardHash = newHash;
                             }
                         }
                         else {
@@ -707,6 +706,10 @@ void SetClipboardData(ClipboardPayload& payload) {
 
             if (wroteClipboard && !SetClippOriginClipboardMarker()) {
                 g_logger.log(__FUNCTION__, Logger::Level::Warning, L"System clipboard was written without Clipp origin marker.");
+            }
+
+            if (wroteClipboard) {
+                g_clipboardHashGuard.RememberCurrent(payload);
             }
 
             CloseClipboard();

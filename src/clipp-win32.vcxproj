@@ -186,6 +186,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Listener.cpp" />
+    <ClCompile Include="ClipboardHashGuard.cpp" />
     <ClCompile Include="CryptoChannel.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="NetworkRuntime.cpp" />
@@ -211,6 +212,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="BlockingQueue.h" />
+    <ClInclude Include="ClipboardHashGuard.h" />
     <ClInclude Include="ClipboardData.h" />
     <ClInclude Include="HostId.h" />
     <ClInclude Include="Listener.h" />
