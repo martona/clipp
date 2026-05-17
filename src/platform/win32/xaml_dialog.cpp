@@ -113,6 +113,36 @@ winrt::Windows::UI::Xaml::Media::Brush GetThemeBackgroundBrush() {
     return SolidColorBrush(ColorFromColorRef(fallbackColor));
 }
 
+void AliasThemeBrush(
+    winrt::Windows::UI::Xaml::ResourceDictionary const& resources,
+    const wchar_t* targetResourceName,
+    const wchar_t* sourceResourceName)
+{
+    if (const auto brush = LookupThemeBrush(sourceResourceName)) {
+        resources.Insert(
+            winrt::box_value(winrt::hstring{ targetResourceName }),
+            brush);
+    }
+}
+
+void ApplyTextControlThemeResources(winrt::Windows::UI::Xaml::FrameworkElement const& element) {
+    struct BrushAlias {
+        const wchar_t* target;
+        const wchar_t* source;
+    };
+
+    const BrushAlias aliases[] = {
+        { L"TextControlBackgroundFocused", L"TextControlBackground" },
+        { L"TextControlForegroundFocused", L"TextControlForeground" },
+        { L"TextControlPlaceholderForegroundFocused", L"TextControlPlaceholderForeground" },
+    };
+
+    const auto resources = element.Resources();
+    for (const auto& alias : aliases) {
+        AliasThemeBrush(resources, alias.target, alias.source);
+    }
+}
+
 void ApplyModernWindowAttributes(HWND hwnd) {
     BOOL useDarkTitleBar = DarkMode::isEnabled() ? TRUE : FALSE;
     DwmSetWindowAttribute(hwnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &useDarkTitleBar, sizeof(useDarkTitleBar));
@@ -333,6 +363,7 @@ private:
         root.HorizontalAlignment(HorizontalAlignment::Stretch);
         root.VerticalAlignment(VerticalAlignment::Stretch);
         root.RequestedTheme(GetCurrentXamlTheme());
+        ApplyTextControlThemeResources(root);
         root.Background(GetThemeBackgroundBrush());
 
         ColumnDefinition menuColumn;
