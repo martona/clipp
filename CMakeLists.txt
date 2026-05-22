@@ -158,10 +158,19 @@ elseif (APPLE)
         "src/platform/macos/*.h"
         "src/platform/macos/*.mm"
     )
+    set(CLIPP_MACOS_APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/src/resources/Clipp.icns")
+    set(CLIPP_MACOS_MENU_BAR_ICON "${CMAKE_CURRENT_SOURCE_DIR}/src/resources/ClippMenuBarTemplate.png")
+    set_source_files_properties(
+        "${CLIPP_MACOS_APP_ICON}"
+        "${CLIPP_MACOS_MENU_BAR_ICON}"
+        PROPERTIES MACOSX_PACKAGE_LOCATION "Resources"
+    )
 
     add_executable(clipp MACOSX_BUNDLE
         ${CLIPP_COMMON_SOURCES}
         ${CLIPP_MACOS_PLATFORM_SOURCES}
+        "${CLIPP_MACOS_APP_ICON}"
+        "${CLIPP_MACOS_MENU_BAR_ICON}"
     )
     clipp_apply_common_target_settings(clipp)
     target_compile_options(clipp PRIVATE "-Wno-deprecated-declarations")
@@ -183,6 +192,7 @@ elseif (APPLE)
     set_target_properties(clipp PROPERTIES
         MACOSX_BUNDLE_BUNDLE_NAME "Clipp"
         MACOSX_BUNDLE_GUI_IDENTIFIER "net.clipp.app"
+        MACOSX_BUNDLE_ICON_FILE "Clipp.icns"
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/macos/Info.plist.in"
         XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "net.clipp.app"
     )

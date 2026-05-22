@@ -44,6 +44,21 @@ static ClippMainWindowController* g_logReflectorTarget = nil;
 
 static void LogReflectorCallback(const std::wstring& line);
 
+static NSImage* MakeClippStatusItemImage() {
+    NSImage* image = [NSImage imageNamed:@"ClippMenuBarTemplate"];
+    if (image != nil) {
+        image.size = NSMakeSize(18.0, 18.0);
+        [image setTemplate:YES];
+        return image;
+    }
+
+    image = [NSImage imageWithSystemSymbolName:@"doc.on.clipboard" accessibilityDescription:@"Clipp"];
+    if (image != nil) {
+        [image setTemplate:YES];
+    }
+    return image;
+}
+
 @interface ClippSidebarButtonCell : NSButtonCell
 @end
 
@@ -634,10 +649,11 @@ static void LogReflectorCallback(const std::wstring& line) {
     self.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
 
     NSStatusBarButton* button = [self.statusItem button];
-    NSImage* clipboardImage = [NSImage imageWithSystemSymbolName:@"doc.on.clipboard"
-                                        accessibilityDescription:@"Clipp"];
+    NSImage* clipboardImage = MakeClippStatusItemImage();
     if (clipboardImage != nil) {
         button.image = clipboardImage;
+        button.imagePosition = NSImageOnly;
+        button.imageScaling = NSImageScaleProportionallyDown;
     } else {
         button.title = @"📋";
     }
