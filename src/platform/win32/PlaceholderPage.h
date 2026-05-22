@@ -12,7 +12,12 @@ private:
     winrt::Windows::UI::Xaml::Controls::Grid root_{ nullptr };
 };
 
-class AboutPage : public PlaceholderPage {
+class AboutPage {
 public:
     AboutPage();
+
+    winrt::Windows::UI::Xaml::Controls::Grid View() const;
+
+private:
+    winrt::Windows::UI::Xaml::Controls::Grid root_{ nullptr };
 };
