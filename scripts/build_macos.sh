@@ -1,6 +1,10 @@
 #!/bin/bash
 set -e
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
+
 IDENTITY="${APPLE_CODESIGN_IDENTITY:-}"
 TEAM_ID="${APPLE_TEAM_ID:-}"
 CONFIG="${CLIPP_BUILD_CONFIGURATION:-Release}"
@@ -52,7 +56,7 @@ TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
 }
 
 CMAKE_ARGS=(
-    -DVCPKG_MANIFEST_DIR="$(pwd)/src"
+    -DVCPKG_MANIFEST_DIR="$REPO_ROOT/src"
     -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE"
 )
 
@@ -68,12 +72,12 @@ if [[ "$USE_XCODE" == "1" ]]; then
         )
     fi
 
-    cmake -S . -B "$BUILD_DIR" -G Xcode "${CMAKE_ARGS[@]}" "${SIGN_ARGS[@]}"
+    cmake -S "$REPO_ROOT" -B "$BUILD_DIR" -G Xcode "${CMAKE_ARGS[@]}" "${SIGN_ARGS[@]}"
     echo "[*] Building Clipp with Xcode ($CONFIG)..."
     cmake --build "$BUILD_DIR" --config "$CONFIG"
 else
     echo "[*] Generating command-line build files..."
-    cmake -S . -B "$BUILD_DIR" -G Ninja "${CMAKE_ARGS[@]}"
+    cmake -S "$REPO_ROOT" -B "$BUILD_DIR" -G Ninja "${CMAKE_ARGS[@]}"
 
     echo "[*] Building Clipp..."
     cmake --build "$BUILD_DIR"
