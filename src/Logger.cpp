@@ -143,14 +143,16 @@ bool Logger::ShouldLog(Level level) const {
 
 int Logger::LevelPriority(Level level) {
     switch (level) {
-    case Level::Debug:
+    case Level::DDebug:
         return 0;
-    case Level::Info:
+    case Level::Debug:
         return 1;
-    case Level::Warning:
+    case Level::Info:
         return 2;
-    case Level::Error:
+    case Level::Warning:
         return 3;
+    case Level::Error:
+        return 4;
     default:
         return 0;
     }
@@ -158,6 +160,8 @@ int Logger::LevelPriority(Level level) {
 
 const wchar_t* Logger::LevelToString(Level level) {
     switch (level) {
+    case Level::DDebug:
+        return L"ddebug";
     case Level::Debug:
         return L"debug";
     case Level::Info:
@@ -175,6 +179,8 @@ const wchar_t* Logger::LevelToColor(Level level) {
     // \x1b[ is the escape sequence. 
     // The trailing 'm' signals the end of the color code.
     switch (level) {
+    case Level::DDebug:
+        return L"\x1b[2;36m";     // Dim cyan for very chatty diagnostics
     case Level::Debug:
         return L"\x1b[36m";       // Cyan (Clear, but visually recedes slightly for spammy logs)
     case Level::Info:

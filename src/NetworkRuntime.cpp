@@ -123,12 +123,12 @@ void NetworkRuntime::OnMDNSNotification(const char* hostNameUtf8,
         }
     }
 
-    g_logger.log(__FUNCTION__, Logger::Level::Debug,
+    g_logger.log(__FUNCTION__, Logger::Level::DDebug,
         "mDNS notification received for host: %s / %s\n  from: %s:%hu\n  verb:    %s\n  queryID: %s\n  nonce:   %s",
         hostNameUtf8, remoteHostId.ToHexString().c_str(), senderIp, port, verb, queryID, nonce);
 
     if (ourHostId == remoteHostId) {
-        g_logger.log(__FUNCTION__, Logger::Level::Debug, "mDNS notification is from self; ignoring");
+        g_logger.log(__FUNCTION__, Logger::Level::DDebug, "mDNS notification is from self; ignoring");
         return;
     }
 

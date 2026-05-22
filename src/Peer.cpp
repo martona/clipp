@@ -406,7 +406,7 @@ void Peer::ThreadProcSend() {
 					break;
 				}
 				ReportTraffic(4, 0);
-				log(__FUNCTION__, Logger::Level::Debug, L"PING?");
+				log(__FUNCTION__, Logger::Level::DDebug, L"PING?");
 				nextPingTime = now + NextPingInterval();
 			}
 
@@ -457,7 +457,7 @@ void Peer::ThreadProcSend() {
 						std::lock_guard<std::mutex> lock(dataMutex_);
 						lastPingReceivedAt_ = std::chrono::steady_clock::now();
 					}
-					log(__FUNCTION__, Logger::Level::Debug, L"PONG");
+					log(__FUNCTION__, Logger::Level::DDebug, L"PONG");
 				} else if (std::memcmp(packet, "PING", 4) == 0) {
 					if (!channel.SendTaggedMessage(io, "PONG")) {
 						break;
@@ -505,7 +505,7 @@ void Peer::ThreadProcRecv() {
 			ReportTraffic(0, 4);
 
 			if (std::memcmp(packet, "PING", 4) == 0) {
-				log(__FUNCTION__, Logger::Level::Debug, L"PING");
+				log(__FUNCTION__, Logger::Level::DDebug, L"PING");
 				{
 					std::lock_guard<std::mutex> lock(dataMutex_);
 					lastPingReceivedAt_ = std::chrono::steady_clock::now();
@@ -513,7 +513,7 @@ void Peer::ThreadProcRecv() {
 				if (!channel.SendTaggedMessage(io, "PONG")) {
 					break;
 				}
-				log(__FUNCTION__, Logger::Level::Debug, L"PONG!");
+				log(__FUNCTION__, Logger::Level::DDebug, L"PONG!");
 				ReportTraffic(4, 0);
 				continue;
 			}

@@ -11,6 +11,7 @@
 class Logger {
 public:
     enum class Level {
+        DDebug,
         Debug,
         Info,
         Warning,
@@ -44,7 +45,7 @@ private:
     std::deque<std::wstring> recentLogLines_;
 
     std::mutex mutex_;
-    std::atomic<int> minimumLevel_{ 0 };
+    std::atomic<int> minimumLevel_{ 1 };
 };
 
 extern Logger g_logger;

@@ -287,6 +287,35 @@ namespace {
         {"setname", RunSetNameCommand},
         {"resethostid", RunResetHostIDCommand},
     };
+
+    bool IsCommandLineOption(std::string_view arg) {
+        return arg.size() >= 2 && arg[0] == '-' && arg[1] == '-';
+    }
+
+    bool ParseLogLevel(std::string_view arg, Logger::Level& level) {
+        if (arg == "error") {
+            level = Logger::Level::Error;
+            return true;
+        }
+        if (arg == "warn" || arg == "warning") {
+            level = Logger::Level::Warning;
+            return true;
+        }
+        if (arg == "info") {
+            level = Logger::Level::Info;
+            return true;
+        }
+        if (arg == "debug") {
+            level = Logger::Level::Debug;
+            return true;
+        }
+        if (arg == "ddebug") {
+            level = Logger::Level::DDebug;
+            return true;
+        }
+
+        return false;
+    }
 }
 
 static bool TryRunCommandLineCommand(int argc, char* argv[], int& exitCode) {
@@ -296,7 +325,14 @@ static bool TryRunCommandLineCommand(int argc, char* argv[], int& exitCode) {
         }
 
         const std::string_view commandName(argv[i]);
-        if (commandName == "--loglevel-info" || commandName == "--clipboard-diagnostics") {
+        if (commandName == "--loglevel") {
+            ++i;
+            continue;
+        }
+        if (commandName == "--clipboard-diagnostics") {
+            continue;
+        }
+        if (IsCommandLineOption(commandName)) {
             continue;
         }
 
@@ -313,18 +349,52 @@ static bool TryRunCommandLineCommand(int argc, char* argv[], int& exitCode) {
     return false;
 }
 
-static void ApplyCommandLineOptions(int argc, char* argv[]) {
+static bool ApplyCommandLineOptions(int argc, char* argv[], int& exitCode) {
     for (int i = 1; i < argc; ++i) {
-        if (argv[i] != nullptr && std::string_view(argv[i]) == "--loglevel-info") {
-            g_logger.SetMinimumLevel(Logger::Level::Info);
+        if (argv[i] == nullptr) {
+            continue;
+        }
+
+        const std::string_view option(argv[i]);
+        if (option == "--loglevel") {
+            if (i + 1 >= argc || argv[i + 1] == nullptr || IsCommandLineOption(argv[i + 1])) {
+                g_logger.log(__FUNCTION__, Logger::Level::Error, "--loglevel requires one of: error, warn, info, debug, ddebug");
+                exitCode = 1;
+                return false;
+            }
+
+            Logger::Level level{};
+            const std::string_view levelName(argv[++i]);
+            if (!ParseLogLevel(levelName, level)) {
+                g_logger.log(__FUNCTION__, Logger::Level::Error, "Invalid --loglevel value '%.*s'. Expected one of: error, warn, info, debug, ddebug",
+                    static_cast<int>(levelName.size()), levelName.data());
+                exitCode = 1;
+                return false;
+            }
+
+            g_logger.SetMinimumLevel(level);
+            continue;
+        }
+
+        if (IsCommandLineOption(option)) {
+            g_logger.log(__FUNCTION__, Logger::Level::Error, "Unknown command line option '%.*s'",
+                static_cast<int>(option.size()), option.data());
+            exitCode = 1;
+            return false;
         }
     }
+
+    return true;
 }
 
 int main(int argc, char* argv[]) {
 	
-    ApplyCommandLineOptions(argc, argv);
     InitializeConsoleOutput();
+
+    int optionExitCode = 0;
+    if (!ApplyCommandLineOptions(argc, argv, optionExitCode)) {
+        return optionExitCode;
+    }
 
     if (!InitializeSodium()) {
         return 1;

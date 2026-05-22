@@ -26,7 +26,7 @@ void PeerManager::AddPeer(const wchar_t* hostName, const HostId& hostID, const w
 		return (peer->hostID() == incomingHostId) && (peer->connType_ == Peer::ConnType::Outgoing);
 	});
 	if (found != peers_.end()) {
-		g_logger.log(__FUNCTION__, Logger::Level::Debug, L"PeerManager: peer already known; skipping duplicate.");
+		g_logger.log(__FUNCTION__, Logger::Level::DDebug, L"PeerManager: peer already known; skipping duplicate.");
 		return;
 	}
 
