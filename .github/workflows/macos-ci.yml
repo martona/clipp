@@ -79,12 +79,34 @@ jobs:
 
       - name: Verify macOS app bundle
         run: |
-          app="build/Release/clipp.app"
-          test -d "$app"
-          test -x "$app/Contents/MacOS/clipp"
-          test -f "$app/Contents/Resources/Clipp.icns"
-          test -f "$app/Contents/Resources/ClippMenuBarTemplate.png"
-          test -f "$app/Contents/Resources/Clipboard4DevAspect-macos-1024-transparent.png"
+          app="$(find build -name 'clipp.app' -type d -print -quit)"
+          if [[ -z "$app" ]]; then
+            echo "Could not find clipp.app under build/." >&2
+            find build -print | sed -n '1,160p'
+            exit 1
+          fi
+
+          echo "Verifying app bundle: $app"
+          find "$app/Contents" -print | sed -n '1,160p'
+
+          for path in \
+            "$app/Contents/MacOS/clipp" \
+            "$app/Contents/Resources/Clipp.icns" \
+            "$app/Contents/Resources/ClippMenuBarTemplate.png" \
+            "$app/Contents/Resources/Clipboard4DevAspect-macos-1024-transparent.png" \
+            "$app/Contents/Info.plist"
+          do
+            if [[ ! -e "$path" ]]; then
+              echo "Missing expected bundle path: $path" >&2
+              exit 1
+            fi
+          done
+
+          if [[ ! -x "$app/Contents/MacOS/clipp" ]]; then
+            echo "App executable is not executable: $app/Contents/MacOS/clipp" >&2
+            ls -l "$app/Contents/MacOS"
+            exit 1
+          fi
 
           icon_file="$(plutil -extract CFBundleIconFile raw "$app/Contents/Info.plist")"
           if [[ "$icon_file" != "Clipp.icns" ]]; then
