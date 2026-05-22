@@ -80,7 +80,7 @@ LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                 DarkMode::DarkMessageBox(
                     g_trayWindow,
                     L"Clipp v1.0\n"
-                    L"Secure cross-platform clipboard sync.\n\n"
+                    L"Secure cross-platform clipboard sync for trusted devices.\n\n"
                     L"Copyright (C) 2026 Marton Anka\n"
                     L"Released under the MIT License.\n\n"
                     L"Uses open source libraries including libsodium, lodepng, xxHash, Zstandard, C++/WinRT, and darkmode32plus.",

@@ -54,6 +54,13 @@ IDI_CLIPP_ICON          ICON                    "..\\assets\\Clipboard4DevAspect
 
 /////////////////////////////////////////////////////////////////////////////
 //
+// Binary resources
+//
+
+IDB_CLIPP_ABOUT_IMAGE   RCDATA                  "..\\assets\\Clipboard4DevAspect-macos-1024-transparent.png"
+
+/////////////////////////////////////////////////////////////////////////////
+//
 // Version
 //
 
