@@ -160,9 +160,11 @@ elseif (APPLE)
     )
     set(CLIPP_MACOS_APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/src/resources/Clipp.icns")
     set(CLIPP_MACOS_MENU_BAR_ICON "${CMAKE_CURRENT_SOURCE_DIR}/src/resources/ClippMenuBarTemplate.png")
+    set(CLIPP_MACOS_ABOUT_IMAGE "${CMAKE_CURRENT_SOURCE_DIR}/src/resources/Clipboard4DevAspect-macos-1024-transparent.png")
     set_source_files_properties(
         "${CLIPP_MACOS_APP_ICON}"
         "${CLIPP_MACOS_MENU_BAR_ICON}"
+        "${CLIPP_MACOS_ABOUT_IMAGE}"
         PROPERTIES MACOSX_PACKAGE_LOCATION "Resources"
     )
 
@@ -171,6 +173,7 @@ elseif (APPLE)
         ${CLIPP_MACOS_PLATFORM_SOURCES}
         "${CLIPP_MACOS_APP_ICON}"
         "${CLIPP_MACOS_MENU_BAR_ICON}"
+        "${CLIPP_MACOS_ABOUT_IMAGE}"
     )
     clipp_apply_common_target_settings(clipp)
     target_compile_options(clipp PRIVATE "-Wno-deprecated-declarations")

@@ -3,6 +3,7 @@
 #ifdef __APPLE__
 
 #include "Logger.h"
+#include "AboutPage.h"
 #include "ClippPage.h"
 #include "SettingsPage.h"
 #include "TerminalLogView.h"
@@ -133,6 +134,7 @@ bool UnregisterClippAutoStart() {
 
 @interface ClippMainWindowController : NSWindowController <NSWindowDelegate> {
 @private
+    std::unique_ptr<MacOSAboutPage> aboutPage_;
     std::unique_ptr<MacOSClippPage> clippPage_;
     std::unique_ptr<MacOSSettingsPage> settingsPage_;
     std::unique_ptr<MacOSTerminalLogView> terminalLogView_;
@@ -278,12 +280,12 @@ void RequestMacOSShowMainWindow() {
         [controller updateKeyViewLoopForPage:0];
     });
     settingsPage_ = std::make_unique<MacOSSettingsPage>();
+    aboutPage_ = std::make_unique<MacOSAboutPage>();
     self.pageViews = @[
         clippPage_->View(),
         settingsPage_->View(),
         [self makeLogsPage],
-        [self makePlaceholderPageWithTitle:@"About"
-                                      body:@"About Clipp details, version information, and credits will live here."],
+        aboutPage_->View(),
     ];
     self.window.autorecalculatesKeyViewLoop = NO;
 }
@@ -704,8 +706,17 @@ static void LogReflectorCallback(const std::wstring& line) {
     [[NSApplication sharedApplication] activateIgnoringOtherApps:YES];
 
     NSAlert* alert = [[NSAlert alloc] init];
-    alert.messageText = @"Clipp v1.0";
-    alert.informativeText = @"Secure cross-platform clipboard sync.";
+    NSImage* icon = [NSImage imageNamed:@"Clipp"];
+    if (icon != nil) {
+        alert.icon = icon;
+    }
+    alert.messageText = @"About Clipp";
+    alert.informativeText =
+        @"Clipp v1.0\n"
+        @"Secure cross-platform clipboard sync for trusted devices.\n\n"
+        @"Copyright (C) 2026 Marton Anka\n"
+        @"Released under the MIT License.\n\n"
+        @"Uses open source libraries including libsodium, lodepng, xxHash, and Zstandard.";
     alert.alertStyle = NSAlertStyleInformational;
     [alert addButtonWithTitle:@"OK"];
     [alert runModal];
