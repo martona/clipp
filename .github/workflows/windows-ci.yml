@@ -1,0 +1,110 @@
+name: Windows CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Windows build test
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: pwsh
+
+    env:
+      CLIPP_RELEASE_TRIPLET: x64-windows-static
+      VCPKG_INSTALL_OPTIONS: --clean-buildtrees-after-build;--clean-packages-after-build
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/vcpkg-cache,readwrite
+
+    steps:
+      - name: Checkout clipp
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Read vcpkg baseline
+        id: vcpkg-baseline
+        run: |
+          $manifest = Get-Content -Raw src\vcpkg.json | ConvertFrom-Json
+          $baseline = $manifest.'builtin-baseline'
+          if (-not $baseline) {
+            throw "src\vcpkg.json must define builtin-baseline for CI."
+          }
+          "ref=$baseline" >> $env:GITHUB_OUTPUT
+
+      - name: Set vcpkg short root
+        run: |
+          $workspaceRoot = [System.IO.Path]::GetPathRoot($env:GITHUB_WORKSPACE)
+          if (-not $workspaceRoot) {
+            throw "Could not determine workspace drive from GITHUB_WORKSPACE='$env:GITHUB_WORKSPACE'."
+          }
+          $vcpkgRoot = Join-Path $workspaceRoot "v"
+          if (Test-Path $vcpkgRoot) {
+            throw "vcpkg short root already exists: $vcpkgRoot"
+          }
+          New-Item -ItemType Directory -Path $vcpkgRoot | Out-Null
+          "VCPKG_ROOT=$vcpkgRoot" >> $env:GITHUB_ENV
+          Write-Host "Using VCPKG_ROOT=$vcpkgRoot"
+
+      - name: Checkout vcpkg
+        run: |
+          git clone --no-tags https://github.com/microsoft/vcpkg.git $env:VCPKG_ROOT
+          git -C $env:VCPKG_ROOT checkout --detach ${{ steps.vcpkg-baseline.outputs.ref }}
+
+      - name: Bootstrap vcpkg
+        run: |
+          $bootstrap = Join-Path $env:VCPKG_ROOT "bootstrap-vcpkg.bat"
+          & $bootstrap -disableMetrics
+
+      - name: Prepare vcpkg binary cache
+        run: New-Item -ItemType Directory -Force vcpkg-cache | Out-Null
+
+      - name: Cache vcpkg binaries
+        uses: actions/cache@v5
+        with:
+          path: vcpkg-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.CLIPP_RELEASE_TRIPLET }}-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.CLIPP_RELEASE_TRIPLET }}-
+
+      - name: Build Release
+        run: .\scripts\build_windows.ps1 -BuildType Release -Triplet $env:CLIPP_RELEASE_TRIPLET
+
+      - name: Verify Windows artifacts
+        run: |
+          $exe = ".\build\windows-release\clipp-win32.exe"
+          $shim = ".\build\windows-release\clipp-win32.com"
+          if (-not (Test-Path $exe)) {
+            throw "Missing expected executable: $exe"
+          }
+          if (-not (Test-Path $shim)) {
+            throw "Missing expected console shim: $shim"
+          }
+
+      - name: Verify static dependency closure
+        run: |
+          $exe = ".\build\windows-release\clipp-win32.exe"
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $vcvars = Join-Path $installPath "VC\Auxiliary\Build\vcvarsall.bat"
+          $dump = & cmd.exe /d /s /c "call `"$vcvars`" amd64 >nul && dumpbin /dependents `"$exe`""
+          $dump
+
+          $blocked = $dump | Select-String -Pattern "VCRUNTIME|MSVCP|ucrtbase|libsodium|xxhash|zstd|lodepng" -CaseSensitive:$false
+          if ($blocked) {
+            throw "Release exe imports non-system runtime/dependency DLLs: $($blocked -join '; ')"
+          }

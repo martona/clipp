@@ -1,0 +1,90 @@
+name: macOS CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: macOS build test
+    runs-on: macos-latest
+
+    env:
+      CLIPP_CACHE_DIR: ${{ github.workspace }}/clipp-cache
+      VCPKG_ROOT: ${{ github.workspace }}/v
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-cache
+      VCPKG_INSTALLED_DIR: ${{ github.workspace }}/vcpkg-installed
+      VCPKG_INSTALL_OPTIONS: --clean-buildtrees-after-build;--clean-packages-after-build
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/vcpkg-cache,readwrite
+
+    steps:
+      - name: Checkout clipp
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Read vcpkg baseline
+        id: vcpkg-baseline
+        run: |
+          baseline="$(python3 - <<'PY'
+          import json
+          with open("src/vcpkg.json", encoding="utf-8") as manifest_file:
+              manifest = json.load(manifest_file)
+          print(manifest.get("builtin-baseline", ""))
+          PY
+          )"
+          if [[ -z "$baseline" ]]; then
+            echo "src/vcpkg.json must define builtin-baseline for CI." >&2
+            exit 1
+          fi
+          echo "ref=$baseline" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout vcpkg
+        run: |
+          git clone --no-tags https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" checkout --detach "${{ steps.vcpkg-baseline.outputs.ref }}"
+
+      - name: Bootstrap vcpkg
+        run: |
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+
+      - name: Prepare vcpkg binary cache
+        run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+
+      - name: Cache vcpkg binaries
+        uses: actions/cache@v5
+        with:
+          path: vcpkg-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-vcpkg-
+
+      - name: Build Release
+        run: ./scripts/build_macos.sh
+
+      - name: Verify macOS app bundle
+        run: |
+          app="build/Release/clipp.app"
+          test -d "$app"
+          test -x "$app/Contents/MacOS/clipp"
+          test -f "$app/Contents/Resources/Clipp.icns"
+          test -f "$app/Contents/Resources/ClippMenuBarTemplate.png"
+          test -f "$app/Contents/Resources/Clipboard4DevAspect-macos-1024-transparent.png"
+
+          icon_file="$(plutil -extract CFBundleIconFile raw "$app/Contents/Info.plist")"
+          if [[ "$icon_file" != "Clipp.icns" ]]; then
+            echo "Expected CFBundleIconFile to be Clipp.icns, got '$icon_file'." >&2
+            exit 1
+          fi

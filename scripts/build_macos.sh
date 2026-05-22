@@ -92,6 +92,10 @@ CMAKE_ARGS=(
     -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE"
 )
 
+if [[ -n "${VCPKG_INSTALL_OPTIONS:-}" ]]; then
+    CMAKE_ARGS+=("-DVCPKG_INSTALL_OPTIONS=$VCPKG_INSTALL_OPTIONS")
+fi
+
 if [[ "$USE_XCODE" == "1" ]]; then
     echo "[*] Generating Xcode build files..."
 
