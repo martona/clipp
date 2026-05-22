@@ -44,25 +44,36 @@ END
 
 #endif    // APSTUDIO_INVOKED
 
-
 /////////////////////////////////////////////////////////////////////////////
 //
 // Icon
 //
 
-IDI_CLIPP_ICON          ICON                    "..\\assets\\Clipboard4DevAspect-macos-1024-transparent.ico"
+IDI_CLIPP_ICON          ICON                    "resources\\Clipboard4DevAspect-macos-1024-transparent.ico"
 
+#ifndef CLIPP_RESOURCE_SHIM
 /////////////////////////////////////////////////////////////////////////////
 //
 // Binary resources
 //
 
-IDB_CLIPP_ABOUT_IMAGE   RCDATA                  "..\\assets\\Clipboard4DevAspect-macos-1024-transparent.png"
+IDB_CLIPP_ABOUT_IMAGE   RCDATA                  "resources\\Clipboard4DevAspect-macos-1024-transparent.png"
+#endif
 
 /////////////////////////////////////////////////////////////////////////////
 //
 // Version
 //
+
+#ifdef CLIPP_RESOURCE_SHIM
+#define CLIPP_RESOURCE_FILE_DESCRIPTION "clipp-win32.com"
+#define CLIPP_RESOURCE_INTERNAL_NAME "clipp-win32.com"
+#define CLIPP_RESOURCE_ORIGINAL_FILENAME "clipp-win32.com"
+#else
+#define CLIPP_RESOURCE_FILE_DESCRIPTION "clipp-win32.exe"
+#define CLIPP_RESOURCE_INTERNAL_NAME "clipp-win32.exe"
+#define CLIPP_RESOURCE_ORIGINAL_FILENAME "clipp-win32.exe"
+#endif
 
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION 1,0,0,1
@@ -82,11 +93,11 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "CompanyName", "Marton Anka"
-            VALUE "FileDescription", "clipp-win32.exe"
+            VALUE "FileDescription", CLIPP_RESOURCE_FILE_DESCRIPTION
             VALUE "FileVersion", "1.0.0.1"
-            VALUE "InternalName", "clipp-win32.exe"
+            VALUE "InternalName", CLIPP_RESOURCE_INTERNAL_NAME
             VALUE "LegalCopyright", "Copyright (C) 2026 Marton Anka"
-            VALUE "OriginalFilename", "clipp-win32.exe"
+            VALUE "OriginalFilename", CLIPP_RESOURCE_ORIGINAL_FILENAME
             VALUE "ProductName", "clipp"
             VALUE "ProductVersion", "1.0.0.1"
         END

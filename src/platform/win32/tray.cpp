@@ -1,4 +1,7 @@
 #include <Windows.h>
+#include <shellapi.h>
+#include <cwchar>
+
 #include "Logger.h"
 #include "AutoStart.h"
 #include "resource.h"

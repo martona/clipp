@@ -1,5 +1,13 @@
 cmake_minimum_required(VERSION 3.20)
 
+if (POLICY CMP0091)
+    cmake_policy(SET CMP0091 NEW)
+endif()
+
+if (NOT DEFINED VCPKG_MANIFEST_DIR AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/vcpkg.json")
+    set(VCPKG_MANIFEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src" CACHE PATH "vcpkg manifest directory")
+endif()
+
 if (APPLE AND (NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET OR CMAKE_OSX_DEPLOYMENT_TARGET STREQUAL ""))
     set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS deployment version" FORCE)
 endif()
@@ -35,10 +43,14 @@ if (APPLE)
     set(CLIPP_MACOS_CODE_SIGN_IDENTITY "" CACHE STRING "Apple code signing identity")
 endif()
 
-project(clipp)
+project(clipp LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+if (MSVC AND WIN32)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 
 if (APPLE)
     enable_language(OBJCXX)
@@ -46,64 +58,114 @@ if (APPLE)
     set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
 endif()
 
-file(GLOB SOURCES CONFIGURE_DEPENDS
+file(GLOB CLIPP_COMMON_SOURCES CONFIGURE_DEPENDS
     "src/*.cpp"
-    "src/*.mm"
     "src/*.h"
     "src/platform/*.h"
 )
-
-if (APPLE)
-    file(GLOB PLATFORM_SOURCES CONFIGURE_DEPENDS
-        "src/platform/macos/*.h"
-        "src/platform/macos/*.mm"
-    )
-    list(APPEND SOURCES ${PLATFORM_SOURCES})
-elseif (WIN32)
-    file(GLOB PLATFORM_SOURCES CONFIGURE_DEPENDS
-        "src/platform/win32/*.cpp"
-        "src/platform/win32/*.h"
-    )
-    list(APPEND SOURCES ${PLATFORM_SOURCES})
-endif()
-
-if (APPLE)
-    add_executable(clipp MACOSX_BUNDLE ${SOURCES})
-else()
-    add_executable(clipp ${SOURCES})
-endif()
-
-target_include_directories(clipp PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-
-if (APPLE)
-    target_compile_options(clipp PRIVATE "-Wno-deprecated-declarations")
-endif()
 
 find_package(unofficial-sodium CONFIG REQUIRED)
 find_package(xxHash CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 find_package(lodepng CONFIG REQUIRED)
 
-#find_package(unofficial-sodium CONFIG REQUIRED)
-## Force CMake to print the absolute path where it found the configuration, then crash
-#message(FATAL_ERROR ">>> GHOST CACHE LOCATED AT: ${unofficial-sodium_DIR} <<<")
-
-target_link_libraries(clipp PRIVATE
+set(CLIPP_THIRD_PARTY_LIBS
     unofficial-sodium::sodium
     xxHash::xxhash
     zstd::libzstd
     lodepng
 )
 
-if (WIN32)
-    target_link_libraries(clipp PRIVATE windowsapp runtimeobject dwmapi)
+function(clipp_apply_common_target_settings target_name)
+    target_include_directories(${target_name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(${target_name} PRIVATE ${CLIPP_THIRD_PARTY_LIBS})
+
     if (MSVC)
-        target_link_options(clipp PRIVATE "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/src/clipp-win32.exe.manifest")
+        target_compile_options(${target_name} PRIVATE /utf-8)
     endif()
-endif()
+endfunction()
 
+if (WIN32)
+    enable_language(RC)
 
-if (APPLE)
+    set(CLIPP_WINDOWS_OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/windows-$<LOWER_CASE:$<CONFIG>>")
+
+    file(GLOB CLIPP_WIN32_PLATFORM_SOURCES CONFIGURE_DEPENDS
+        "src/platform/win32/*.cpp"
+        "src/platform/win32/*.h"
+    )
+    file(GLOB CLIPP_DARKMODE_SOURCES CONFIGURE_DEPENDS
+        "src/clipp-win32-darkmode32/*.cpp"
+        "src/clipp-win32-darkmode32/*.h"
+    )
+
+    add_library(darkmode32 STATIC ${CLIPP_DARKMODE_SOURCES})
+    target_include_directories(darkmode32 PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_compile_definitions(darkmode32 PUBLIC WIN32 WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+    target_compile_definitions(darkmode32 PRIVATE _LIB)
+    target_link_libraries(darkmode32 PUBLIC dwmapi uxtheme Comctl32 Gdi32)
+    if (MSVC)
+        target_compile_options(darkmode32 PRIVATE /utf-8)
+    endif()
+
+    add_executable(clipp-win32 WIN32
+        ${CLIPP_COMMON_SOURCES}
+        ${CLIPP_WIN32_PLATFORM_SOURCES}
+        "src/clipp-win32.rc"
+    )
+    clipp_apply_common_target_settings(clipp-win32)
+    target_compile_definitions(clipp-win32 PRIVATE WIN32 WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE _CONSOLE)
+    target_link_libraries(clipp-win32 PRIVATE
+        darkmode32
+        windowsapp
+        runtimeobject
+        dwmapi
+        shell32
+        ws2_32
+        Crypt32
+    )
+    if (MSVC)
+        target_link_options(clipp-win32 PRIVATE
+            "/ENTRY:mainCRTStartup"
+            "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/src/clipp-win32.exe.manifest"
+        )
+    endif()
+
+    add_executable(clipp-win32-shim
+        "src/clipp-win32-shim/clipp-win32-shim.cpp"
+        "src/clipp-win32.rc"
+    )
+    target_compile_definitions(clipp-win32-shim PRIVATE WIN32 WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE _CONSOLE CLIPP_RESOURCE_SHIM)
+    if (MSVC)
+        target_compile_options(clipp-win32-shim PRIVATE /utf-8)
+    endif()
+    set_target_properties(clipp-win32-shim PROPERTIES
+        OUTPUT_NAME "clipp-win32"
+        SUFFIX ".com"
+    )
+
+    foreach (target_name IN ITEMS darkmode32 clipp-win32 clipp-win32-shim)
+        set_target_properties(${target_name} PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CLIPP_WINDOWS_OUTPUT_DIR}"
+            LIBRARY_OUTPUT_DIRECTORY "${CLIPP_WINDOWS_OUTPUT_DIR}"
+            ARCHIVE_OUTPUT_DIRECTORY "${CLIPP_WINDOWS_OUTPUT_DIR}"
+            PDB_OUTPUT_DIRECTORY "${CLIPP_WINDOWS_OUTPUT_DIR}"
+            COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${target_name}"
+        )
+    endforeach()
+elseif (APPLE)
+    file(GLOB CLIPP_MACOS_PLATFORM_SOURCES CONFIGURE_DEPENDS
+        "src/platform/macos/*.h"
+        "src/platform/macos/*.mm"
+    )
+
+    add_executable(clipp MACOSX_BUNDLE
+        ${CLIPP_COMMON_SOURCES}
+        ${CLIPP_MACOS_PLATFORM_SOURCES}
+    )
+    clipp_apply_common_target_settings(clipp)
+    target_compile_options(clipp PRIVATE "-Wno-deprecated-declarations")
+
     find_library(COREFOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
     find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
     find_library(SECURITY_FRAMEWORK Security REQUIRED)
@@ -138,4 +200,6 @@ if (APPLE)
             )
         endif()
     endif()
+else()
+    message(FATAL_ERROR "Unsupported platform.")
 endif()

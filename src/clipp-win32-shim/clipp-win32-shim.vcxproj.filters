@@ -25,7 +25,7 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="clipp-win32-shim.rc">
+    <ResourceCompile Include="..\clipp-win32.rc">
       <Filter>Resource Files</Filter>
     </ResourceCompile>
   </ItemGroup>

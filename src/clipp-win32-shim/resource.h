@@ -1,6 +1,6 @@
 //{{NO_DEPENDENCIES}}
 // Microsoft Visual C++ generated include file.
-// Used by clipp-win32-shim.rc
+// Used by clipp-win32.rc when building the shim target.
 
 #define IDI_CLIPP_ICON                  1
 

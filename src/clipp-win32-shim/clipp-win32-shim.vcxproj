@@ -165,7 +165,9 @@
     <ClInclude Include="resource.h" />
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="clipp-win32-shim.rc" />
+    <ResourceCompile Include="..\clipp-win32.rc">
+      <PreprocessorDefinitions>CLIPP_RESOURCE_SHIM;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ResourceCompile>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
