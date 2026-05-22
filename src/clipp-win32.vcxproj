@@ -205,7 +205,7 @@
     <ClCompile Include="platform\win32\TerminalLogView.cpp" />
     <ClCompile Include="platform\win32\ClippPage.cpp" />
     <ClCompile Include="platform\win32\LogsPage.cpp" />
-    <ClCompile Include="platform\win32\PlaceholderPage.cpp" />
+    <ClCompile Include="platform\win32\AboutPage.cpp" />
     <ClCompile Include="platform\win32\tray.cpp" />
     <ClCompile Include="platform\win32\xaml_dialog.cpp" />
     <ClCompile Include="Settings.cpp" />
@@ -227,7 +227,7 @@
     <ClInclude Include="platform\win32\TerminalLogView.h" />
     <ClInclude Include="platform\win32\ClippPage.h" />
     <ClInclude Include="platform\win32\LogsPage.h" />
-    <ClInclude Include="platform\win32\PlaceholderPage.h" />
+    <ClInclude Include="platform\win32\AboutPage.h" />
     <ClInclude Include="platform\win32\xaml_dialog.h" />
     <ClInclude Include="MDNSThread.h" />
     <ClInclude Include="KeyManager.h" />

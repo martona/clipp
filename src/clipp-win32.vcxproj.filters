@@ -78,7 +78,7 @@
     <ClCompile Include="platform\win32\LogsPage.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="platform\win32\PlaceholderPage.cpp">
+    <ClCompile Include="platform\win32\AboutPage.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="platform\win32\tray.cpp">
@@ -173,7 +173,7 @@
     <ClInclude Include="platform\win32\LogsPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="platform\win32\PlaceholderPage.h">
+    <ClInclude Include="platform\win32\AboutPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="utils_socket.h">

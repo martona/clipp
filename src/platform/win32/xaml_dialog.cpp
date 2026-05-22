@@ -4,7 +4,7 @@
 #include "clipp-win32-darkmode32/DMSubclass.h"
 #include "ClippPage.h"
 #include "LogsPage.h"
-#include "PlaceholderPage.h"
+#include "AboutPage.h"
 #include "SettingsPage.h"
 #include "AutoStart.h"
 #include "resource.h"
