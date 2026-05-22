@@ -13,6 +13,10 @@ Logger g_logger;
 
 static constexpr size_t kMaxRetainedLogLines = 1000;
 
+void Logger::SetMinimumLevel(Level level) {
+    minimumLevel_.store(LevelPriority(level), std::memory_order_relaxed);
+}
+
 Logger::LogHistory Logger::AddLogReflector(LogReflectorCallback callback) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (callback != nullptr && std::find(logReflectors_.begin(), logReflectors_.end(), callback) == logReflectors_.end()) {
@@ -27,6 +31,8 @@ void Logger::RemoveLogReflector(LogReflectorCallback callback) {
 }
 
 void Logger::log(const wchar_t* function, Level level, const wchar_t* message, ...) {
+    if (!ShouldLog(level)) return;
+
     va_list args;
     va_start(args, message);
     logV(function, level, message, args);
@@ -34,6 +40,8 @@ void Logger::log(const wchar_t* function, Level level, const wchar_t* message, .
 }
 
 void Logger::log(const char* function, Level level, const char* message, ...) {
+    if (!ShouldLog(level)) return;
+
     va_list args;
     va_start(args, message);
     logV(function, level, message, args);
@@ -41,6 +49,8 @@ void Logger::log(const char* function, Level level, const char* message, ...) {
 }
 
 void Logger::log(const char* function, Level level, const wchar_t* message, ...) {
+    if (!ShouldLog(level)) return;
+
     std::wstring functionW = Utf8ToWide(function != nullptr ? function : "");
     va_list args;
     va_start(args, message);
@@ -49,6 +59,8 @@ void Logger::log(const char* function, Level level, const wchar_t* message, ...)
 }
 
 void Logger::log(const wchar_t* function, Level level, const char* message, ...) {
+    if (!ShouldLog(level)) return;
+
     va_list args;
     va_start(args, message);
     constexpr size_t kBufferSize = 4096;
@@ -123,6 +135,25 @@ void Logger::writeLine(const wchar_t* function, Level level, const wchar_t* mess
             OutputDebugStringW(debugStr.c_str());
         }
     #endif
+}
+
+bool Logger::ShouldLog(Level level) const {
+    return LevelPriority(level) >= minimumLevel_.load(std::memory_order_relaxed);
+}
+
+int Logger::LevelPriority(Level level) {
+    switch (level) {
+    case Level::Debug:
+        return 0;
+    case Level::Info:
+        return 1;
+    case Level::Warning:
+        return 2;
+    case Level::Error:
+        return 3;
+    default:
+        return 0;
+    }
 }
 
 const wchar_t* Logger::LevelToString(Level level) {

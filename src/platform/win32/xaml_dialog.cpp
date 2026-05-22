@@ -7,6 +7,7 @@
 #include "PlaceholderPage.h"
 #include "SettingsPage.h"
 #include "AutoStart.h"
+#include "resource.h"
 
 #include <algorithm>
 #include <cmath>
@@ -632,15 +633,29 @@ private:
             return;
         }
 
-        WNDCLASSW wc{};
+        WNDCLASSEXW wc{};
+        wc.cbSize = sizeof(wc);
         wc.lpfnWndProc = WndProc;
         wc.hInstance = hInstance;
         wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-        wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+        wc.hIcon = LoadIconW(hInstance, MAKEINTRESOURCEW(IDI_CLIPP_ICON));
+        wc.hIconSm = static_cast<HICON>(LoadImageW(
+            hInstance,
+            MAKEINTRESOURCEW(IDI_CLIPP_ICON),
+            IMAGE_ICON,
+            GetSystemMetrics(SM_CXSMICON),
+            GetSystemMetrics(SM_CYSMICON),
+            LR_DEFAULTCOLOR | LR_SHARED));
+        if (!wc.hIcon) {
+            wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+        }
+        if (!wc.hIconSm) {
+            wc.hIconSm = wc.hIcon;
+        }
         wc.lpszClassName = kDialogClassName;
         wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
 
-        RegisterClassW(&wc);
+        RegisterClassExW(&wc);
         registered = true;
     }
 

@@ -17,6 +17,7 @@
 
 #if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_ENU)
 LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+#pragma code_page(1252)
 
 #ifdef APSTUDIO_INVOKED
 /////////////////////////////////////////////////////////////////////////////
@@ -46,6 +47,13 @@ END
 
 /////////////////////////////////////////////////////////////////////////////
 //
+// Icon
+//
+
+IDI_CLIPP_ICON          ICON                    "..\\assets\\Clipboard4DevAspect-macos-1024-transparent.ico"
+
+/////////////////////////////////////////////////////////////////////////////
+//
 // Version
 //
 
@@ -66,11 +74,11 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "CompanyName", "martona"
+            VALUE "CompanyName", "Marton Anka"
             VALUE "FileDescription", "clipp-win32.exe"
             VALUE "FileVersion", "1.0.0.1"
             VALUE "InternalName", "clipp-win32.exe"
-            VALUE "LegalCopyright", "Copyright (C) 2026 martona"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Marton Anka"
             VALUE "OriginalFilename", "clipp-win32.exe"
             VALUE "ProductName", "clipp"
             VALUE "ProductVersion", "1.0.0.1"

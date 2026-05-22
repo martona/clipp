@@ -1,6 +1,7 @@
 #include <Windows.h>
 #include "Logger.h"
 #include "AutoStart.h"
+#include "resource.h"
 #include "xaml_dialog.h"
 #include "clipp-win32-darkmode32/DMSubclass.h"
 #pragma comment(lib, "darkmode32.lib")
@@ -119,7 +120,16 @@ void TrayIconMessageLoop() {
     g_nid.uID = 1; // Arbitrary ID for this app's icon
     g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     g_nid.uCallbackMessage = WM_TRAYICON;
-    g_nid.hIcon = LoadIconW(NULL, IDI_APPLICATION);
+    g_nid.hIcon = static_cast<HICON>(LoadImageW(
+        hInstance,
+        MAKEINTRESOURCEW(IDI_CLIPP_ICON),
+        IMAGE_ICON,
+        GetSystemMetrics(SM_CXSMICON),
+        GetSystemMetrics(SM_CYSMICON),
+        LR_DEFAULTCOLOR | LR_SHARED));
+    if (!g_nid.hIcon) {
+        g_nid.hIcon = LoadIconW(NULL, IDI_APPLICATION);
+    }
 
     wcscpy_s(g_nid.szTip, L"Clipp Network Sync");
 

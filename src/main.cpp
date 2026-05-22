@@ -290,23 +290,40 @@ namespace {
 }
 
 static bool TryRunCommandLineCommand(int argc, char* argv[], int& exitCode) {
-    if (argc <= 1 || argv[1] == nullptr) {
-        return false;
-    }
-
-    const std::string_view commandName(argv[1]);
-    for (const CommandLineCommand& command : kCommandLineCommands) {
-        if (commandName == command.name) {
-            exitCode = command.handler();
-            return true;
+    for (int i = 1; i < argc; ++i) {
+        if (argv[i] == nullptr) {
+            continue;
         }
+
+        const std::string_view commandName(argv[i]);
+        if (commandName == "--loglevel-info" || commandName == "--clipboard-diagnostics") {
+            continue;
+        }
+
+        for (const CommandLineCommand& command : kCommandLineCommands) {
+            if (commandName == command.name) {
+                exitCode = command.handler();
+                return true;
+            }
+        }
+
+        return false;
     }
 
     return false;
 }
 
+static void ApplyCommandLineOptions(int argc, char* argv[]) {
+    for (int i = 1; i < argc; ++i) {
+        if (argv[i] != nullptr && std::string_view(argv[i]) == "--loglevel-info") {
+            g_logger.SetMinimumLevel(Logger::Level::Info);
+        }
+    }
+}
+
 int main(int argc, char* argv[]) {
 	
+    ApplyCommandLineOptions(argc, argv);
     InitializeConsoleOutput();
 
     if (!InitializeSodium()) {
