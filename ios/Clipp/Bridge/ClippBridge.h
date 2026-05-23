@@ -37,6 +37,7 @@ NS_SWIFT_NAME(IncomingClipboardBridge)
 
 + (NSString*)didChangeNotificationName;
 + (nullable CLPIncomingClipboardItem*)latestItem;
++ (NSArray<CLPIncomingClipboardItem*>*)recentItems NS_SWIFT_NAME(recentItems());
 + (BOOL)copyItem:(CLPIncomingClipboardItem*)item
            error:(NSError**)error NS_SWIFT_NAME(copy(_:));
 

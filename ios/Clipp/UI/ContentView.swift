@@ -21,23 +21,25 @@ struct ContentView: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(spacing: 18) {
-                    if let item = incomingClipboard.item {
-                        Text(item.dayTitle)
+                    if !incomingClipboard.items.isEmpty {
+                        Text(incomingClipboard.items.first?.dayTitle ?? "Recent")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                             .padding(.top, 10)
 
-                        ClipboardGroupView(
-                            deviceName: item.deviceName,
-                            item: item,
-                            isCopied: incomingClipboard.copiedItemID == item.id,
-                            onInspect: {
-                                inspectedItem = item
-                            },
-                            onCopy: {
-                                incomingClipboard.copy(item)
-                            }
-                        )
+                        ForEach(incomingClipboard.items) { item in
+                            ClipboardGroupView(
+                                deviceName: item.deviceName,
+                                item: item,
+                                isCopied: incomingClipboard.copiedItemID == item.id,
+                                onInspect: {
+                                    inspectedItem = item
+                                },
+                                onCopy: {
+                                    incomingClipboard.copy(item)
+                                }
+                            )
+                        }
                     } else {
                         EmptyIncomingClipboardView()
                             .padding(.top, 64)
@@ -163,7 +165,7 @@ struct ContentView: View {
 
 @MainActor
 private final class IncomingClipboardViewModel: ObservableObject {
-    @Published var item: ClipboardItem?
+    @Published var items: [ClipboardItem] = []
     @Published var copiedItemID: String?
     @Published var copyErrorMessage: String?
 
@@ -179,12 +181,7 @@ private final class IncomingClipboardViewModel: ObservableObject {
     }
 
     func refresh() {
-        guard let latest = IncomingClipboardBridge.latestItem() else {
-            item = nil
-            return
-        }
-
-        item = ClipboardItem(sourceItem: latest)
+        items = IncomingClipboardBridge.recentItems().compactMap(ClipboardItem.init(sourceItem:))
     }
 
     func copy(_ item: ClipboardItem) {
@@ -281,8 +278,8 @@ private struct NetworkToolbarIndicator: View {
 }
 
 private enum ClipboardPayload {
-    case multilineText(String)
-    case oneLineText(String)
+    case text(String)
+    case privateText(String)
     case link(title: String, host: String, url: String)
     case image(Data)
 }
@@ -322,10 +319,6 @@ private struct ClipboardItem: Identifiable {
     }
 
     private static func classify(text: String) -> ClipboardPayload {
-        if text.contains("\n") || text.contains("\r") {
-            return .multilineText(text)
-        }
-
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if let url = URL(string: trimmed),
            let scheme = url.scheme?.lowercased(),
@@ -334,7 +327,23 @@ private struct ClipboardItem: Identifiable {
             return .link(title: host, host: host, url: trimmed)
         }
 
-        return .oneLineText(text)
+        if text.contains("\n") || text.contains("\r") {
+            return .text(text)
+        }
+
+        if looksPrivate(text: trimmed) {
+            return .privateText(text)
+        }
+
+        return .text(text)
+    }
+
+    private static func looksPrivate(text: String) -> Bool {
+        guard text.count >= 8 && text.count <= 256 else {
+            return false
+        }
+
+        return text.rangeOfCharacter(from: .whitespacesAndNewlines) == nil
     }
 }
 
@@ -435,7 +444,7 @@ private struct ClipboardPayloadView: View {
 
     var body: some View {
         switch payload {
-        case .multilineText(let text):
+        case .text(let text):
             Text(text)
                 .font(.system(.callout, design: .monospaced))
                 .foregroundStyle(.primary)
@@ -443,7 +452,7 @@ private struct ClipboardPayloadView: View {
                 .lineLimit(8)
                 .textSelection(.enabled)
 
-        case .oneLineText(let text):
+        case .privateText(let text):
             PrivateLineView(text: text)
 
         case .link(let title, let host, let url):
@@ -573,13 +582,13 @@ private struct ClipboardInspectPayloadView: View {
 
     var body: some View {
         switch payload {
-        case .multilineText(let text):
+        case .text(let text):
             Text(text)
                 .font(.system(.body, design: .monospaced))
                 .lineSpacing(4)
                 .textSelection(.enabled)
 
-        case .oneLineText(let text):
+        case .privateText(let text):
             PrivateLineView(text: text)
                 .padding(.vertical, 4)
 

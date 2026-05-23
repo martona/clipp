@@ -293,6 +293,7 @@
 					"-framework",
 					CoreFoundation,
 					"-lsodium",
+					"-lxxhash",
 					"-lzstd",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = net.clipp.ios;
@@ -355,6 +356,7 @@
 					"-framework",
 					CoreFoundation,
 					"-lsodium",
+					"-lxxhash",
 					"-lzstd",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = net.clipp.ios;

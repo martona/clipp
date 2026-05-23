@@ -3,6 +3,7 @@
 #import <UIKit/UIKit.h>
 
 #include "../../../src/ClipboardData.h"
+#include "../../../src/ClipboardHashGuard.h"
 #include "../../../src/KeyManager.h"
 #include "../../../src/Logger.h"
 #include "../../../src/MDNSThread.h"
@@ -29,11 +30,14 @@ namespace {
 constexpr NSInteger kClippNetworkKeyErrorBase = 4100;
 constexpr NSInteger kClippNetworkRuntimeErrorBase = 4200;
 constexpr NSInteger kClippIncomingClipboardErrorBase = 4300;
+constexpr NSUInteger kMaxIncomingClipboardItems = 50;
 NSString* const kIncomingClipboardDidChangeNotification = @"net.clipp.ios.incoming-clipboard-did-change";
 std::mutex g_runtimeBridgeMutex;
 bool g_runtimeBridgeStarted = false;
 std::mutex g_incomingClipboardMutex;
 __strong CLPIncomingClipboardItem* g_latestIncomingClipboardItem = nil;
+__strong NSMutableArray<CLPIncomingClipboardItem*>* g_incomingClipboardItems = nil;
+ClipboardHashGuard g_incomingClipboardHashGuard;
 
 NSError* MakeError(NSInteger code, NSString* message) {
     return [NSError errorWithDomain:@"net.clipp.ios.network-key"
@@ -154,12 +158,48 @@ void PublishIncomingClipboardItem(CLPIncomingClipboardItem* item) {
     {
         std::lock_guard<std::mutex> lock(g_incomingClipboardMutex);
         g_latestIncomingClipboardItem = item;
+        if (g_incomingClipboardItems == nil) {
+            g_incomingClipboardItems = [[NSMutableArray alloc] init];
+        }
+
+        [g_incomingClipboardItems insertObject:item atIndex:0];
+        while (g_incomingClipboardItems.count > kMaxIncomingClipboardItems) {
+            [g_incomingClipboardItems removeLastObject];
+        }
     }
 
     dispatch_async(dispatch_get_main_queue(), ^{
         [[NSNotificationCenter defaultCenter] postNotificationName:kIncomingClipboardDidChangeNotification
                                                             object:nil];
     });
+}
+
+bool ClipboardPayloadFromIncomingItem(CLPIncomingClipboardItem* item, ClipboardPayload& payload, NSError** error) {
+    payload = {};
+
+    if (item.hasTextPayload) {
+        NSData* textData = [item.text dataUsingEncoding:NSUTF8StringEncoding];
+        if (textData == nil) {
+            AssignError(error, kClippIncomingClipboardErrorBase + 4, @"Unable to encode clipboard text.");
+            return false;
+        }
+
+        payload.formatId = CF_UNICODETEXT;
+        const auto* bytes = static_cast<const unsigned char*>(textData.bytes);
+        payload.rawData.assign(bytes, bytes + textData.length);
+        payload.rawData.push_back('\0');
+        return true;
+    }
+
+    if (item.hasImagePayload) {
+        payload.formatId = CF_DIB;
+        const auto* bytes = static_cast<const unsigned char*>(item.imagePNGData.bytes);
+        payload.rawData.assign(bytes, bytes + item.imagePNGData.length);
+        return true;
+    }
+
+    AssignError(error, kClippIncomingClipboardErrorBase + 3, @"Unsupported clipboard item.");
+    return false;
 }
 
 CLPNetworkKeyStatus* LoadNetworkKeyStatus(NSError** error) {
@@ -229,6 +269,11 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const Clipboard
             return;
         }
 
+        if (!g_incomingClipboardHashGuard.AcceptCurrent(payload)) {
+            g_logger.log("iOS", Logger::Level::Debug, L"Ignoring duplicate incoming clipboard payload.");
+            return;
+        }
+
         PublishIncomingClipboardItem(item);
     }
 }
@@ -275,6 +320,15 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const Clipboard
     return item;
 }
 
++ (NSArray<CLPIncomingClipboardItem*>*)recentItems {
+    std::lock_guard<std::mutex> lock(g_incomingClipboardMutex);
+    if (g_incomingClipboardItems == nil) {
+        return @[];
+    }
+
+    return [g_incomingClipboardItems copy];
+}
+
 + (BOOL)copyItem:(CLPIncomingClipboardItem*)item
            error:(NSError**)error {
     if (item == nil) {
@@ -282,8 +336,14 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const Clipboard
         return NO;
     }
 
+    ClipboardPayload payload{};
+    if (!ClipboardPayloadFromIncomingItem(item, payload, error)) {
+        return NO;
+    }
+
     if (item.hasTextPayload) {
         UIPasteboard.generalPasteboard.string = item.text;
+        g_incomingClipboardHashGuard.RememberCurrent(payload);
         return YES;
     }
 
@@ -294,7 +354,9 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const Clipboard
             return NO;
         }
 
-        UIPasteboard.generalPasteboard.image = image;
+        [UIPasteboard.generalPasteboard setData:item.imagePNGData
+                              forPasteboardType:@"public.png"];
+        g_incomingClipboardHashGuard.RememberCurrent(payload);
         return YES;
     }
 
