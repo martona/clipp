@@ -10,8 +10,19 @@ PROJECT="${CLIPP_IOS_PROJECT:-ios/Clipp.xcodeproj}"
 TARGET="${CLIPP_IOS_TARGET:-Clipp}"
 SDK="${CLIPP_IOS_SDK:-iphonesimulator}"
 BUILD_DIR="${BUILD_DIR:-build/ios}"
+if [[ "$BUILD_DIR" != /* ]]; then
+    BUILD_DIR="$REPO_ROOT/$BUILD_DIR"
+fi
+
 SYMROOT="${SYMROOT:-$BUILD_DIR/Build}"
 OBJROOT="${OBJROOT:-$BUILD_DIR/Intermediates}"
+if [[ "$SYMROOT" != /* ]]; then
+    SYMROOT="$REPO_ROOT/$SYMROOT"
+fi
+if [[ "$OBJROOT" != /* ]]; then
+    OBJROOT="$REPO_ROOT/$OBJROOT"
+fi
+
 DISABLE_CODE_SIGNING=0
 SETUP_VCPKG=1
 clean=0
