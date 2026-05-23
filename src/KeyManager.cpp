@@ -15,6 +15,7 @@
 #ifdef __APPLE__
     #include <CoreFoundation/CoreFoundation.h>
     #include <Security/Security.h>
+    #include <TargetConditionals.h>
     #include <limits.h>
 
     static std::string FormatSecurityError(const char* context, OSStatus status) {
@@ -46,6 +47,7 @@
         return query;
     }
 
+#if !TARGET_OS_IPHONE
     static void AddTrustedApplication(CFMutableArrayRef trustedApps, SecTrustedApplicationRef trustedApp) {
         if (trustedApps == nullptr || trustedApp == nullptr) {
             return;
@@ -117,9 +119,25 @@
 
         return status == errSecSuccess ? access : nullptr;
     }
+#endif
 
     static void AddNoAuthenticationPrompt(CFMutableDictionaryRef query) {
+#if TARGET_OS_IPHONE
+        (void)query;
+#else
         CFDictionaryAddValue(query, kSecUseAuthenticationUI, kSecUseAuthenticationUIFail);
+#endif
+    }
+
+    static void SetNetworkKeySynchronizable(CFMutableDictionaryRef query, CFTypeRef value) {
+#if TARGET_OS_IPHONE
+        if (query != nullptr && value != nullptr) {
+            CFDictionarySetValue(query, kSecAttrSynchronizable, value);
+        }
+#else
+        (void)query;
+        (void)value;
+#endif
     }
 
     static void DeleteNetworkKeyItem(CFStringRef account) {
@@ -129,6 +147,7 @@
         }
 
         AddNoAuthenticationPrompt(query);
+        SetNetworkKeySynchronizable(query, kSecAttrSynchronizableAny);
         SecItemDelete(query);
         CFRelease(query);
     }
@@ -142,6 +161,7 @@
         CFDictionaryAddValue(query, kSecReturnData, kCFBooleanTrue);
         CFDictionaryAddValue(query, kSecMatchLimit, kSecMatchLimitOne);
         AddNoAuthenticationPrompt(query);
+        SetNetworkKeySynchronizable(query, kSecAttrSynchronizableAny);
 
         OSStatus status = SecItemCopyMatching(query, outData);
         CFRelease(query);
@@ -303,16 +323,20 @@ bool KeyManager::SetNetworkKey(const NetworkKey& networkKey, std::string* errorM
         return false;
     }
 
+#if !TARGET_OS_IPHONE
     SecAccessRef access = CreateNetworkKeyAccess();
     if (access == nullptr) {
         CFRelease(plainData);
         if (errorMessage != nullptr) *errorMessage = "Failed to create keychain access list";
         return false;
     }
+#endif
 
     CFMutableDictionaryRef addQuery = CreateNetworkKeyQuery(CFSTR("NetworkKeyV2"));
     if (addQuery == nullptr) {
+#if !TARGET_OS_IPHONE
         CFRelease(access);
+#endif
         CFRelease(plainData);
         if (errorMessage != nullptr) *errorMessage = "Failed to allocate keychain add query";
         return false;
@@ -320,12 +344,18 @@ bool KeyManager::SetNetworkKey(const NetworkKey& networkKey, std::string* errorM
 
     CFDictionaryAddValue(addQuery, kSecValueData, plainData);
     CFDictionaryAddValue(addQuery, kSecAttrAccessible, kSecAttrAccessibleAfterFirstUnlock);
+#if TARGET_OS_IPHONE
+    SetNetworkKeySynchronizable(addQuery, kCFBooleanTrue);
+#else
     CFDictionaryAddValue(addQuery, kSecAttrAccess, access);
+#endif
 
     OSStatus status = SecItemAdd(addQuery, nullptr);
     CFRelease(addQuery);
 
+#if !TARGET_OS_IPHONE
     CFRelease(access);
+#endif
     CFRelease(plainData);
 
     if (status != errSecSuccess) {

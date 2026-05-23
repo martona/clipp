@@ -11,6 +11,7 @@ struct ContentView: View {
     private let groups = ClipboardGroup.sampleGroups
 
     @State private var activePanel: AppPanel?
+    @State private var didCheckInitialNetworkKey = false
 
     var body: some View {
         NavigationStack {
@@ -56,6 +57,31 @@ struct ContentView: View {
             }
             .sheet(item: $activePanel) { panel in
                 AppPanelSheet(panel: panel)
+            }
+            .task {
+                await showNetworkSetupIfNeeded()
+            }
+        }
+    }
+
+    private func showNetworkSetupIfNeeded() async {
+        guard !didCheckInitialNetworkKey else {
+            return
+        }
+
+        didCheckInitialNetworkKey = true
+
+        do {
+            let status = try await Task.detached(priority: .userInitiated) {
+                try NetworkKeyBridge.loadStatus()
+            }.value
+
+            if !status.hasNetworkKey && activePanel == nil {
+                activePanel = .network
+            }
+        } catch {
+            if activePanel == nil {
+                activePanel = .network
             }
         }
     }

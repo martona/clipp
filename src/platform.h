@@ -23,12 +23,14 @@
     #include <netdb.h>
     #include <unistd.h>
     #include <cerrno>
-#if TARGET_OS_MAC
+#if TARGET_OS_IPHONE || TARGET_OS_SIMULATOR
+        // iOS-specific headers live in the platform/ios implementation files.
+#elif TARGET_OS_MAC
         // macOS-specific headers will go here eventually
         // e.g., #include <ApplicationServices/ApplicationServices.h>
-    #else
-        #error "iOS is not currently supported."
-    #endif
+#else
+        #error "Unsupported Apple platform."
+#endif
 #elif defined(__linux__)
     #error "Not currently supported."
 #else

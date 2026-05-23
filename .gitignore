@@ -81,6 +81,9 @@ ipch/
 *.sap
 
 # vcpkg local cache and installed binaries
+v/
+vcpkg-cache/
+vcpkg-installed/
 vcpkg_installed/
 
 # Xcode specific files

@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import Combine
 
 enum AppPanel: String, CaseIterable, Identifiable {
     case network
@@ -75,23 +76,219 @@ struct AppPanelSheet: View {
 }
 
 private struct NetworkPanelView: View {
+    @StateObject private var model = NetworkKeyViewModel()
+    @State private var confirmingReplacement = false
+
     var body: some View {
         Form {
             Section("Network Key") {
-                LabeledContent("Status", value: "Not configured")
+                TextField("Network Name", text: $model.networkName)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
 
-                Button {
-                } label: {
-                    Label("Set Up Network Key", systemImage: "key")
+                SecureField("Secret", text: $model.secret)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .onSubmit {
+                        submitKey()
+                    }
+
+                if model.shouldShowAction {
+                    Button {
+                        submitKey()
+                    } label: {
+                        Label(model.actionTitle, systemImage: "key")
+                    }
+                } else {
+                    NetworkKeyStatusCard(model: model)
                 }
-                .disabled(true)
+            }
+            .alert("Recreate Network Key?", isPresented: $confirmingReplacement) {
+                Button("Cancel", role: .cancel) {}
+                Button("Recreate", role: .destructive) {
+                    model.deriveAndStoreKey()
+                }
+            } message: {
+                Text("Peers using the old network key will stop connecting until they are updated with the same network name and secret.")
+            }
+            .onChange(of: model.secret) {
+                model.updateStatusMessage()
+            }
+            .onChange(of: model.networkName) {
+                model.updateStatusMessage()
             }
 
-            Section("Peer Status") {
-                PeerStatusRow(deviceName: "MacBook Pro", status: "Nearby", isOnline: true)
-                PeerStatusRow(deviceName: "Studio PC", status: "Last seen 3 min ago", isOnline: false)
+            if model.hasNetworkKey {
+                Section("Peer Status") {
+                    PeerStatusRow(deviceName: "MacBook Pro", status: "Nearby", isOnline: true)
+                    PeerStatusRow(deviceName: "Studio PC", status: "Last seen 3 min ago", isOnline: false)
+                }
+            } else {
+                Section {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("No network key configured")
+                            .font(.subheadline.weight(.semibold))
+
+                        Text("Create one here to connect this iPhone with your other Clipp devices.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
         }
+        .task {
+            model.loadStatus()
+        }
+    }
+
+    private func submitKey() {
+        guard model.canCreateKey else {
+            return
+        }
+
+        if model.shouldConfirmReplacement {
+            confirmingReplacement = true
+        } else {
+            model.deriveAndStoreKey()
+        }
+    }
+}
+
+@MainActor
+private final class NetworkKeyViewModel: ObservableObject {
+    @Published var networkName = ""
+    @Published var secret = ""
+    @Published var fingerprint: String?
+    @Published var hasNetworkKey = false
+    @Published var isWorking = false
+    @Published var statusMessage = "Loading network key status..."
+    @Published var statusIsError = false
+
+    private var storedNetworkName = ""
+
+    var actionTitle: String {
+        hasNetworkKey ? "Recreate Network Key" : "Create Network Key"
+    }
+
+    var canCreateKey: Bool {
+        !isWorking && !networkName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && secret.count >= 8
+    }
+
+    var shouldConfirmReplacement: Bool {
+        hasNetworkKey
+    }
+
+    var shouldShowAction: Bool {
+        canCreateKey
+    }
+
+    var shouldShowFingerprint: Bool {
+        hasNetworkKey
+            && fingerprint != nil
+            && secret.isEmpty
+            && networkName == storedNetworkName
+            && !isWorking
+            && !statusIsError
+    }
+
+    func loadStatus() {
+        do {
+            apply(status: try NetworkKeyBridge.loadStatus())
+        } catch {
+            fingerprint = nil
+            hasNetworkKey = false
+            statusIsError = true
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func deriveAndStoreKey() {
+        guard canCreateKey else {
+            updateStatusMessage()
+            return
+        }
+
+        let requestedNetworkName = networkName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let requestedSecret = secret
+        isWorking = true
+        statusIsError = false
+        statusMessage = "... working ..."
+
+        Task {
+            do {
+                let status = try await Task.detached(priority: .userInitiated) {
+                    try NetworkKeyBridge.deriveAndStoreKey(networkName: requestedNetworkName, secret: requestedSecret)
+                }.value
+
+                isWorking = false
+                secret = ""
+                apply(status: status)
+            } catch {
+                isWorking = false
+                fingerprint = nil
+                statusIsError = true
+                statusMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func updateStatusMessage() {
+        if isWorking {
+            statusIsError = false
+            statusMessage = "... working ..."
+        } else if networkName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            statusIsError = true
+            statusMessage = "Network name cannot be empty."
+        } else if !secret.isEmpty && secret.count < 8 {
+            statusIsError = true
+            statusMessage = "Password must be at least 8 characters."
+        } else if !secret.isEmpty {
+            statusIsError = false
+            statusMessage = "Ready to derive and store a network key."
+        } else if hasNetworkKey && networkName != storedNetworkName {
+            statusIsError = false
+            statusMessage = "Enter the network secret again after changing the network name."
+        } else if hasNetworkKey {
+            statusIsError = false
+            statusMessage = "Network key fingerprint. Used only on this screen; not in itself a secret."
+        } else {
+            statusIsError = false
+            statusMessage = "Enter network secret to create or join a network."
+        }
+    }
+
+    private func apply(status: NetworkKeyStatus) {
+        networkName = status.networkName
+        storedNetworkName = status.networkName
+        fingerprint = status.fingerprint
+        hasNetworkKey = status.hasNetworkKey
+        statusIsError = false
+        updateStatusMessage()
+    }
+}
+
+private struct NetworkKeyStatusCard: View {
+    @ObservedObject var model: NetworkKeyViewModel
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: model.shouldShowFingerprint ? "key.fill" : "info.circle")
+                .foregroundStyle(model.statusIsError ? .red : .secondary)
+                .frame(width: 22)
+
+            VStack(alignment: .leading, spacing: 4) {
+                if model.shouldShowFingerprint, let fingerprint = model.fingerprint {
+                    Text(fingerprint)
+                        .font(.system(.subheadline, design: .monospaced).weight(.semibold))
+                        .textSelection(.enabled)
+                }
+
+                Text(model.statusMessage)
+                    .font(.footnote)
+                    .foregroundStyle(model.statusIsError ? .red : .secondary)
+            }
+        }
+        .padding(.vertical, 4)
     }
 }
 
