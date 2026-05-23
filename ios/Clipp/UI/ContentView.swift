@@ -10,6 +10,8 @@ import SwiftUI
 struct ContentView: View {
     private let groups = ClipboardGroup.sampleGroups
 
+    @State private var activePanel: AppPanel?
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -29,10 +31,31 @@ struct ContentView: View {
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Clipp")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Image(systemName: "antenna.radiowaves.left.and.right")
-                        .foregroundStyle(.secondary)
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        activePanel = .network
+                    } label: {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                    }
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Network")
+
+                    Menu {
+                        ForEach(AppPanel.allCases) { panel in
+                            Button {
+                                activePanel = panel
+                            } label: {
+                                Label(panel.title, systemImage: panel.symbolName)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "line.3.horizontal")
+                    }
+                    .accessibilityLabel("Menu")
                 }
+            }
+            .sheet(item: $activePanel) { panel in
+                AppPanelSheet(panel: panel)
             }
         }
     }
