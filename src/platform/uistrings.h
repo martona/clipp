@@ -28,7 +28,7 @@
 #define CLP_UI_WORKING "... working ..."
 
 #define CLP_UI_PEERS "Peers"
-#define CLP_UI_NO_PEERS_HELP "Make sure your devices are using the exact same network name and secret. Both are case-sensitive."
+#define CLP_UI_NO_PEERS_HELP "Your devices will appear here when they're on the same network and running Clipp. Make sure they are are using the exact same network name and secret. Both are case-sensitive."
 #define CLP_UI_UNKNOWN_HOST "(unknown host)"
 #define CLP_UI_CONNECTED "Connected"
 #define CLP_UI_NOT_CONNECTED "Not connected"
