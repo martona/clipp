@@ -49,7 +49,7 @@ static NSImage* MakeClippStatusItemImage() {
     NSImage* image = [NSImage imageNamed:@"ClippMenuBarTemplate"];
     if (image != nil) {
         image.size = NSMakeSize(18.0, 18.0);
-        [image setTemplate:YES];
+        [image setTemplate:NO];
         return image;
     }
 
