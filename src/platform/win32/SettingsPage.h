@@ -2,6 +2,7 @@
 
 #include <string>
 
+#include <winrt/Windows.UI.Xaml.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
 
 class SettingsPage {
@@ -25,6 +26,9 @@ private:
     void ValidateUdpPort();
     void ValidateListenerIp();
     void ValidateMulticastIp();
+    void RefreshHostIDDisplay();
+    void RefreshHostIDWarning();
+    void ResetHostID();
 
     static winrt::hstring ToHString(const std::string& value);
 
@@ -33,5 +37,8 @@ private:
     winrt::Windows::UI::Xaml::Controls::TextBox udpPortField_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBox listenerIpField_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBox multicastIpField_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::TextBlock hostIDValue_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::Button resetHostIDButton_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::TextBlock hostIDWarning_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBlock statusMessage_{ nullptr };
 };

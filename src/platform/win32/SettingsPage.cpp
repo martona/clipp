@@ -1,6 +1,8 @@
 #include "SettingsPage.h"
 
+#include "MDNSThread.h"
 #include "NetworkRuntime.h"
+#include "PeerManager.h"
 #include "Settings.h"
 #include "platform.h"
 #include "platform/uiSettingsPage.h"
@@ -17,6 +19,7 @@
 
 extern Settings g_settings;
 extern NetworkRuntime g_networkRuntime;
+extern PeerManager g_peerManager;
 
 namespace {
 winrt::Windows::UI::Xaml::Controls::TextBlock MakeLabel(const wchar_t* text) {
@@ -62,6 +65,43 @@ void AddSettingRow(
 
     grid.Children().Append(label);
     grid.Children().Append(field);
+}
+
+winrt::Windows::UI::Xaml::Controls::Button MakeButton(const wchar_t* text) {
+    using namespace winrt::Windows::UI::Xaml;
+    using namespace winrt::Windows::UI::Xaml::Controls;
+
+    Button button;
+    button.Content(winrt::box_value(winrt::hstring(text)));
+    button.VerticalAlignment(VerticalAlignment::Center);
+    button.HorizontalAlignment(HorizontalAlignment::Right);
+    return button;
+}
+
+void AddHostIDRow(
+    winrt::Windows::UI::Xaml::Controls::Grid const& grid,
+    int rowIndex,
+    winrt::Windows::UI::Xaml::Controls::TextBlock const& label,
+    winrt::Windows::UI::Xaml::Controls::TextBlock const& value,
+    winrt::Windows::UI::Xaml::Controls::Button const& resetButton)
+{
+    using namespace winrt::Windows::UI::Xaml;
+    using namespace winrt::Windows::UI::Xaml::Controls;
+
+    RowDefinition row;
+    row.Height(GridLength{ 1, GridUnitType::Auto });
+    grid.RowDefinitions().Append(row);
+
+    Grid::SetRow(label, rowIndex);
+    Grid::SetColumn(label, 0);
+    Grid::SetRow(value, rowIndex);
+    Grid::SetColumn(value, 1);
+    Grid::SetRow(resetButton, rowIndex);
+    Grid::SetColumn(resetButton, 2);
+
+    grid.Children().Append(label);
+    grid.Children().Append(value);
+    grid.Children().Append(resetButton);
 }
 }
 
@@ -152,6 +192,51 @@ void SettingsPage::BuildView() {
 
     content.Children().Append(section);
 
+    TextBlock hostIDHeader;
+    hostIDHeader.Text(L"Host ID");
+    hostIDHeader.FontSize(16);
+    hostIDHeader.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+    content.Children().Append(hostIDHeader);
+
+    Grid hostIDSection;
+    hostIDSection.CornerRadius(CornerRadius{ 4 });
+    hostIDSection.BorderThickness(ThicknessHelper::FromLengths(1, 1, 1, 1));
+    hostIDSection.BorderBrush(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(50, 150, 150, 150)));
+    hostIDSection.Padding(ThicknessHelper::FromLengths(16, 12, 16, 12));
+    hostIDSection.ColumnSpacing(16);
+
+    ColumnDefinition hostIDLabelColumn;
+    hostIDLabelColumn.Width(GridLength{ 130, GridUnitType::Pixel });
+    ColumnDefinition hostIDValueColumn;
+    hostIDValueColumn.Width(GridLength{ 1, GridUnitType::Star });
+    ColumnDefinition hostIDButtonColumn;
+    hostIDButtonColumn.Width(GridLength{ 1, GridUnitType::Auto });
+    hostIDSection.ColumnDefinitions().Append(hostIDLabelColumn);
+    hostIDSection.ColumnDefinitions().Append(hostIDValueColumn);
+    hostIDSection.ColumnDefinitions().Append(hostIDButtonColumn);
+
+    hostIDValue_ = TextBlock();
+    hostIDValue_.VerticalAlignment(VerticalAlignment::Center);
+    hostIDValue_.TextWrapping(TextWrapping::NoWrap);
+    hostIDValue_.FontSize(12);
+    hostIDValue_.FontFamily(winrt::Windows::UI::Xaml::Media::FontFamily(L"Consolas"));
+    resetHostIDButton_ = MakeButton(L"Reset");
+    resetHostIDButton_.Click([this](auto const&, auto const&) {
+        ResetHostID();
+    });
+
+    AddHostIDRow(hostIDSection, 0, MakeLabel(L"Current Host ID"), hostIDValue_, resetHostIDButton_);
+    content.Children().Append(hostIDSection);
+
+    hostIDWarning_ = TextBlock();
+    hostIDWarning_.Text(L"Possible Host ID collision detected. If this device was restored from backup or cloned, reset Host ID.");
+    hostIDWarning_.FontSize(13);
+    hostIDWarning_.Opacity(0.85);
+    hostIDWarning_.Foreground(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(255, 198, 116, 0)));
+    hostIDWarning_.TextWrapping(TextWrapping::WrapWholeWords);
+    hostIDWarning_.Visibility(Visibility::Collapsed);
+    content.Children().Append(hostIDWarning_);
+
     ScrollViewer scroll;
     scroll.HorizontalAlignment(HorizontalAlignment::Stretch);
     scroll.VerticalAlignment(VerticalAlignment::Stretch);
@@ -181,10 +266,13 @@ void SettingsPage::LoadSettingsIntoFields() {
     udpPortField_.Text(winrt::to_hstring(g_settings.mdnsPort()));
     listenerIpField_.Text(ToHString(g_settings.listenerIp()));
     multicastIpField_.Text(ToHString(g_settings.multicastIp()));
+    RefreshHostIDDisplay();
+    RefreshHostIDWarning();
 }
 
 void SettingsPage::ApplyNetworkSettingChange() {
     g_networkRuntime.Restart();
+    statusMessage_.Text(L"Network settings applied.");
     ShowStatusMessage();
 }
 
@@ -248,6 +336,44 @@ void SettingsPage::ValidateMulticastIp() {
         ApplyNetworkSettingChange();
     }
     multicastIpField_.Text(ToHString(g_settings.multicastIp()));
+}
+
+void SettingsPage::RefreshHostIDDisplay() {
+    if (!hostIDValue_) {
+        return;
+    }
+
+    HostId hostID;
+    if (!g_settings.ensureHostID(hostID)) {
+        hostIDValue_.Text(L"Unavailable");
+        return;
+    }
+
+    hostIDValue_.Text(winrt::hstring(hostID.ToHexWString(8)));
+}
+
+void SettingsPage::RefreshHostIDWarning() {
+    if (hostIDWarning_) {
+        hostIDWarning_.Visibility(MDNSHasHostIDCollisionWarning()
+            ? winrt::Windows::UI::Xaml::Visibility::Visible
+            : winrt::Windows::UI::Xaml::Visibility::Collapsed);
+    }
+}
+
+void SettingsPage::ResetHostID() {
+    HostId hostID;
+    if (!g_settings.resetHostID(hostID)) {
+        statusMessage_.Text(L"Unable to reset Host ID.");
+        ShowStatusMessage();
+        return;
+    }
+
+    MDNSNotifyHostIDChange();
+    g_peerManager.ClearPeers();
+    RefreshHostIDDisplay();
+    RefreshHostIDWarning();
+    statusMessage_.Text(L"Host ID reset.");
+    ShowStatusMessage();
 }
 
 winrt::hstring SettingsPage::ToHString(const std::string& value) {

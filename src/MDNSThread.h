@@ -18,5 +18,11 @@ bool StartMDNS(MDNSCallback callback);
 // Notify mDNS that the network key has changed. The next broadcast is sent immediately.
 void MDNSNotifyNetworkKeyChange();
 
+// Notify mDNS that the local host ID changed. The next broadcast is sent immediately.
+void MDNSNotifyHostIDChange();
+
+bool MDNSHasHostIDCollisionWarning();
+void MDNSClearHostIDCollisionWarning();
+
 // Stops the mDNS thread. Blocks until the thread exits.
 void StopMDNS();

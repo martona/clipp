@@ -14,6 +14,7 @@
 #include <sstream>
 #include <iomanip>
 #include <mutex>
+#include <cstddef>
 
 #include "utils_socket.h"
 #include "HostId.h"
@@ -28,7 +29,12 @@ static SOCKET g_mdnsSock = INVALID_SOCKET;
 static SocketWakeEvent g_mdnsWakeEvent;
 static std::mutex g_mdnsSocketMutex;
 static std::atomic<bool> g_mdnsSendImmediately{ false };
-static std::array<unsigned char, 32> g_lastSentQueryID{};
+static std::atomic<bool> g_mdnsReloadHostID{ false };
+static std::atomic<bool> g_hostIDCollisionWarning{ false };
+static constexpr std::size_t kRecentOriginatedQueryIDCount = 8;
+static std::array<std::array<unsigned char, 32>, kRecentOriginatedQueryIDCount> g_recentOriginatedQueryIDs{};
+static std::size_t g_recentOriginatedQueryIDNext = 0;
+static std::size_t g_recentOriginatedQueryIDUsed = 0;
 static HostId g_hostId;
 
 struct mdns_packet {
@@ -54,6 +60,39 @@ namespace {
     constexpr const char* kProtocolSelector = "clipp";
     constexpr int kProtocolVersion = 1;
     constexpr auto kBroadcastInterval = std::chrono::minutes(1);
+}
+
+static void RecordOriginatedQueryID(const unsigned char* queryID) {
+    if (queryID == nullptr) {
+        return;
+    }
+
+    std::memcpy(g_recentOriginatedQueryIDs[g_recentOriginatedQueryIDNext].data(), queryID, 32);
+    g_recentOriginatedQueryIDNext = (g_recentOriginatedQueryIDNext + 1) % g_recentOriginatedQueryIDs.size();
+    if (g_recentOriginatedQueryIDUsed < g_recentOriginatedQueryIDs.size()) {
+        ++g_recentOriginatedQueryIDUsed;
+    }
+}
+
+static bool IsRecentOriginatedQueryID(const unsigned char* queryID) {
+    if (queryID == nullptr) {
+        return false;
+    }
+
+    for (std::size_t i = 0; i < g_recentOriginatedQueryIDUsed; ++i) {
+        if (std::memcmp(g_recentOriginatedQueryIDs[i].data(), queryID, 32) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void ClearRecentOriginatedQueryIDs() {
+    for (auto& queryID : g_recentOriginatedQueryIDs) {
+        queryID.fill(0);
+    }
+    g_recentOriginatedQueryIDNext = 0;
+    g_recentOriginatedQueryIDUsed = 0;
 }
 
 static bool HasNetworkKey() {
@@ -114,10 +153,9 @@ static mdns_packet BuildMDNSPacket(const std::string& hostName, const std::strin
     std::memcpy(packet.hostID, g_hostId.data().data(), sizeof(packet.hostID));
     if (queryID) {
         std::memcpy(packet.queryID, queryID, sizeof(packet.queryID));
-        std::memcpy(g_lastSentQueryID.data(), queryID, sizeof(packet.queryID));
     } else {
         randombytes_buf(packet.queryID, sizeof(packet.queryID));
-        std::memcpy(g_lastSentQueryID.data(), packet.queryID, sizeof(packet.queryID));
+        RecordOriginatedQueryID(packet.queryID);
     }
     return packet;
 }
@@ -149,7 +187,7 @@ static bool ParseDiscoveryPacket(mdns_packet& pkt,
         *rawQueryID = pkt.queryID;
 	remoteHostID = pkt.hostID;
 
-    if (verb == "response" && std::memcmp(pkt.queryID, g_lastSentQueryID.data(), sizeof(pkt.queryID)) != 0)
+    if (verb == "response" && !IsRecentOriginatedQueryID(pkt.queryID))
         return false;
 
 	hostPort = ntohs(pkt.port);
@@ -190,6 +228,15 @@ static void WakeMDNSThread() {
     g_mdnsWakeEvent.Signal();
 }
 
+static void ReportPossibleHostIDCollision(const std::string& verb, const char* senderIpForLog) {
+    const bool firstReport = !g_hostIDCollisionWarning.exchange(true);
+    g_logger.log(__FUNCTION__,
+        firstReport ? Logger::Level::Warning : Logger::Level::Debug,
+        "mDNS: possible host ID collision detected from %s (%s packet used this host ID). If this device was restored from backup or cloned, reset Host ID in Settings.",
+        senderIpForLog != nullptr ? senderIpForLog : "<unknown>",
+        verb.c_str());
+}
+
 static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback) {
     g_mdnsCallback = callback;
 
@@ -228,6 +275,7 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
         initPromise.set_value(false);
         return;
     }
+    ClearRecentOriginatedQueryIDs();
 
     if (!g_mdnsWakeEvent.Initialize()) {
         g_logger.log(__FUNCTION__, Logger::Level::Error, "mDNS: wake socket creation failed.");
@@ -281,6 +329,17 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
     std::array<char, 1024> recvBuffer{};
 
     while (g_mdnsRunning.load()) {
+        if (g_mdnsReloadHostID.exchange(false)) {
+            HostId refreshedHostId;
+            if (g_settings.getHostID(refreshedHostId)) {
+                g_hostId = refreshedHostId;
+                ClearRecentOriginatedQueryIDs();
+                g_logger.log(__FUNCTION__, Logger::Level::Info, "mDNS: local host ID reloaded.");
+            } else {
+                g_logger.log(__FUNCTION__, Logger::Level::Warning, "mDNS: unable to reload local host ID.");
+            }
+        }
+
         const bool hasNetworkKey = HasNetworkKey();
         const auto now = std::chrono::steady_clock::now();
         if (g_mdnsSendImmediately.exchange(false)) {
@@ -354,12 +413,17 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
                 continue;
             }
 
-            if (verb == "query" && rawQueryID != nullptr) {
-				// ignore our own queries
-                if (remoteHostId == g_hostId) {
+            if (remoteHostId == g_hostId) {
+                if (verb == "query" && rawQueryID != nullptr && IsRecentOriginatedQueryID(rawQueryID)) {
                     g_logger.log(__FUNCTION__, Logger::Level::DDebug, "mDNS: ignored self query.");
                     continue;
                 }
+
+                ReportPossibleHostIDCollision(verb, senderIpForLog);
+                continue;
+            }
+
+            if (verb == "query" && rawQueryID != nullptr) {
                 mdns_packet responsePacket = BuildMDNSPacket(localHostName, "response", rawQueryID);
                 encrypted_mdns_packet encryptedResponse{};
                 if (EncryptPacket(responsePacket, encryptedResponse)) {
@@ -412,6 +476,21 @@ bool StartMDNS(MDNSCallback callback) {
 void MDNSNotifyNetworkKeyChange() {
     g_mdnsSendImmediately = true;
     WakeMDNSThread();
+}
+
+void MDNSNotifyHostIDChange() {
+    g_hostIDCollisionWarning = false;
+    g_mdnsReloadHostID = true;
+    g_mdnsSendImmediately = true;
+    WakeMDNSThread();
+}
+
+bool MDNSHasHostIDCollisionWarning() {
+    return g_hostIDCollisionWarning.load();
+}
+
+void MDNSClearHostIDCollisionWarning() {
+    g_hostIDCollisionWarning = false;
 }
 
 void StopMDNS() {

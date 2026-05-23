@@ -33,11 +33,11 @@ public:
         return m_id > other.m_id;
     }
 
-    std::string ToHexString() const {
-        return ToHexStringImpl<char>("0123456789abcdef");
+    std::string ToHexString(size_t bytesPerGroup = 4) const {
+        return ToHexStringImpl<char>("0123456789abcdef", bytesPerGroup);
     }
-    std::wstring ToHexWString() const {
-        return ToHexStringImpl<wchar_t>(L"0123456789abcdef");
+    std::wstring ToHexWString(size_t bytesPerGroup = 4) const {
+        return ToHexStringImpl<wchar_t>(L"0123456789abcdef", bytesPerGroup);
     }
 
     const std::array<unsigned char, kSize>& data() const { return m_id; }
@@ -45,15 +45,18 @@ public:
 
 private:
     template<typename CharT>
-    std::basic_string<CharT> ToHexStringImpl(const CharT* hexDigits) const {
+    std::basic_string<CharT> ToHexStringImpl(const CharT* hexDigits, size_t bytesPerGroup) const {
         std::basic_string<CharT> hexString;
         hexString.reserve(m_id.size() * 2 + m_id.size() / 4);
-        int idx = 0;
-        for (unsigned char byte : m_id) {
-            if (idx > 0 && idx % 4 == 0) {
+        if (bytesPerGroup == 0) {
+            bytesPerGroup = 4;
+        }
+
+        for (std::size_t idx = 0; idx < m_id.size(); ++idx) {
+            if (idx > 0 && idx % bytesPerGroup == 0) {
                 hexString.push_back(static_cast<CharT>('-'));
             }
-            ++idx;
+            const unsigned char byte = m_id[idx];
             hexString.push_back(hexDigits[byte >> 4]);
             hexString.push_back(hexDigits[byte & 0x0F]);
         }

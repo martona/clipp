@@ -122,15 +122,10 @@ void NetworkRuntime::OnMDNSNotification(const char* hostNameUtf8,
                                         unsigned short port,
                                         const HostId& remoteHostId)
 {
-    static HostId ourHostId;
-    static bool ourHostIdInitialized = false;
-    if (!ourHostIdInitialized) {
-        if (g_settings.getHostID(ourHostId)) {
-            ourHostIdInitialized = true;
-        } else {
-            g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to get host ID from settings during mDNS notification handling.");
-            return;
-        }
+    HostId ourHostId;
+    if (!g_settings.getHostID(ourHostId)) {
+        g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to get host ID from settings during mDNS notification handling.");
+        return;
     }
 
     g_logger.log(__FUNCTION__, Logger::Level::DDebug,
