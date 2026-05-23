@@ -4,6 +4,7 @@
 #include "../../../src/Logger.h"
 #include "../../../src/MDNSThread.h"
 #include "../../../src/NetworkRuntime.h"
+#include "../../../src/PeerDisplay.h"
 #include "../../../src/PeerManager.h"
 #include "../../../src/Settings.h"
 #include "../../../src/platform/uiClippPage.h"
@@ -16,6 +17,7 @@
 
 extern Settings g_settings;
 extern KeyManager g_keyManager;
+extern PeerDisplay g_peerDisplay;
 extern PeerManager g_peerManager;
 extern NetworkRuntime g_networkRuntime;
 
@@ -295,6 +297,16 @@ CLPNetworkKeyStatus* LoadNetworkKeyStatus(NSError** error) {
 + (BOOL)isRunning {
     std::lock_guard<std::mutex> lock(g_runtimeBridgeMutex);
     return g_runtimeBridgeStarted;
+}
+
++ (BOOL)hasPeerConnections {
+    const auto peers = g_peerDisplay.Query();
+    for (const auto& peer : peers) {
+        if (peer.hasIncomingConnection || peer.hasOutgoingConnection) {
+            return YES;
+        }
+    }
+    return NO;
 }
 
 @end

@@ -38,6 +38,7 @@ NS_SWIFT_NAME(NetworkRuntimeBridge)
 + (void)stop;
 + (void)notifyNetworkKeyChanged;
 + (BOOL)isRunning;
++ (BOOL)hasPeerConnections;
 
 @end
 

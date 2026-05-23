@@ -12,6 +12,7 @@ struct ContentView: View {
 
     @State private var activePanel: AppPanel?
     @State private var didCheckInitialNetworkKey = false
+    @State private var networkIndicatorMode: NetworkIndicatorMode = .ok
 
     var body: some View {
         NavigationStack {
@@ -36,7 +37,7 @@ struct ContentView: View {
                     Button {
                         activePanel = .network
                     } label: {
-                        Image(systemName: "antenna.radiowaves.left.and.right")
+                        NetworkToolbarIndicator(mode: networkIndicatorMode)
                     }
                     .foregroundStyle(.secondary)
                     .accessibilityLabel(CLP_UI_NETWORK)
@@ -60,6 +61,9 @@ struct ContentView: View {
             }
             .task {
                 await showNetworkSetupIfNeeded()
+            }
+            .task {
+                await pollNetworkIndicator()
             }
         }
     }
@@ -88,6 +92,106 @@ struct ContentView: View {
         } catch {
             if activePanel == nil {
                 activePanel = .network
+            }
+        }
+
+        await refreshNetworkIndicator()
+    }
+
+    private func pollNetworkIndicator() async {
+        while !Task.isCancelled {
+            await refreshNetworkIndicator()
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+        }
+    }
+
+    private func refreshNetworkIndicator() async {
+        let mode = await Task.detached(priority: .utility) {
+            guard NetworkRuntimeBridge.isRunning() else {
+                return NetworkIndicatorMode.ok
+            }
+
+            let hasNetworkKey = (try? NetworkKeyBridge.loadStatus().hasNetworkKey) ?? false
+            guard hasNetworkKey else {
+                return NetworkIndicatorMode.needsSetup
+            }
+
+            return NetworkRuntimeBridge.hasPeerConnections() ? .ok : .searching
+        }.value
+
+        networkIndicatorMode = mode
+    }
+}
+
+private enum NetworkIndicatorMode: Sendable {
+    case ok
+    case searching
+    case needsSetup
+}
+
+private struct NetworkToolbarIndicator: View {
+    let mode: NetworkIndicatorMode
+
+    @State private var sweepRotation = 0.0
+    @State private var setupBadgeScale = 1.0
+
+    var body: some View {
+        ZStack {
+            Image(systemName: "antenna.radiowaves.left.and.right")
+                .symbolRenderingMode(.hierarchical)
+
+            if mode == .searching {
+                Circle()
+                    .trim(from: 0.08, to: 0.28)
+                    .stroke(
+                        .secondary,
+                        style: StrokeStyle(lineWidth: 1.5, lineCap: .round)
+                    )
+                    .frame(width: 24, height: 24)
+                    .rotationEffect(.degrees(sweepRotation))
+                    .transition(.opacity)
+            }
+
+            if mode == .needsSetup {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, .orange)
+                    .font(.system(size: 12, weight: .semibold))
+                    .background(
+                        Circle()
+                            .fill(.background)
+                            .frame(width: 13, height: 13)
+                    )
+                    .scaleEffect(setupBadgeScale)
+                    .offset(x: 9, y: -9)
+                    .transition(.scale.combined(with: .opacity))
+            }
+        }
+        .frame(width: 28, height: 28)
+        .onAppear(perform: updateAnimation)
+        .onChange(of: mode) {
+            updateAnimation()
+        }
+    }
+
+    private func updateAnimation() {
+        switch mode {
+        case .searching:
+            setupBadgeScale = 1
+            sweepRotation = 0
+            withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
+                sweepRotation = 360
+            }
+        case .needsSetup:
+            sweepRotation = 0
+            setupBadgeScale = 1
+            withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) {
+                setupBadgeScale = 1.18
+            }
+        case .ok:
+            withAnimation(.easeOut(duration: 0.18)) {
+                sweepRotation = 0
+                setupBadgeScale = 1
             }
         }
     }
