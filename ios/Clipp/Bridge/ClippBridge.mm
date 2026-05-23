@@ -1,5 +1,8 @@
 #import "ClippBridge.h"
 
+#import <UIKit/UIKit.h>
+
+#include "../../../src/ClipboardData.h"
 #include "../../../src/KeyManager.h"
 #include "../../../src/Logger.h"
 #include "../../../src/MDNSThread.h"
@@ -12,6 +15,7 @@
 #include <sodium.h>
 #include <signal.h>
 
+#include <cstring>
 #include <mutex>
 #include <string>
 
@@ -24,8 +28,12 @@ extern NetworkRuntime g_networkRuntime;
 namespace {
 constexpr NSInteger kClippNetworkKeyErrorBase = 4100;
 constexpr NSInteger kClippNetworkRuntimeErrorBase = 4200;
+constexpr NSInteger kClippIncomingClipboardErrorBase = 4300;
+NSString* const kIncomingClipboardDidChangeNotification = @"net.clipp.ios.incoming-clipboard-did-change";
 std::mutex g_runtimeBridgeMutex;
 bool g_runtimeBridgeStarted = false;
+std::mutex g_incomingClipboardMutex;
+__strong CLPIncomingClipboardItem* g_latestIncomingClipboardItem = nil;
 
 NSError* MakeError(NSInteger code, NSString* message) {
     return [NSError errorWithDomain:@"net.clipp.ios.network-key"
@@ -123,6 +131,37 @@ NSString* ToNSString(const std::wstring& value) {
     return text;
 }
 
+bool IsPngStream(const std::vector<unsigned char>& data) {
+    static constexpr unsigned char signature[] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n' };
+    return data.size() >= sizeof(signature) && std::memcmp(data.data(), signature, sizeof(signature)) == 0;
+}
+
+NSString* ClipboardTextFromPayload(const ClipboardPayload& payload) {
+    size_t textLength = payload.rawData.size();
+    if (textLength > 0 && payload.rawData.back() == '\0') {
+        --textLength;
+    }
+    if (textLength == 0) {
+        return @"";
+    }
+
+    return [[NSString alloc] initWithBytes:payload.rawData.data()
+                                    length:textLength
+                                  encoding:NSUTF8StringEncoding];
+}
+
+void PublishIncomingClipboardItem(CLPIncomingClipboardItem* item) {
+    {
+        std::lock_guard<std::mutex> lock(g_incomingClipboardMutex);
+        g_latestIncomingClipboardItem = item;
+    }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[NSNotificationCenter defaultCenter] postNotificationName:kIncomingClipboardDidChangeNotification
+                                                            object:nil];
+    });
+}
+
 CLPNetworkKeyStatus* LoadNetworkKeyStatus(NSError** error) {
     if (!EnsureSodium(error)) {
         return nil;
@@ -149,6 +188,121 @@ CLPNetworkKeyStatus* LoadNetworkKeyStatus(NSError** error) {
                                              hasNetworkKey:hasKey];
 }
 }
+
+void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const ClipboardPayload& payload) {
+    @autoreleasepool {
+        NSString* deviceName = ToNSString(hostName);
+        if (deviceName.length == 0) {
+            deviceName = @"Unknown device";
+        }
+
+        CLPIncomingClipboardItem* item = nil;
+        if (payload.formatId == CF_UNICODETEXT) {
+            NSString* text = ClipboardTextFromPayload(payload);
+            if (text.length == 0 && payload.rawData.size() != 0) {
+                g_logger.log("iOS", Logger::Level::Warning, L"Incoming text clipboard payload could not be decoded as UTF-8.");
+                return;
+            }
+
+            item = [[CLPIncomingClipboardItem alloc] initWithIdentifier:NSUUID.UUID.UUIDString
+                                                             deviceName:deviceName
+                                                             receivedAt:NSDate.date
+                                                                   kind:CLPIncomingClipboardPayloadKindText
+                                                                   text:text ?: @""
+                                                           imagePNGData:nil];
+        } else if (payload.formatId == CF_DIB) {
+            if (!IsPngStream(payload.rawData)) {
+                g_logger.log("iOS", Logger::Level::Warning, L"Incoming image clipboard payload was not a PNG stream (%zu bytes).", payload.rawData.size());
+                return;
+            }
+
+            NSData* imageData = [NSData dataWithBytes:payload.rawData.data()
+                                               length:payload.rawData.size()];
+            item = [[CLPIncomingClipboardItem alloc] initWithIdentifier:NSUUID.UUID.UUIDString
+                                                             deviceName:deviceName
+                                                             receivedAt:NSDate.date
+                                                                   kind:CLPIncomingClipboardPayloadKindImage
+                                                                   text:nil
+                                                           imagePNGData:imageData];
+        } else {
+            g_logger.log("iOS", Logger::Level::Warning, L"Unsupported incoming clipboard format ID %u; payload ignored.", payload.formatId);
+            return;
+        }
+
+        PublishIncomingClipboardItem(item);
+    }
+}
+
+@implementation CLPIncomingClipboardItem
+
+- (instancetype)initWithIdentifier:(NSString*)identifier
+                        deviceName:(NSString*)deviceName
+                        receivedAt:(NSDate*)receivedAt
+                              kind:(CLPIncomingClipboardPayloadKind)kind
+                              text:(NSString*)text
+                      imagePNGData:(NSData*)imagePNGData {
+    self = [super init];
+    if (self) {
+        _identifier = [identifier copy];
+        _deviceName = [deviceName copy];
+        _receivedAt = [receivedAt copy];
+        _kind = kind;
+        _text = [text copy];
+        _imagePNGData = [imagePNGData copy];
+    }
+    return self;
+}
+
+- (BOOL)hasTextPayload {
+    return self.kind == CLPIncomingClipboardPayloadKindText && self.text.length > 0;
+}
+
+- (BOOL)hasImagePayload {
+    return self.kind == CLPIncomingClipboardPayloadKindImage && self.imagePNGData.length > 0;
+}
+
+@end
+
+@implementation CLPIncomingClipboardBridge
+
++ (NSString*)didChangeNotificationName {
+    return kIncomingClipboardDidChangeNotification;
+}
+
++ (CLPIncomingClipboardItem*)latestItem {
+    std::lock_guard<std::mutex> lock(g_incomingClipboardMutex);
+    __strong CLPIncomingClipboardItem* item = g_latestIncomingClipboardItem;
+    return item;
+}
+
++ (BOOL)copyItem:(CLPIncomingClipboardItem*)item
+           error:(NSError**)error {
+    if (item == nil) {
+        AssignError(error, kClippIncomingClipboardErrorBase + 1, @"No clipboard item is available to copy.");
+        return NO;
+    }
+
+    if (item.hasTextPayload) {
+        UIPasteboard.generalPasteboard.string = item.text;
+        return YES;
+    }
+
+    if (item.hasImagePayload) {
+        UIImage* image = [UIImage imageWithData:item.imagePNGData];
+        if (image == nil) {
+            AssignError(error, kClippIncomingClipboardErrorBase + 2, @"Unable to decode clipboard image.");
+            return NO;
+        }
+
+        UIPasteboard.generalPasteboard.image = image;
+        return YES;
+    }
+
+    AssignError(error, kClippIncomingClipboardErrorBase + 3, @"Unsupported clipboard item.");
+    return NO;
+}
+
+@end
 
 @implementation CLPNetworkKeyStatus
 

@@ -8,6 +8,7 @@
 
 #if defined(__APPLE__) && (TARGET_OS_IPHONE || TARGET_OS_SIMULATOR)
 #define CLIPP_IOS_CLIPBOARD_RECEIVE_STUB 1
+void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const ClipboardPayload& payload);
 #else
 #include "Clipboard.h"
 #define CLIPP_IOS_CLIPBOARD_RECEIVE_STUB 0
@@ -108,7 +109,7 @@ void NetworkRuntime::ThreadProc() {
 void NetworkRuntime::OnClipboardReceived(const std::wstring& hostName, const HostId&, ClipboardPayload& payload) {
     g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Received clipboard data from client %ls (format ID: %u, size: %zu bytes)", hostName.c_str(), payload.formatId, payload.rawData.size());
 #if CLIPP_IOS_CLIPBOARD_RECEIVE_STUB
-    g_logger.log(__FUNCTION__, Logger::Level::Info, L"iOS clipboard receive callback is stubbed; payload was validated and ignored.");
+    CLPIOSReceiveClipboardPayload(hostName, payload);
 #else
     SetClipboardData(payload);
 #endif

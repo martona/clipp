@@ -4,6 +4,44 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+NS_SWIFT_NAME(IncomingClipboardPayloadKind)
+typedef NS_ENUM(NSInteger, CLPIncomingClipboardPayloadKind) {
+    CLPIncomingClipboardPayloadKindText = 1,
+    CLPIncomingClipboardPayloadKindImage = 2,
+};
+
+NS_SWIFT_NAME(IncomingClipboardItem)
+@interface CLPIncomingClipboardItem : NSObject
+
+@property(nonatomic, copy, readonly) NSString* identifier;
+@property(nonatomic, copy, readonly) NSString* deviceName;
+@property(nonatomic, copy, readonly) NSDate* receivedAt;
+@property(nonatomic, assign, readonly) CLPIncomingClipboardPayloadKind kind;
+@property(nonatomic, copy, nullable, readonly) NSString* text;
+@property(nonatomic, copy, nullable, readonly) NSData* imagePNGData;
+@property(nonatomic, assign, readonly) BOOL hasTextPayload;
+@property(nonatomic, assign, readonly) BOOL hasImagePayload;
+
+- (instancetype)initWithIdentifier:(NSString*)identifier
+                        deviceName:(NSString*)deviceName
+                        receivedAt:(NSDate*)receivedAt
+                              kind:(CLPIncomingClipboardPayloadKind)kind
+                              text:(nullable NSString*)text
+                      imagePNGData:(nullable NSData*)imagePNGData NS_DESIGNATED_INITIALIZER;
+- (instancetype)init NS_UNAVAILABLE;
+
+@end
+
+NS_SWIFT_NAME(IncomingClipboardBridge)
+@interface CLPIncomingClipboardBridge : NSObject
+
++ (NSString*)didChangeNotificationName;
++ (nullable CLPIncomingClipboardItem*)latestItem;
++ (BOOL)copyItem:(CLPIncomingClipboardItem*)item
+           error:(NSError**)error NS_SWIFT_NAME(copy(_:));
+
+@end
+
 NS_SWIFT_NAME(NetworkKeyStatus)
 @interface CLPNetworkKeyStatus : NSObject
 
