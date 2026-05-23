@@ -283,16 +283,16 @@ void MacOSClippPage::BuildView() {
     contentStack.spacing = 16.0;
     contentStack.detachesHiddenViews = YES;
 
-    NSTextField* heading = [NSTextField labelWithString:@"Clipp"];
+    NSTextField* heading = [NSTextField labelWithString:CLP_NS(CLP_UI_APP_NAME)];
     heading.translatesAutoresizingMaskIntoConstraints = NO;
     heading.font = [NSFont systemFontOfSize:28 weight:NSFontWeightSemibold];
     heading.textColor = [NSColor labelColor];
 
-    NSTextField* intro = MacOSMakeWrappingLabel(@"Secure cross-platform clipboard sync for trusted devices.",
+    NSTextField* intro = MacOSMakeWrappingLabel(CLP_NS(CLP_UI_TAGLINE),
                                            14.0,
                                            [NSColor secondaryLabelColor]);
 
-    NSTextField* networkHeader = [NSTextField labelWithString:@"Network"];
+    NSTextField* networkHeader = [NSTextField labelWithString:CLP_NS(CLP_UI_NETWORK)];
     networkHeader.translatesAutoresizingMaskIntoConstraints = NO;
     networkHeader.font = [NSFont systemFontOfSize:16 weight:NSFontWeightSemibold];
     networkHeader.textColor = [NSColor labelColor];
@@ -306,13 +306,13 @@ void MacOSClippPage::BuildView() {
     passwordField_.delegate = fieldDelegate_;
 
     NSMutableArray<NSLayoutConstraint*>* sectionConstraints = [NSMutableArray array];
-    AddInputRow(section, MacOSMakeLabel(@"Name"), networkNameField_, nil, sectionConstraints);
-    AddInputRow(section, MacOSMakeLabel(@"Secret"), passwordField_, networkNameField_, sectionConstraints);
+    AddInputRow(section, MacOSMakeLabel(CLP_NS(CLP_UI_NAME)), networkNameField_, nil, sectionConstraints);
+    AddInputRow(section, MacOSMakeLabel(CLP_NS(CLP_UI_SECRET)), passwordField_, networkNameField_, sectionConstraints);
     [sectionConstraints addObject:[passwordField_.bottomAnchor constraintEqualToAnchor:section.bottomAnchor constant:-kSectionInsetY]];
     [NSLayoutConstraint activateConstraints:sectionConstraints];
 
     passwordStatusPanel_ = MacOSMakeGroupBox();
-    NSImageView* keyIcon = MacOSMakeSymbolImageView(@"key.fill", @"Network key", [NSColor secondaryLabelColor]);
+    NSImageView* keyIcon = MacOSMakeSymbolImageView(@"key.fill", CLP_NS(CLP_UI_NETWORK_KEY), [NSColor secondaryLabelColor]);
     NSStackView* hashStack = [[NSStackView alloc] initWithFrame:NSZeroRect];
     hashStack.translatesAutoresizingMaskIntoConstraints = NO;
     hashStack.orientation = NSUserInterfaceLayoutOrientationVertical;
@@ -322,7 +322,7 @@ void MacOSClippPage::BuildView() {
     passwordHashText_ = MacOSMakeWrappingLabel(@"", 13.0, [NSColor labelColor]);
     passwordHashText_.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
 
-    NSTextField* hashExplainer = MacOSMakeWrappingLabel(@"Network key fingerprint. Used only on this screen; not in itself a secret.",
+    NSTextField* hashExplainer = MacOSMakeWrappingLabel(CLP_NS(CLP_UI_NETWORK_KEY_FINGERPRINT),
                                                    12.0,
                                                    [NSColor secondaryLabelColor]);
     [hashStack addArrangedSubview:passwordHashText_];
@@ -412,7 +412,7 @@ void MacOSClippPage::SetupPasswordFields() {
         passwordInfoPanel_.hidden = YES;
     } else {
         MacOSSetFieldText(passwordField_, @"");
-        MacOSSetFieldText(passwordInfoText_, @"Enter network secret to create or join a network.");
+        MacOSSetFieldText(passwordInfoText_, CLP_NS(CLP_UI_ENTER_NETWORK_SECRET));
         passwordStatusPanel_.hidden = YES;
         passwordInfoPanel_.hidden = NO;
     }
@@ -479,11 +479,11 @@ void MacOSClippPage::DerivePasswordFromCurrentField() {
     passwordInfoPanel_.hidden = NO;
 
     if (passwordText.length < 8) {
-        MacOSSetFieldText(passwordInfoText_, @"Secret must be at least 8 characters.");
+        MacOSSetFieldText(passwordInfoText_, CLP_NS(CLP_UI_SECRET_TOO_SHORT));
         return;
     }
 
-    MacOSSetFieldText(passwordInfoText_, @"... working ...");
+    MacOSSetFieldText(passwordInfoText_, CLP_NS(CLP_UI_WORKING));
 
     const std::string networkName = g_settings.networkName();
     std::string password = MacOSToStdString(passwordField_.stringValue);

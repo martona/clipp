@@ -1,5 +1,7 @@
 #import <Foundation/Foundation.h>
 
+#include "../../../src/platform/uistrings.h"
+
 NS_ASSUME_NONNULL_BEGIN
 
 NS_SWIFT_NAME(NetworkKeyStatus)

@@ -1,6 +1,7 @@
 #include "LogsPage.h"
 
 #include "Logger.h"
+#include "platform/uistrings.h"
 
 #include <limits>
 
@@ -48,14 +49,14 @@ void LogsPage::BuildView() {
     header.Spacing(8);
 
     TextBlock heading;
-    heading.Text(L"Logs");
+    heading.Text(CLP_W(CLP_UI_LOGS));
     heading.FontSize(28);
     heading.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
     heading.TextWrapping(TextWrapping::Wrap);
     header.Children().Append(heading);
 
     TextBlock intro;
-    intro.Text(L"Live diagnostic output from Clipp.");
+    intro.Text(CLP_W(CLP_UI_LIVE_DIAGNOSTIC_OUTPUT));
     intro.FontSize(14);
     intro.TextWrapping(TextWrapping::WrapWholeWords);
     intro.Opacity(0.75);

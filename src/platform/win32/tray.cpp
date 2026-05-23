@@ -6,6 +6,7 @@
 #include "AutoStart.h"
 #include "resource.h"
 #include "xaml_dialog.h"
+#include "platform/uistrings.h"
 #include "clipp-win32-darkmode32/DMSubclass.h"
 #pragma comment(lib, "darkmode32.lib")
 
@@ -53,12 +54,12 @@ LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             else if (LOWORD(lParam) == WM_RBUTTONUP) {
                 // 1. Create a native, Unicode context menu
                 HMENU hMenu = CreatePopupMenu();
-                AppendMenuW(hMenu, MF_STRING, ID_TRAY_OPEN, L"Open Clipp");
+                AppendMenuW(hMenu, MF_STRING, ID_TRAY_OPEN, CLP_W(CLP_UI_OPEN_CLIPP));
                 SetMenuDefaultItem(hMenu, ID_TRAY_OPEN, FALSE);
                 AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
-                AppendMenuW(hMenu, MF_STRING, ID_TRAY_ABOUT, L"About Clipp");
+                AppendMenuW(hMenu, MF_STRING, ID_TRAY_ABOUT, CLP_W(CLP_UI_ABOUT_CLIPP));
                 AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
-                AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, L"Exit Clipp");
+                AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, CLP_W(CLP_UI_EXIT_CLIPP));
 
                 // 2. Windows bug workaround: You must bring the hidden window
                 // to the foreground before showing the menu, or it won't disappear
@@ -82,12 +83,12 @@ LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             case ID_TRAY_ABOUT:
                 DarkMode::DarkMessageBox(
                     g_trayWindow,
-                    L"Clipp v1.0\n"
-                    L"Secure cross-platform clipboard sync for trusted devices.\n\n"
-                    L"Copyright (C) 2026 Marton Anka\n"
-                    L"Released under the MIT License.\n\n"
+                    CLP_W(CLP_UI_ABOUT_TITLE) L"\n"
+                    CLP_W(CLP_UI_TAGLINE) L"\n\n"
+                    CLP_W(CLP_UI_COPYRIGHT) L"\n"
+                    CLP_W(CLP_UI_MIT_LICENSE) L"\n\n"
                     L"Uses open source libraries including libsodium, lodepng, xxHash, Zstandard, C++/WinRT, and darkmode32plus.",
-                    L"About Clipp",
+                    CLP_W(CLP_UI_ABOUT_CLIPP),
                     MB_ICONINFORMATION | MB_OK);
                 break;
             case ID_TRAY_EXIT:
@@ -142,7 +143,7 @@ void TrayIconMessageLoop() {
         g_nid.hIcon = LoadIconW(NULL, IDI_APPLICATION);
     }
 
-    wcscpy_s(g_nid.szTip, L"Clipp Network Sync");
+    wcscpy_s(g_nid.szTip, CLP_W(CLP_UI_STATUS_TOOLTIP));
 
     Shell_NotifyIconW(NIM_ADD, &g_nid);
 

@@ -3,6 +3,7 @@
 #ifdef __APPLE__
 
 #include "UiHelpers.h"
+#include "platform/uistrings.h"
 
 #import <AppKit/AppKit.h>
 
@@ -35,8 +36,8 @@ NSTextField* MakeSectionHeading(NSString* text) {
 }
 
 NSTextField* MakeRepositoryLink() {
-    NSString* title = @"github.com/martona/clipp";
-    NSURL* url = [NSURL URLWithString:@"https://github.com/martona/clipp"];
+    NSString* title = CLP_NS(CLP_UI_REPOSITORY_LABEL);
+    NSURL* url = [NSURL URLWithString:CLP_NS(CLP_UI_REPOSITORY_URL)];
     NSMutableAttributedString* linkText = [[NSMutableAttributedString alloc] initWithString:title attributes:@{
         NSFontAttributeName: [NSFont systemFontOfSize:13],
         NSForegroundColorAttributeName: [NSColor linkColor],
@@ -110,12 +111,12 @@ void MacOSAboutPage::BuildView() {
     contentStack.distribution = NSStackViewDistributionFill;
     contentStack.spacing = 14.0;
 
-    NSTextField* heading = [NSTextField labelWithString:@"Clipp v1.0"];
+    NSTextField* heading = [NSTextField labelWithString:CLP_NS(CLP_UI_ABOUT_TITLE)];
     heading.translatesAutoresizingMaskIntoConstraints = NO;
     heading.font = [NSFont systemFontOfSize:28 weight:NSFontWeightSemibold];
     heading.textColor = [NSColor labelColor];
 
-    NSTextField* intro = MakeAboutText(@"Secure cross-platform clipboard sync for trusted devices.",
+    NSTextField* intro = MakeAboutText(CLP_NS(CLP_UI_TAGLINE),
                                        14.0,
                                        [NSColor secondaryLabelColor]);
 
@@ -131,11 +132,11 @@ void MacOSAboutPage::BuildView() {
     projectStack.distribution = NSStackViewDistributionFill;
     projectStack.spacing = 6.0;
 
-    NSTextField* projectHeading = MakeSectionHeading(@"Project");
+    NSTextField* projectHeading = MakeSectionHeading(CLP_NS(CLP_UI_PROJECT));
     AddWrappedArrangedSubview(projectStack, projectHeading);
     [projectStack setCustomSpacing:10.0 afterView:projectHeading];
-    AddWrappedArrangedSubview(projectStack, MakeAboutText(@"Copyright (C) 2026 Marton Anka", 13.0, [NSColor secondaryLabelColor]));
-    AddWrappedArrangedSubview(projectStack, MakeAboutText(@"Released under the MIT License.", 13.0, [NSColor secondaryLabelColor]));
+    AddWrappedArrangedSubview(projectStack, MakeAboutText(CLP_NS(CLP_UI_COPYRIGHT), 13.0, [NSColor secondaryLabelColor]));
+    AddWrappedArrangedSubview(projectStack, MakeAboutText(CLP_NS(CLP_UI_MIT_LICENSE), 13.0, [NSColor secondaryLabelColor]));
     [projectStack addArrangedSubview:MakeRepositoryLink()];
 
     [projectBand addSubview:artworkView];
@@ -148,13 +149,13 @@ void MacOSAboutPage::BuildView() {
     acknowledgements.distribution = NSStackViewDistributionFill;
     acknowledgements.spacing = 6.0;
 
-    AddWrappedArrangedSubview(acknowledgements, MakeSectionHeading(@"Open Source Acknowledgements"));
-    AddWrappedArrangedSubview(acknowledgements, MakeAboutText(@"libsodium - ISC-licensed cryptography library", 13.0, [NSColor secondaryLabelColor]));
-    AddWrappedArrangedSubview(acknowledgements, MakeAboutText(@"lodepng - zlib-licensed PNG encoder/decoder", 13.0, [NSColor secondaryLabelColor]));
-    AddWrappedArrangedSubview(acknowledgements, MakeAboutText(@"xxHash - BSD-2-Clause non-cryptographic hashing", 13.0, [NSColor secondaryLabelColor]));
-    AddWrappedArrangedSubview(acknowledgements, MakeAboutText(@"Zstandard (zstd) - BSD-licensed compression", 13.0, [NSColor secondaryLabelColor]));
+    AddWrappedArrangedSubview(acknowledgements, MakeSectionHeading(CLP_NS(CLP_UI_OPEN_SOURCE_ACKNOWLEDGEMENTS)));
+    AddWrappedArrangedSubview(acknowledgements, MakeAboutText(CLP_NS(CLP_UI_ACK_LIBSODIUM), 13.0, [NSColor secondaryLabelColor]));
+    AddWrappedArrangedSubview(acknowledgements, MakeAboutText(CLP_NS(CLP_UI_ACK_LODEPNG), 13.0, [NSColor secondaryLabelColor]));
+    AddWrappedArrangedSubview(acknowledgements, MakeAboutText(CLP_NS(CLP_UI_ACK_XXHASH), 13.0, [NSColor secondaryLabelColor]));
+    AddWrappedArrangedSubview(acknowledgements, MakeAboutText(CLP_NS(CLP_UI_ACK_ZSTD), 13.0, [NSColor secondaryLabelColor]));
 
-    NSTextField* note = MakeAboutText(@"Third-party license terms remain with their respective projects.",
+    NSTextField* note = MakeAboutText(CLP_NS(CLP_UI_THIRD_PARTY_LICENSE_NOTE),
                                       12.0,
                                       [NSColor tertiaryLabelColor]);
 

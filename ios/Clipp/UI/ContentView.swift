@@ -30,7 +30,7 @@ struct ContentView: View {
                 .padding(.bottom, 24)
             }
             .background(Color(.systemGroupedBackground))
-            .navigationTitle("Clipp")
+            .navigationTitle(CLP_UI_APP_NAME)
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button {
@@ -39,7 +39,7 @@ struct ContentView: View {
                         Image(systemName: "antenna.radiowaves.left.and.right")
                     }
                     .foregroundStyle(.secondary)
-                    .accessibilityLabel("Network")
+                    .accessibilityLabel(CLP_UI_NETWORK)
 
                     Menu {
                         ForEach(AppPanel.allCases) { panel in

@@ -7,6 +7,7 @@
 #include "ClippPage.h"
 #include "SettingsPage.h"
 #include "TerminalLogView.h"
+#include "platform/uistrings.h"
 
 #import <AppKit/AppKit.h>
 #import <ServiceManagement/ServiceManagement.h>
@@ -53,7 +54,7 @@ static NSImage* MakeClippStatusItemImage() {
         return image;
     }
 
-    image = [NSImage imageWithSystemSymbolName:@"doc.on.clipboard" accessibilityDescription:@"Clipp"];
+    image = [NSImage imageWithSystemSymbolName:@"doc.on.clipboard" accessibilityDescription:CLP_NS(CLP_UI_APP_NAME)];
     if (image != nil) {
         [image setTemplate:YES];
     }
@@ -182,7 +183,7 @@ void RequestMacOSShowMainWindow() {
                                                               NSWindowStyleMaskResizable)
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
-    window.title = @"Clipp";
+    window.title = CLP_NS(CLP_UI_APP_NAME);
     window.releasedWhenClosed = NO;
     window.minSize = NSMakeSize(720, 440);
 
@@ -235,7 +236,7 @@ void RequestMacOSShowMainWindow() {
     menuStack.spacing = 6;
     menuStack.edgeInsets = NSEdgeInsetsMake(16, 12, 0, 12);
 
-    NSArray<NSString*>* titles = @[@"Clipp", @"Settings", @"Logs", @"About"];
+    NSArray<NSString*>* titles = @[CLP_NS(CLP_UI_APP_NAME), CLP_NS(CLP_UI_SETTINGS), CLP_NS(CLP_UI_LOGS), CLP_NS(CLP_UI_ABOUT)];
     NSMutableArray<NSButton*>* buttons = [NSMutableArray arrayWithCapacity:titles.count];
     for (NSUInteger index = 0; index < titles.count; ++index) {
         NSButton* button = [self makeSidebarButtonWithTitle:titles[index] action:@selector(selectPageFromButton:)];
@@ -255,7 +256,7 @@ void RequestMacOSShowMainWindow() {
 
     NSButton* minimizeButton = [self makeActionButtonWithTitle:@"Minimize to Menu Bar"
                                                         action:@selector(minimizeToMenuBar:)];
-    NSButton* exitButton = [self makeActionButtonWithTitle:@"Exit Clipp"
+    NSButton* exitButton = [self makeActionButtonWithTitle:CLP_NS(CLP_UI_EXIT_CLIPP)
                                                     action:@selector(exitApplication:)];
     [actionStack addArrangedSubview:minimizeButton];
     [actionStack addArrangedSubview:exitButton];
@@ -391,12 +392,12 @@ void RequestMacOSShowMainWindow() {
     NSView* page = [[NSView alloc] initWithFrame:NSZeroRect];
     page.translatesAutoresizingMaskIntoConstraints = NO;
 
-    NSTextField* heading = [NSTextField labelWithString:@"Logs"];
+    NSTextField* heading = [NSTextField labelWithString:CLP_NS(CLP_UI_LOGS)];
     heading.translatesAutoresizingMaskIntoConstraints = NO;
     heading.font = [NSFont systemFontOfSize:28 weight:NSFontWeightSemibold];
     heading.textColor = [NSColor labelColor];
 
-    NSTextField* intro = [NSTextField wrappingLabelWithString:@"Live diagnostic output from Clipp."];
+    NSTextField* intro = [NSTextField wrappingLabelWithString:CLP_NS(CLP_UI_LIVE_DIAGNOSTIC_OUTPUT)];
     intro.translatesAutoresizingMaskIntoConstraints = NO;
     intro.font = [NSFont systemFontOfSize:14];
     intro.textColor = [NSColor secondaryLabelColor];
@@ -659,11 +660,11 @@ static void LogReflectorCallback(const std::wstring& line) {
     } else {
         button.title = @"📋";
     }
-    button.toolTip = @"Clipp Network Sync";
+    button.toolTip = CLP_NS(CLP_UI_STATUS_TOOLTIP);
 
-    NSMenu* menu = [[NSMenu alloc] initWithTitle:@"Clipp"];
+    NSMenu* menu = [[NSMenu alloc] initWithTitle:CLP_NS(CLP_UI_APP_NAME)];
 
-    NSMenuItem* openItem = [[NSMenuItem alloc] initWithTitle:@"Open Clipp"
+    NSMenuItem* openItem = [[NSMenuItem alloc] initWithTitle:CLP_NS(CLP_UI_OPEN_CLIPP)
                                                       action:@selector(openClipp:)
                                                keyEquivalent:@""];
     openItem.target = self;
@@ -671,7 +672,7 @@ static void LogReflectorCallback(const std::wstring& line) {
 
     [menu addItem:[NSMenuItem separatorItem]];
 
-    NSMenuItem* aboutItem = [[NSMenuItem alloc] initWithTitle:@"About Clipp"
+    NSMenuItem* aboutItem = [[NSMenuItem alloc] initWithTitle:CLP_NS(CLP_UI_ABOUT_CLIPP)
                                                        action:@selector(showAbout:)
                                                 keyEquivalent:@""];
     aboutItem.target = self;
@@ -679,7 +680,7 @@ static void LogReflectorCallback(const std::wstring& line) {
 
     [menu addItem:[NSMenuItem separatorItem]];
 
-    NSMenuItem* exitItem = [[NSMenuItem alloc] initWithTitle:@"Exit Clipp"
+    NSMenuItem* exitItem = [[NSMenuItem alloc] initWithTitle:CLP_NS(CLP_UI_EXIT_CLIPP)
                                                       action:@selector(exitApp:)
                                                keyEquivalent:@""];
     exitItem.target = self;
@@ -710,12 +711,12 @@ static void LogReflectorCallback(const std::wstring& line) {
     if (icon != nil) {
         alert.icon = icon;
     }
-    alert.messageText = @"About Clipp";
+    alert.messageText = CLP_NS(CLP_UI_ABOUT_CLIPP);
     alert.informativeText =
-        @"Clipp v1.0\n"
-        @"Secure cross-platform clipboard sync for trusted devices.\n\n"
-        @"Copyright (C) 2026 Marton Anka\n"
-        @"Released under the MIT License.\n\n"
+        CLP_NS(CLP_UI_ABOUT_TITLE) @"\n"
+        CLP_NS(CLP_UI_TAGLINE) @"\n\n"
+        CLP_NS(CLP_UI_COPYRIGHT) @"\n"
+        CLP_NS(CLP_UI_MIT_LICENSE) @"\n\n"
         @"Uses open source libraries including libsodium, lodepng, xxHash, and Zstandard.";
     alert.alertStyle = NSAlertStyleInformational;
     [alert addButtonWithTitle:@"OK"];

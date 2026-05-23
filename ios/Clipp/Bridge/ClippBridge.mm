@@ -214,7 +214,7 @@ CLPNetworkKeyStatus* LoadNetworkKeyStatus(NSError** error) {
     }
 
     if (secretUtf8.size() < 8) {
-        AssignError(error, kClippNetworkKeyErrorBase + 4, @"Secret must be at least 8 characters.");
+        AssignError(error, kClippNetworkKeyErrorBase + 4, CLP_NS(CLP_UI_SECRET_TOO_SHORT));
         sodium_memzero(secretUtf8.data(), secretUtf8.capacity());
         return nil;
     }

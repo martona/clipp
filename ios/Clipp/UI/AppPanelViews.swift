@@ -19,13 +19,13 @@ enum AppPanel: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .network:
-            "Network"
+            CLP_UI_NETWORK
         case .settings:
-            "Settings"
+            CLP_UI_SETTINGS
         case .logs:
-            "Logs"
+            CLP_UI_LOGS
         case .about:
-            "About"
+            CLP_UI_ABOUT
         }
     }
 
@@ -81,12 +81,12 @@ private struct NetworkPanelView: View {
 
     var body: some View {
         Form {
-            Section("Network Key") {
+            Section(CLP_UI_NETWORK_KEY) {
                 TextField("Network Name", text: $model.networkName)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
 
-                SecureField("Secret", text: $model.secret)
+                SecureField(CLP_UI_SECRET, text: $model.secret)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .onSubmit {
@@ -214,7 +214,7 @@ private final class NetworkKeyViewModel: ObservableObject {
         let requestedSecret = secret
         isWorking = true
         statusIsError = false
-        statusMessage = "... working ..."
+        statusMessage = CLP_UI_WORKING
 
         Task {
             do {
@@ -237,13 +237,13 @@ private final class NetworkKeyViewModel: ObservableObject {
     func updateStatusMessage() {
         if isWorking {
             statusIsError = false
-            statusMessage = "... working ..."
+            statusMessage = CLP_UI_WORKING
         } else if networkName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             statusIsError = true
             statusMessage = "Network name cannot be empty."
         } else if !secret.isEmpty && secret.count < 8 {
             statusIsError = true
-            statusMessage = "Secret must be at least 8 characters."
+            statusMessage = CLP_UI_SECRET_TOO_SHORT
         } else if !secret.isEmpty {
             statusIsError = false
             statusMessage = "Ready to derive and store a network key."
@@ -255,10 +255,10 @@ private final class NetworkKeyViewModel: ObservableObject {
             statusMessage = "Enter the network secret again after changing the network name."
         } else if hasNetworkKey {
             statusIsError = false
-            statusMessage = "Network key fingerprint. Used only on this screen; not in itself a secret."
+            statusMessage = CLP_UI_NETWORK_KEY_FINGERPRINT
         } else {
             statusIsError = false
-            statusMessage = "Enter network secret to create or join a network."
+            statusMessage = CLP_UI_ENTER_NETWORK_SECRET
         }
     }
 
@@ -404,10 +404,10 @@ private struct AboutPanelView: View {
                         .accessibilityHidden(true)
 
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Clipp v1.0")
+                        Text(CLP_UI_ABOUT_TITLE)
                             .font(.title2.weight(.semibold))
 
-                        Text("Secure cross-platform clipboard sync for trusted devices.")
+                        Text(CLP_UI_TAGLINE)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -415,30 +415,30 @@ private struct AboutPanelView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Project")
+                    Text(CLP_UI_PROJECT)
                         .font(.headline)
 
-                    Text("Copyright (C) 2026 Marton Anka")
-                    Text("Released under the MIT License.")
-                    Link("github.com/martona/clipp", destination: URL(string: "https://github.com/martona/clipp")!)
+                    Text(CLP_UI_COPYRIGHT)
+                    Text(CLP_UI_MIT_LICENSE)
+                    Link(CLP_UI_REPOSITORY_LABEL, destination: URL(string: CLP_UI_REPOSITORY_URL)!)
                 }
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Open Source Acknowledgements")
+                    Text(CLP_UI_OPEN_SOURCE_ACKNOWLEDGEMENTS)
                         .font(.headline)
                         .foregroundStyle(.primary)
 
-                    Text("libsodium - ISC-licensed cryptography library")
-                    Text("lodepng - zlib-licensed PNG encoder/decoder")
-                    Text("xxHash - BSD-2-Clause non-cryptographic hashing")
-                    Text("Zstandard (zstd) - BSD-licensed compression")
+                    Text(CLP_UI_ACK_LIBSODIUM)
+                    Text(CLP_UI_ACK_LODEPNG)
+                    Text(CLP_UI_ACK_XXHASH)
+                    Text(CLP_UI_ACK_ZSTD)
                 }
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
-                Text("Third-party license terms remain with their respective projects.")
+                Text(CLP_UI_THIRD_PARTY_LICENSE_NOTE)
                     .font(.footnote)
                     .foregroundStyle(.tertiary)
             }

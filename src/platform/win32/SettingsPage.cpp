@@ -6,6 +6,7 @@
 #include "Settings.h"
 #include "platform.h"
 #include "platform/uiSettingsPage.h"
+#include "platform/uistrings.h"
 
 #include <string>
 
@@ -141,14 +142,14 @@ void SettingsPage::BuildView() {
     content.Spacing(16);
 
     TextBlock heading;
-    heading.Text(L"Settings");
+    heading.Text(CLP_W(CLP_UI_SETTINGS));
     heading.FontSize(28);
     heading.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
     heading.TextWrapping(TextWrapping::Wrap);
     content.Children().Append(heading);
 
     TextBlock networkHeader;
-    networkHeader.Text(L"Network");
+    networkHeader.Text(CLP_W(CLP_UI_NETWORK));
     networkHeader.FontSize(16);
     networkHeader.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
     content.Children().Append(networkHeader);
@@ -173,10 +174,10 @@ void SettingsPage::BuildView() {
     listenerIpField_ = MakeTextBox(15, 190);
     multicastIpField_ = MakeTextBox(15, 190);
 
-    AddSettingRow(section, 0, MakeLabel(L"TCP Port"), tcpPortField_);
-    AddSettingRow(section, 1, MakeLabel(L"UDP Port"), udpPortField_);
-    AddSettingRow(section, 2, MakeLabel(L"Listener IP"), listenerIpField_);
-    AddSettingRow(section, 3, MakeLabel(L"Multicast IP"), multicastIpField_);
+    AddSettingRow(section, 0, MakeLabel(CLP_W(CLP_UI_TCP_PORT)), tcpPortField_);
+    AddSettingRow(section, 1, MakeLabel(CLP_W(CLP_UI_UDP_PORT)), udpPortField_);
+    AddSettingRow(section, 2, MakeLabel(CLP_W(CLP_UI_LISTENER_IP)), listenerIpField_);
+    AddSettingRow(section, 3, MakeLabel(CLP_W(CLP_UI_MULTICAST_IP)), multicastIpField_);
 
     tcpPortField_.LostFocus([this](auto const&, auto const&) {
         ValidateTcpPort();
@@ -194,7 +195,7 @@ void SettingsPage::BuildView() {
     content.Children().Append(section);
 
     TextBlock hostIDHeader;
-    hostIDHeader.Text(L"Host ID");
+    hostIDHeader.Text(CLP_W(CLP_UI_HOST_ID));
     hostIDHeader.FontSize(16);
     hostIDHeader.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
     content.Children().Append(hostIDHeader);
@@ -221,16 +222,16 @@ void SettingsPage::BuildView() {
     hostIDValue_.TextWrapping(TextWrapping::NoWrap);
     hostIDValue_.FontSize(12);
     hostIDValue_.FontFamily(winrt::Windows::UI::Xaml::Media::FontFamily(L"Consolas"));
-    resetHostIDButton_ = MakeButton(L"Reset");
+    resetHostIDButton_ = MakeButton(CLP_W(CLP_UI_RESET));
     resetHostIDButton_.Click([this](auto const&, auto const&) {
         ResetHostID();
     });
 
-    AddHostIDRow(hostIDSection, 0, MakeLabel(L"Current Host ID"), hostIDValue_, resetHostIDButton_);
+    AddHostIDRow(hostIDSection, 0, MakeLabel(CLP_W(CLP_UI_CURRENT_HOST_ID)), hostIDValue_, resetHostIDButton_);
     content.Children().Append(hostIDSection);
 
     hostIDWarning_ = TextBlock();
-    hostIDWarning_.Text(L"Possible Host ID collision detected. If this device was restored from backup or cloned, reset Host ID.");
+    hostIDWarning_.Text(CLP_W(CLP_UI_HOST_ID_COLLISION_WARNING));
     hostIDWarning_.FontSize(13);
     hostIDWarning_.Opacity(0.85);
     hostIDWarning_.Foreground(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(255, 198, 116, 0)));
@@ -245,7 +246,7 @@ void SettingsPage::BuildView() {
     scroll.Content(content);
 
     statusMessage_ = TextBlock();
-    statusMessage_.Text(L"Network settings applied.");
+    statusMessage_.Text(CLP_W(CLP_UI_NETWORK_SETTINGS_APPLIED));
     statusMessage_.FontSize(13);
     statusMessage_.Opacity(0.75);
     statusMessage_.TextWrapping(TextWrapping::WrapWholeWords);
@@ -273,7 +274,7 @@ void SettingsPage::LoadSettingsIntoFields() {
 
 void SettingsPage::ApplyNetworkSettingChange() {
     g_networkRuntime.Restart();
-    statusMessage_.Text(L"Network settings applied.");
+    statusMessage_.Text(CLP_W(CLP_UI_NETWORK_SETTINGS_APPLIED));
     ShowStatusMessage();
 }
 
@@ -346,7 +347,7 @@ void SettingsPage::RefreshHostIDDisplay() {
 
     HostId hostID;
     if (!g_settings.ensureHostID(hostID)) {
-        hostIDValue_.Text(L"Unavailable");
+        hostIDValue_.Text(CLP_W(CLP_UI_UNAVAILABLE));
         return;
     }
 
@@ -364,7 +365,7 @@ void SettingsPage::RefreshHostIDWarning() {
 void SettingsPage::ResetHostID() {
     HostId hostID;
     if (!g_settings.resetHostID(hostID)) {
-        statusMessage_.Text(L"Unable to reset Host ID.");
+        statusMessage_.Text(CLP_W(CLP_UI_UNABLE_TO_RESET_HOST_ID));
         ShowStatusMessage();
         return;
     }
@@ -373,7 +374,7 @@ void SettingsPage::ResetHostID() {
     g_peerManager.ClearPeers();
     RefreshHostIDDisplay();
     RefreshHostIDWarning();
-    statusMessage_.Text(L"Host ID reset.");
+    statusMessage_.Text(CLP_W(CLP_UI_HOST_ID_RESET));
     ShowStatusMessage();
 }
 

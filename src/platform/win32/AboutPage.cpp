@@ -1,6 +1,7 @@
 #include "AboutPage.h"
 
 #include "resource.h"
+#include "platform/uistrings.h"
 
 #include <cstdint>
 
@@ -143,22 +144,22 @@ AboutPage::AboutPage() {
     content.Padding(ThicknessHelper::FromUniformLength(24));
     content.Spacing(14);
 
-    content.Children().Append(CreateTextBlock(L"Clipp v1.0", 28, 1.0, true));
+    content.Children().Append(CreateTextBlock(CLP_W(CLP_UI_ABOUT_TITLE), 28, 1.0, true));
     content.Children().Append(CreateTextBlock(
-        L"Secure cross-platform clipboard sync for trusted devices.",
+        CLP_W(CLP_UI_TAGLINE),
         14,
         0.8));
 
     StackPanel project;
     project.Orientation(Orientation::Vertical);
     project.Spacing(6);
-    project.Children().Append(CreateTextBlock(L"Project", 16, 1.0, true));
-    project.Children().Append(CreateTextBlock(L"Copyright (C) 2026 Marton Anka", 13, 0.82));
-    project.Children().Append(CreateTextBlock(L"Released under the MIT License.", 13, 0.82));
+    project.Children().Append(CreateTextBlock(CLP_W(CLP_UI_PROJECT), 16, 1.0, true));
+    project.Children().Append(CreateTextBlock(CLP_W(CLP_UI_COPYRIGHT), 13, 0.82));
+    project.Children().Append(CreateTextBlock(CLP_W(CLP_UI_MIT_LICENSE), 13, 0.82));
 
     HyperlinkButton repoLink;
-    repoLink.Content(winrt::box_value(winrt::hstring{ L"github.com/martona/clipp" }));
-    repoLink.NavigateUri(Uri{ L"https://github.com/martona/clipp" });
+    repoLink.Content(winrt::box_value(winrt::hstring{ CLP_W(CLP_UI_REPOSITORY_LABEL) }));
+    repoLink.NavigateUri(Uri{ CLP_W(CLP_UI_REPOSITORY_URL) });
     repoLink.Padding(ThicknessHelper::FromLengths(0, 0, 0, 0));
     repoLink.HorizontalAlignment(HorizontalAlignment::Left);
     project.Children().Append(repoLink);
@@ -192,17 +193,17 @@ AboutPage::AboutPage() {
     StackPanel acknowledgements;
     acknowledgements.Orientation(Orientation::Vertical);
     acknowledgements.Spacing(6);
-    acknowledgements.Children().Append(CreateTextBlock(L"Open Source Acknowledgements", 16, 1.0, true));
-    AppendAcknowledgement(acknowledgements, L"libsodium - ISC-licensed cryptography library");
-    AppendAcknowledgement(acknowledgements, L"lodepng - zlib-licensed PNG encoder/decoder");
-    AppendAcknowledgement(acknowledgements, L"xxHash - BSD-2-Clause non-cryptographic hashing");
-    AppendAcknowledgement(acknowledgements, L"Zstandard (zstd) - BSD-licensed compression");
+    acknowledgements.Children().Append(CreateTextBlock(CLP_W(CLP_UI_OPEN_SOURCE_ACKNOWLEDGEMENTS), 16, 1.0, true));
+    AppendAcknowledgement(acknowledgements, CLP_W(CLP_UI_ACK_LIBSODIUM));
+    AppendAcknowledgement(acknowledgements, CLP_W(CLP_UI_ACK_LODEPNG));
+    AppendAcknowledgement(acknowledgements, CLP_W(CLP_UI_ACK_XXHASH));
+    AppendAcknowledgement(acknowledgements, CLP_W(CLP_UI_ACK_ZSTD));
     AppendAcknowledgement(acknowledgements, L"Microsoft C++/WinRT and Microsoft Toolkit Win32 UI SDK - MIT-licensed Windows UI integration");
     AppendAcknowledgement(acknowledgements, L"darkmode32plus - BSD-3-Clause; includes portions from win32-darkmode (MIT), darkmodelib (MPL-2.0), PolyHook 2.0 (MIT), and UAH menu bar code by Adam D. Walling (MIT)");
     content.Children().Append(acknowledgements);
 
     TextBlock note = CreateTextBlock(
-        L"Third-party license terms remain with their respective projects.",
+        CLP_W(CLP_UI_THIRD_PARTY_LICENSE_NOTE),
         12,
         0.68);
     content.Children().Append(note);

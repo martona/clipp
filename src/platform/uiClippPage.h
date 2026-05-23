@@ -3,6 +3,7 @@
 #include "../KeyManager.h"
 #include "../Logger.h"
 #include "../platform.h"
+#include "uistrings.h"
 
 #ifdef GetCurrentTime
 #undef GetCurrentTime
@@ -43,7 +44,7 @@ inline std::string FormatByteCounter(uint64_t bytes) {
 }
 
 inline std::string FormatConnectionState(bool connected) {
-    return connected ? "Connected" : "Not connected";
+    return connected ? CLP_UI_CONNECTED : CLP_UI_NOT_CONNECTED;
 }
 
 inline std::string FormatConnectedFor(
@@ -51,7 +52,7 @@ inline std::string FormatConnectedFor(
     std::chrono::steady_clock::time_point now)
 {
     if (connectedSince == std::chrono::steady_clock::time_point{}) {
-        return "Not connected";
+        return CLP_UI_NOT_CONNECTED;
     }
 
     if (now < connectedSince) {
@@ -74,17 +75,17 @@ inline std::string FormatConnectedFor(
                   static_cast<long long>(minutes),
                   static_cast<long long>(seconds));
 
-    std::string text = "Connected for ";
+    std::string text = CLP_UI_CONNECTED_FOR;
     if (days > 0) {
         text += std::to_string(days);
-        text += days == 1 ? " day, " : " days, ";
+        text += days == 1 ? CLP_UI_DAY_SUFFIX : CLP_UI_DAYS_SUFFIX;
     }
     text += timeBuffer;
     return text;
 }
 
 inline std::wstring DisplayHostNameOrUnknown(std::wstring_view hostName) {
-    return hostName.empty() ? L"(unknown host)" : std::wstring(hostName);
+    return hostName.empty() ? CLP_W(CLP_UI_UNKNOWN_HOST) : std::wstring(hostName);
 }
 
 inline std::string BuildKeyDerivationInput(std::string_view networkName, std::string_view password) {

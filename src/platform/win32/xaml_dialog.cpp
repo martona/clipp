@@ -8,6 +8,7 @@
 #include "SettingsPage.h"
 #include "AutoStart.h"
 #include "resource.h"
+#include "platform/uistrings.h"
 
 #include <algorithm>
 #include <cmath>
@@ -185,12 +186,12 @@ public:
                 ShowWindow(hwnd_, SW_SHOWNORMAL);
                 SetForegroundWindow(hwnd_);
             } else if (!createError_.empty()) {
-                DarkMode::DarkMessageBox(owner, createError_.c_str(), L"Clipp", MB_ICONERROR | MB_OK);
+            DarkMode::DarkMessageBox(owner, createError_.c_str(), CLP_W(CLP_UI_APP_NAME), MB_ICONERROR | MB_OK);
             }
         } catch (const winrt::hresult_error& error) {
             const std::wstring message = L"Unable to open the XAML Islands dialog. HRESULT: " + std::to_wstring(error.code());
             g_logger.log(__FUNCTION__, Logger::Level::Error, message.c_str());
-            DarkMode::DarkMessageBox(owner, message.c_str(), L"Clipp", MB_ICONERROR | MB_OK);
+            DarkMode::DarkMessageBox(owner, message.c_str(), CLP_W(CLP_UI_APP_NAME), MB_ICONERROR | MB_OK);
         }
     }
 
@@ -227,7 +228,7 @@ private:
         hwnd_ = CreateWindowExW(
             WS_EX_APPWINDOW,
             kDialogClassName,
-            L"Clipp",
+            CLP_W(CLP_UI_APP_NAME),
             WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
@@ -382,10 +383,10 @@ private:
         menu.Background(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(24, 127, 127, 127)));
 
         const MenuItemDefinition menuItems[] = {
-            { L"\xE77F", L"Clipp" },
-            { L"\xE713", L"Settings" },
-            { L"\xE8A5", L"Logs" },
-            { L"\xE946", L"About" },
+            { L"\xE77F", CLP_W(CLP_UI_APP_NAME) },
+            { L"\xE713", CLP_W(CLP_UI_SETTINGS) },
+            { L"\xE8A5", CLP_W(CLP_UI_LOGS) },
+            { L"\xE946", CLP_W(CLP_UI_ABOUT) },
         };
 
         for (const auto& menuItem : menuItems) {
@@ -409,7 +410,7 @@ private:
             MinimizeToTray();
         });
 
-        Button exitButton = CreateSidebarButton(L"Exit Clipp");
+        Button exitButton = CreateSidebarButton(CLP_W(CLP_UI_EXIT_CLIPP));
         exitButton.Click([this](auto const&, auto const&) {
             ExitApplication();
         });

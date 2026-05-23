@@ -148,10 +148,10 @@ NetworkItemView::NetworkItemView(const PeerDisplayItem& item) {
     contentGrid.ColumnDefinitions().Append(MakeColumn(1, GridUnitType::Star));
 
     //hostIDValue_ = AddDetailRow(contentGrid, 0, L"Host ID:");
-    bytesSentValue_ = AddDetailRow(contentGrid, 0, L"Bytes sent:");
-    bytesReceivedValue_ = AddDetailRow(contentGrid, 1, L"Bytes received:");
-    incomingValue_ = AddDetailRow(contentGrid, 2, L"Incoming:");
-    outgoingValue_ = AddDetailRow(contentGrid, 3, L"Outgoing:");
+    bytesSentValue_ = AddDetailRow(contentGrid, 0, CLP_W(CLP_UI_BYTES_SENT));
+    bytesReceivedValue_ = AddDetailRow(contentGrid, 1, CLP_W(CLP_UI_BYTES_RECEIVED));
+    incomingValue_ = AddDetailRow(contentGrid, 2, CLP_W(CLP_UI_INCOMING));
+    outgoingValue_ = AddDetailRow(contentGrid, 3, CLP_W(CLP_UI_OUTGOING));
 
     chevron.Click([=](winrt::Windows::Foundation::IInspectable const& sender, RoutedEventArgs const&) {
         auto toggle = sender.as<ToggleButton>();

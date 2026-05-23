@@ -7,6 +7,7 @@
 #include "PeerManager.h"
 #include "Settings.h"
 #include "platform/uiSettingsPage.h"
+#include "platform/uistrings.h"
 #include "UiHelpers.h"
 
 #import <AppKit/AppKit.h>
@@ -92,7 +93,7 @@ namespace {
     }
 
     static NSButton* MakeResetButton(id target) {
-        NSButton* button = [NSButton buttonWithTitle:@"Reset"
+        NSButton* button = [NSButton buttonWithTitle:CLP_NS(CLP_UI_RESET)
                                               target:target
                                               action:@selector(resetHostID:)];
         button.translatesAutoresizingMaskIntoConstraints = NO;
@@ -176,12 +177,12 @@ void MacOSSettingsPage::BuildView() {
     root_ = [[NSView alloc] initWithFrame:NSZeroRect];
     root_.translatesAutoresizingMaskIntoConstraints = NO;
 
-    NSTextField* heading = [NSTextField labelWithString:@"Settings"];
+    NSTextField* heading = [NSTextField labelWithString:CLP_NS(CLP_UI_SETTINGS)];
     heading.translatesAutoresizingMaskIntoConstraints = NO;
     heading.font = [NSFont systemFontOfSize:28 weight:NSFontWeightSemibold];
     heading.textColor = [NSColor labelColor];
 
-    NSTextField* networkHeader = [NSTextField labelWithString:@"Network"];
+    NSTextField* networkHeader = [NSTextField labelWithString:CLP_NS(CLP_UI_NETWORK)];
     networkHeader.translatesAutoresizingMaskIntoConstraints = NO;
     networkHeader.font = [NSFont systemFontOfSize:16 weight:NSFontWeightSemibold];
     networkHeader.textColor = [NSColor labelColor];
@@ -199,13 +200,13 @@ void MacOSSettingsPage::BuildView() {
     multicastIpField_.delegate = fieldDelegate_;
 
     NSMutableArray<NSLayoutConstraint*>* rowConstraints = [NSMutableArray array];
-    AddSettingRow(section, MacOSMakeLabel(@"TCP Port"), tcpPortField_, nil, rowConstraints);
-    AddSettingRow(section, MacOSMakeLabel(@"UDP Port"), udpPortField_, tcpPortField_, rowConstraints);
-    AddSettingRow(section, MacOSMakeLabel(@"Listener IP"), listenerIpField_, udpPortField_, rowConstraints);
-    AddSettingRow(section, MacOSMakeLabel(@"Multicast IP"), multicastIpField_, listenerIpField_, rowConstraints);
+    AddSettingRow(section, MacOSMakeLabel(CLP_NS(CLP_UI_TCP_PORT)), tcpPortField_, nil, rowConstraints);
+    AddSettingRow(section, MacOSMakeLabel(CLP_NS(CLP_UI_UDP_PORT)), udpPortField_, tcpPortField_, rowConstraints);
+    AddSettingRow(section, MacOSMakeLabel(CLP_NS(CLP_UI_LISTENER_IP)), listenerIpField_, udpPortField_, rowConstraints);
+    AddSettingRow(section, MacOSMakeLabel(CLP_NS(CLP_UI_MULTICAST_IP)), multicastIpField_, listenerIpField_, rowConstraints);
     [rowConstraints addObject:[multicastIpField_.bottomAnchor constraintEqualToAnchor:section.bottomAnchor constant:-kSectionInsetY]];
 
-    NSTextField* hostIDHeader = [NSTextField labelWithString:@"Host ID"];
+    NSTextField* hostIDHeader = [NSTextField labelWithString:CLP_NS(CLP_UI_HOST_ID)];
     hostIDHeader.translatesAutoresizingMaskIntoConstraints = NO;
     hostIDHeader.font = [NSFont systemFontOfSize:16 weight:NSFontWeightSemibold];
     hostIDHeader.textColor = [NSColor labelColor];
@@ -215,12 +216,12 @@ void MacOSSettingsPage::BuildView() {
     resetHostIDButton_ = MakeResetButton(fieldDelegate_);
 
     NSMutableArray<NSLayoutConstraint*>* hostIDConstraints = [NSMutableArray array];
-    AddHostIDRow(hostIDSection, MacOSMakeLabel(@"Current Host ID"), hostIDValue_, resetHostIDButton_, hostIDConstraints);
+    AddHostIDRow(hostIDSection, MacOSMakeLabel(CLP_NS(CLP_UI_CURRENT_HOST_ID)), hostIDValue_, resetHostIDButton_, hostIDConstraints);
 
     hostIDWarningContainer_ = [[NSView alloc] initWithFrame:NSZeroRect];
     hostIDWarningContainer_.translatesAutoresizingMaskIntoConstraints = NO;
     hostIDWarningContainer_.hidden = YES;
-    hostIDWarningText_ = MacOSMakeWrappingLabel(@"Possible Host ID collision detected. If this device was restored from backup or cloned, reset Host ID.",
+    hostIDWarningText_ = MacOSMakeWrappingLabel(CLP_NS(CLP_UI_HOST_ID_COLLISION_WARNING),
                                                 13.0,
                                                 [NSColor systemOrangeColor]);
     [hostIDWarningContainer_ addSubview:hostIDWarningText_];
@@ -236,7 +237,7 @@ void MacOSSettingsPage::BuildView() {
     statusContainer_.translatesAutoresizingMaskIntoConstraints = NO;
     statusContainer_.hidden = YES;
 
-    statusMessage_ = MacOSMakeWrappingLabel(@"Network settings applied.", 13.0, [NSColor secondaryLabelColor]);
+    statusMessage_ = MacOSMakeWrappingLabel(CLP_NS(CLP_UI_NETWORK_SETTINGS_APPLIED), 13.0, [NSColor secondaryLabelColor]);
     [statusContainer_ addSubview:statusMessage_];
     [root_ addSubview:statusContainer_];
 
@@ -298,7 +299,7 @@ void MacOSSettingsPage::LoadSettingsIntoFields() {
 
 void MacOSSettingsPage::ApplyNetworkSettingChange() {
     g_networkRuntime.Restart();
-    MacOSSetFieldText(statusMessage_, @"Network settings applied.");
+    MacOSSetFieldText(statusMessage_, CLP_NS(CLP_UI_NETWORK_SETTINGS_APPLIED));
     ShowStatusMessage();
 }
 
@@ -371,7 +372,7 @@ void MacOSSettingsPage::RefreshHostIDDisplay() {
 
     HostId hostID;
     if (!g_settings.ensureHostID(hostID)) {
-        MacOSSetFieldText(hostIDValue_, @"Unavailable");
+        MacOSSetFieldText(hostIDValue_, CLP_NS(CLP_UI_UNAVAILABLE));
         hostIDValue_.toolTip = @"";
         return;
     }
@@ -390,7 +391,7 @@ void MacOSSettingsPage::RefreshHostIDWarning() {
 void MacOSSettingsPage::ResetHostID() {
     HostId hostID;
     if (!g_settings.resetHostID(hostID)) {
-        MacOSSetFieldText(statusMessage_, @"Unable to reset Host ID.");
+        MacOSSetFieldText(statusMessage_, CLP_NS(CLP_UI_UNABLE_TO_RESET_HOST_ID));
         ShowStatusMessage();
         return;
     }
@@ -399,7 +400,7 @@ void MacOSSettingsPage::ResetHostID() {
     g_peerManager.ClearPeers();
     RefreshHostIDDisplay();
     RefreshHostIDWarning();
-    MacOSSetFieldText(statusMessage_, @"Host ID reset.");
+    MacOSSetFieldText(statusMessage_, CLP_NS(CLP_UI_HOST_ID_RESET));
     ShowStatusMessage();
 }
 

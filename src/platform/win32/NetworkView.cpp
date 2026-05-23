@@ -1,5 +1,7 @@
 #include "NetworkView.h"
 
+#include "platform/uistrings.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -18,13 +20,13 @@ NetworkView::NetworkView(PeerDisplay& peerDisplay)
     container_.Spacing(8);
 
     TextBlock heading;
-    heading.Text(L"Peers");
+    heading.Text(CLP_W(CLP_UI_PEERS));
     heading.FontSize(16);
     heading.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
     container_.Children().Append(heading);
 
     emptyMessage_ = TextBlock();
-    emptyMessage_.Text(L"Make sure your devices are using the exact same network name and secret. Both are case-sensitive.");
+    emptyMessage_.Text(CLP_W(CLP_UI_NO_PEERS_HELP));
     emptyMessage_.FontSize(13);
     emptyMessage_.Opacity(0.7);
     emptyMessage_.Margin(ThicknessHelper::FromLengths(0, 0, 0, 4));

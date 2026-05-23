@@ -60,14 +60,14 @@ void ClippPage::BuildView() {
     content.Spacing(16);
 
     TextBlock heading;
-    heading.Text(L"Clipp");
+    heading.Text(CLP_W(CLP_UI_APP_NAME));
     heading.FontSize(28);
     heading.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
     heading.TextWrapping(TextWrapping::Wrap);
     content.Children().Append(heading);
 
     TextBlock intro;
-    intro.Text(L"Secure cross-platform clipboard sync for trusted devices.");
+    intro.Text(CLP_W(CLP_UI_TAGLINE));
     intro.FontSize(14);
     intro.TextWrapping(TextWrapping::WrapWholeWords);
     content.Children().Append(intro);
@@ -94,16 +94,16 @@ void ClippPage::BuildNetworkSecretSection(winrt::Windows::UI::Xaml::Controls::St
     using namespace winrt::Windows::UI::Xaml::Media;
 
     TextBlock passwordHeader;
-    passwordHeader.Text(L"Network");
+    passwordHeader.Text(CLP_W(CLP_UI_NETWORK));
     passwordHeader.FontSize(16);
     passwordHeader.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
 
     TextBlock networkNameLabel;
-    networkNameLabel.Text(L"Name");
+    networkNameLabel.Text(CLP_W(CLP_UI_NAME));
     networkNameLabel.VerticalAlignment(VerticalAlignment::Center);
 
     TextBlock passwordLabel;
-    passwordLabel.Text(L"Secret");
+    passwordLabel.Text(CLP_W(CLP_UI_SECRET));
     passwordLabel.VerticalAlignment(VerticalAlignment::Center);
 
     networkNameField_ = TextBox();
@@ -139,11 +139,11 @@ void ClippPage::BuildNetworkSecretSection(winrt::Windows::UI::Xaml::Controls::St
         passwordInfoPanel_.Visibility(Visibility::Visible);
 
         if (pwd.size() < 8) {
-            passwordInfoText_.Text(L"Secret must be at least 8 characters.");
+            passwordInfoText_.Text(CLP_W(CLP_UI_SECRET_TOO_SHORT));
             return;
         }
 
-        passwordInfoText_.Text(L"... working ...");
+        passwordInfoText_.Text(CLP_W(CLP_UI_WORKING));
 
         const std::string networkName = g_settings.networkName();
         g_logger.log(__FUNCTION__, Logger::Level::Debug, "Generating key with secret (network name: %s)", networkName.c_str());
@@ -229,7 +229,7 @@ void ClippPage::BuildNetworkSecretSection(winrt::Windows::UI::Xaml::Controls::St
     passwordHashText_.TextWrapping(TextWrapping::Wrap);
 
     TextBlock hashExplainer;
-    hashExplainer.Text(L"Network key fingerprint. Used only on this screen; not in itself a secret.");
+    hashExplainer.Text(CLP_W(CLP_UI_NETWORK_KEY_FINGERPRINT));
     hashExplainer.Opacity(0.6);
     hashExplainer.TextWrapping(TextWrapping::Wrap);
 
@@ -370,7 +370,7 @@ void ClippPage::SetupPasswordFields() {
         passwordInfoPanel_.Visibility(Visibility::Collapsed);
     } else {
         passwordField_.Password(L"");
-        passwordInfoText_.Text(L"Enter network secret to create or join a network.");
+        passwordInfoText_.Text(CLP_W(CLP_UI_ENTER_NETWORK_SECRET));
         passwordStatusPanel_.Visibility(Visibility::Collapsed);
         passwordInfoPanel_.Visibility(Visibility::Visible);
     }

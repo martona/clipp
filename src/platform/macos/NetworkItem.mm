@@ -124,7 +124,7 @@ void MacOSNetworkItemView::BuildView() {
     NSView* headerRow = [[NSView alloc] initWithFrame:NSZeroRect];
     headerRow.translatesAutoresizingMaskIntoConstraints = NO;
 
-    NSImageView* networkIcon = MacOSMakeSymbolImageView(@"network", @"Network", [NSColor secondaryLabelColor]);
+    NSImageView* networkIcon = MacOSMakeSymbolImageView(@"network", CLP_NS(CLP_UI_NETWORK), [NSColor secondaryLabelColor]);
     NSStackView* titleStack = CreateTitleStack();
     NSStackView* statusStack = CreateStatusStack();
     NSButton* disclosureButton = CreateDisclosureButton();
@@ -148,10 +148,10 @@ void MacOSNetworkItemView::BuildView() {
     detailsGrid.columnSpacing = 24.0;
     detailsGrid.rowSpacing = 7.0;
 
-    bytesSentValue_ = AddDetailRow(detailsGrid, 0, @"Bytes sent:");
-    bytesReceivedValue_ = AddDetailRow(detailsGrid, 1, @"Bytes received:");
-    incomingValue_ = AddDetailRow(detailsGrid, 2, @"Incoming:");
-    outgoingValue_ = AddDetailRow(detailsGrid, 3, @"Outgoing:");
+    bytesSentValue_ = AddDetailRow(detailsGrid, 0, CLP_NS(CLP_UI_BYTES_SENT));
+    bytesReceivedValue_ = AddDetailRow(detailsGrid, 1, CLP_NS(CLP_UI_BYTES_RECEIVED));
+    incomingValue_ = AddDetailRow(detailsGrid, 2, CLP_NS(CLP_UI_INCOMING));
+    outgoingValue_ = AddDetailRow(detailsGrid, 3, CLP_NS(CLP_UI_OUTGOING));
     [detailsGrid columnAtIndex:0].xPlacement = NSGridCellPlacementLeading;
     [detailsGrid columnAtIndex:1].xPlacement = NSGridCellPlacementLeading;
 

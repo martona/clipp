@@ -3,6 +3,7 @@
 #ifdef __APPLE__
 
 #include "UiHelpers.h"
+#include "platform/uistrings.h"
 
 #include <algorithm>
 #include <chrono>
@@ -100,12 +101,12 @@ void MacOSNetworkView::BuildView() {
     container_.spacing = 8.0;
     container_.detachesHiddenViews = YES;
 
-    NSTextField* heading = [NSTextField labelWithString:@"Peers"];
+    NSTextField* heading = [NSTextField labelWithString:CLP_NS(CLP_UI_PEERS)];
     heading.translatesAutoresizingMaskIntoConstraints = NO;
     heading.font = [NSFont systemFontOfSize:16 weight:NSFontWeightSemibold];
     heading.textColor = [NSColor labelColor];
 
-    emptyMessage_ = MacOSMakeWrappingLabel(@"Make sure your devices are using the exact same network name and secret. Both are case-sensitive.",
+    emptyMessage_ = MacOSMakeWrappingLabel(CLP_NS(CLP_UI_NO_PEERS_HELP),
                                            13.0,
                                            [NSColor secondaryLabelColor]);
 
