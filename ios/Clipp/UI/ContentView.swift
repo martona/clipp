@@ -1,6 +1,6 @@
 //
 //  ContentView.swift
-//  clipp.ios
+//  Clipp
 //
 //  Created by Marton Anka on 5/23/26.
 //

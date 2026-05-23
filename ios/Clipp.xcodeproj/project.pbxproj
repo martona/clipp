@@ -7,13 +7,13 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		3B1C0BBC2FC1725A00D70FBA /* clipp.ios.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = clipp.ios.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		3B1C0BBC2FC1725A00D70FBA /* Clipp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Clipp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		3B1C0BBE2FC1725A00D70FBA /* clipp.ios */ = {
+		3B1C0BBE2FC1725A00D70FBA /* Clipp */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = clipp.ios;
+			path = Clipp;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -32,7 +32,7 @@
 		3B1C0BB32FC1725A00D70FBA = {
 			isa = PBXGroup;
 			children = (
-				3B1C0BBE2FC1725A00D70FBA /* clipp.ios */,
+				3B1C0BBE2FC1725A00D70FBA /* Clipp */,
 				3B1C0BBD2FC1725A00D70FBA /* Products */,
 			);
 			sourceTree = "<group>";
@@ -40,7 +40,7 @@
 		3B1C0BBD2FC1725A00D70FBA /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				3B1C0BBC2FC1725A00D70FBA /* clipp.ios.app */,
+				3B1C0BBC2FC1725A00D70FBA /* Clipp.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -48,9 +48,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		3B1C0BBB2FC1725A00D70FBA /* clipp.ios */ = {
+		3B1C0BBB2FC1725A00D70FBA /* Clipp */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 3B1C0BC72FC1725B00D70FBA /* Build configuration list for PBXNativeTarget "clipp.ios" */;
+			buildConfigurationList = 3B1C0BC72FC1725B00D70FBA /* Build configuration list for PBXNativeTarget "Clipp" */;
 			buildPhases = (
 				3B1C0BB82FC1725A00D70FBA /* Sources */,
 				3B1C0BB92FC1725A00D70FBA /* Frameworks */,
@@ -61,13 +61,13 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				3B1C0BBE2FC1725A00D70FBA /* clipp.ios */,
+				3B1C0BBE2FC1725A00D70FBA /* Clipp */,
 			);
-			name = clipp.ios;
+			name = Clipp;
 			packageProductDependencies = (
 			);
-			productName = clipp.ios;
-			productReference = 3B1C0BBC2FC1725A00D70FBA /* clipp.ios.app */;
+			productName = Clipp;
+			productReference = 3B1C0BBC2FC1725A00D70FBA /* Clipp.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -85,7 +85,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 3B1C0BB72FC1725A00D70FBA /* Build configuration list for PBXProject "clipp.ios" */;
+			buildConfigurationList = 3B1C0BB72FC1725A00D70FBA /* Build configuration list for PBXProject "Clipp" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -99,7 +99,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				3B1C0BBB2FC1725A00D70FBA /* clipp.ios */,
+				3B1C0BBB2FC1725A00D70FBA /* Clipp */,
 			);
 		};
 /* End PBXProject section */
@@ -266,8 +266,8 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "net.clipp.clipp-ios";
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = net.clipp.ios;
+				PRODUCT_NAME = Clipp;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -298,8 +298,8 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "net.clipp.clipp-ios";
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = net.clipp.ios;
+				PRODUCT_NAME = Clipp;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -313,7 +313,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		3B1C0BB72FC1725A00D70FBA /* Build configuration list for PBXProject "clipp.ios" */ = {
+		3B1C0BB72FC1725A00D70FBA /* Build configuration list for PBXProject "Clipp" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				3B1C0BC52FC1725B00D70FBA /* Debug */,
@@ -322,7 +322,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		3B1C0BC72FC1725B00D70FBA /* Build configuration list for PBXNativeTarget "clipp.ios" */ = {
+		3B1C0BC72FC1725B00D70FBA /* Build configuration list for PBXNativeTarget "Clipp" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				3B1C0BC82FC1725B00D70FBA /* Debug */,
