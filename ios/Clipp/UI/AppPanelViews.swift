@@ -115,7 +115,7 @@ private struct NetworkPanelView: View {
                 model.updateStatusMessage()
             }
             .onChange(of: model.networkName) {
-                model.updateStatusMessage()
+                model.networkNameDidChange()
             }
 
             if model.hasNetworkKey {
@@ -165,6 +165,8 @@ private final class NetworkKeyViewModel: ObservableObject {
     @Published var statusIsError = false
 
     private var storedNetworkName = ""
+    private var keyClearedForNetworkNameChange = false
+    private var networkNameUpdateGeneration = 0
 
     var actionTitle: String {
         hasNetworkKey ? "Recreate Network Key" : "Create Network Key"
@@ -245,6 +247,9 @@ private final class NetworkKeyViewModel: ObservableObject {
         } else if !secret.isEmpty {
             statusIsError = false
             statusMessage = "Ready to derive and store a network key."
+        } else if keyClearedForNetworkNameChange {
+            statusIsError = false
+            statusMessage = "Enter the network secret again after changing the network name."
         } else if hasNetworkKey && networkName != storedNetworkName {
             statusIsError = false
             statusMessage = "Enter the network secret again after changing the network name."
@@ -257,11 +262,65 @@ private final class NetworkKeyViewModel: ObservableObject {
         }
     }
 
+    func networkNameDidChange() {
+        updateStatusMessage()
+
+        let requestedNetworkName = networkName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !requestedNetworkName.isEmpty, requestedNetworkName != storedNetworkName else {
+            return
+        }
+
+        networkNameUpdateGeneration += 1
+        let generation = networkNameUpdateGeneration
+        let hadNetworkKey = hasNetworkKey
+        if hadNetworkKey {
+            fingerprint = nil
+            hasNetworkKey = false
+            keyClearedForNetworkNameChange = true
+            updateStatusMessage()
+        }
+
+        Task {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard generation == networkNameUpdateGeneration else {
+                return
+            }
+
+            do {
+                let status = try await Task.detached(priority: .utility) {
+                    try NetworkKeyBridge.updateNetworkName(requestedNetworkName)
+                }.value
+
+                guard generation == networkNameUpdateGeneration,
+                      networkName.trimmingCharacters(in: .whitespacesAndNewlines) == status.networkName else {
+                    return
+                }
+
+                apply(status: status)
+                if hadNetworkKey {
+                    keyClearedForNetworkNameChange = true
+                    updateStatusMessage()
+                }
+            } catch {
+                guard generation == networkNameUpdateGeneration else {
+                    return
+                }
+                fingerprint = nil
+                hasNetworkKey = false
+                statusIsError = true
+                statusMessage = error.localizedDescription
+            }
+        }
+    }
+
     private func apply(status: NetworkKeyStatus) {
         networkName = status.networkName
         storedNetworkName = status.networkName
         fingerprint = status.fingerprint
         hasNetworkKey = status.hasNetworkKey
+        if status.hasNetworkKey {
+            keyClearedForNetworkNameChange = false
+        }
         statusIsError = false
         updateStatusMessage()
     }

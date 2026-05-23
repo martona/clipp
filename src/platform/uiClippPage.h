@@ -1,6 +1,8 @@
 #pragma once
 
 #include "../KeyManager.h"
+#include "../Logger.h"
+#include "../platform.h"
 
 #ifdef GetCurrentTime
 #undef GetCurrentTime
@@ -86,11 +88,18 @@ inline std::wstring DisplayHostNameOrUnknown(std::wstring_view hostName) {
 }
 
 inline std::string BuildKeyDerivationInput(std::string_view networkName, std::string_view password) {
+    const std::string canonicalNetworkName = CanonicalizeKeyDerivationText(networkName);
+    const std::string canonicalPassword = CanonicalizeKeyDerivationText(password);
+    g_logger.log("BuildKeyDerivationInput",
+                 Logger::Level::Debug,
+                 "Generating network key input with network name: %s",
+                 canonicalNetworkName.c_str());
+
     std::string input;
-    input.reserve(networkName.size() + 1 + password.size());
-    input.append(networkName);
+    input.reserve(canonicalNetworkName.size() + 1 + canonicalPassword.size());
+    input.append(canonicalNetworkName);
     input.push_back('|');
-    input.append(password);
+    input.append(canonicalPassword);
     return input;
 }
 

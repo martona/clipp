@@ -2,7 +2,11 @@
 
 #include <cstring>
 #include <algorithm>
+#include <cstdint>
 #include <ctime>
+#include <string>
+#include <string_view>
+#include <vector>
 
 #ifdef _WIN32
     #define WIN32_LEAN_AND_MEAN 
@@ -13,6 +17,7 @@
     #include <conio.h>
 #elif defined(__APPLE__)
     #define _LIBCPP_DISABLE_DEPRECATION_WARNINGS 1
+    #include <CoreFoundation/CoreFoundation.h>
     #include <TargetConditionals.h>
     #include <cstddef>
     #include <codecvt>
@@ -135,6 +140,271 @@
     #define SD_BOTH    SHUT_RDWR
     static inline void closesocket(SOCKET s) { close(s); }
 #endif
+
+namespace clipp_platform_detail {
+    static inline bool DecodeUtf8CodePoint(std::string_view text, std::size_t& offset, uint32_t& codePoint) {
+        if (offset >= text.size()) {
+            return false;
+        }
+
+        const auto byteAt = [&](std::size_t index) -> unsigned char {
+            return static_cast<unsigned char>(text[index]);
+        };
+
+        const std::size_t start = offset;
+        const unsigned char lead = byteAt(offset++);
+        if (lead < 0x80) {
+            codePoint = lead;
+            return true;
+        }
+
+        uint32_t value = 0;
+        std::size_t continuationCount = 0;
+        uint32_t minimumValue = 0;
+
+        if ((lead & 0xE0) == 0xC0) {
+            value = lead & 0x1F;
+            continuationCount = 1;
+            minimumValue = 0x80;
+        } else if ((lead & 0xF0) == 0xE0) {
+            value = lead & 0x0F;
+            continuationCount = 2;
+            minimumValue = 0x800;
+        } else if ((lead & 0xF8) == 0xF0) {
+            value = lead & 0x07;
+            continuationCount = 3;
+            minimumValue = 0x10000;
+        } else {
+            codePoint = lead;
+            return false;
+        }
+
+        if (offset + continuationCount > text.size()) {
+            offset = start + 1;
+            codePoint = lead;
+            return false;
+        }
+
+        for (std::size_t i = 0; i < continuationCount; ++i) {
+            const unsigned char next = byteAt(offset++);
+            if ((next & 0xC0) != 0x80) {
+                offset = start + 1;
+                codePoint = lead;
+                return false;
+            }
+            value = (value << 6) | (next & 0x3F);
+        }
+
+        if (value < minimumValue || value > 0x10FFFF || (value >= 0xD800 && value <= 0xDFFF)) {
+            offset = start + 1;
+            codePoint = lead;
+            return false;
+        }
+
+        codePoint = value;
+        return true;
+    }
+
+    static inline void AppendUtf8CodePoint(std::string& output, uint32_t codePoint) {
+        if (codePoint <= 0x7F) {
+            output.push_back(static_cast<char>(codePoint));
+        } else if (codePoint <= 0x7FF) {
+            output.push_back(static_cast<char>(0xC0 | (codePoint >> 6)));
+            output.push_back(static_cast<char>(0x80 | (codePoint & 0x3F)));
+        } else if (codePoint <= 0xFFFF) {
+            output.push_back(static_cast<char>(0xE0 | (codePoint >> 12)));
+            output.push_back(static_cast<char>(0x80 | ((codePoint >> 6) & 0x3F)));
+            output.push_back(static_cast<char>(0x80 | (codePoint & 0x3F)));
+        } else {
+            output.push_back(static_cast<char>(0xF0 | (codePoint >> 18)));
+            output.push_back(static_cast<char>(0x80 | ((codePoint >> 12) & 0x3F)));
+            output.push_back(static_cast<char>(0x80 | ((codePoint >> 6) & 0x3F)));
+            output.push_back(static_cast<char>(0x80 | (codePoint & 0x3F)));
+        }
+    }
+
+    static inline bool FoldKeyDerivationCodePoint(uint32_t codePoint, char& folded) {
+        switch (codePoint) {
+        case 0x0060: // grave accent
+        case 0x00B4: // acute accent
+        case 0x02BC: // modifier letter apostrophe
+        case 0x2018: // left single quotation mark
+        case 0x2019: // right single quotation mark
+        case 0x201A: // single low-9 quotation mark
+        case 0x201B: // single high-reversed-9 quotation mark
+        case 0x2032: // prime
+        case 0x2035: // reversed prime
+        case 0xFF07: // fullwidth apostrophe
+            folded = '\'';
+            return true;
+        case 0x201C: // left double quotation mark
+        case 0x201D: // right double quotation mark
+        case 0x201E: // double low-9 quotation mark
+        case 0x201F: // double high-reversed-9 quotation mark
+        case 0x2033: // double prime
+        case 0x2036: // reversed double prime
+        case 0xFF02: // fullwidth quotation mark
+            folded = '"';
+            return true;
+        case 0x00A0: // no-break space
+        case 0x1680:
+        case 0x202F: // narrow no-break space
+        case 0x205F:
+        case 0x3000:
+            folded = ' ';
+            return true;
+        case 0x2010:
+        case 0x2011:
+        case 0x2012:
+        case 0x2013:
+        case 0x2014:
+        case 0x2015:
+        case 0x2212:
+        case 0xFE58:
+        case 0xFE63:
+        case 0xFF0D:
+            folded = '-';
+            return true;
+        default:
+            if (codePoint >= 0x2000 && codePoint <= 0x200A) {
+                folded = ' ';
+                return true;
+            }
+            return false;
+        }
+    }
+
+    static inline std::string FoldKeyDerivationTextVariants(std::string_view text) {
+        std::string output;
+        output.reserve(text.size());
+
+        std::size_t offset = 0;
+        while (offset < text.size()) {
+            const std::size_t start = offset;
+            uint32_t codePoint = 0;
+            if (!DecodeUtf8CodePoint(text, offset, codePoint)) {
+                output.push_back(text[start]);
+                continue;
+            }
+
+            char folded = '\0';
+            if (FoldKeyDerivationCodePoint(codePoint, folded)) {
+                output.push_back(folded);
+            } else {
+                AppendUtf8CodePoint(output, codePoint);
+            }
+        }
+
+        return output;
+    }
+
+    static inline std::string Utf16ToUtf8String(const std::wstring& value) {
+        if (value.empty()) {
+            return {};
+        }
+
+        const size_t size = utf16_to_utf8(value.c_str(), value.size(), nullptr, 0);
+        if (size == 0) {
+            return {};
+        }
+
+        std::string result(size, '\0');
+        utf16_to_utf8(value.c_str(), value.size(), result.data(), result.size());
+        return result;
+    }
+
+    static inline std::wstring Utf8ToUtf16String(std::string_view value) {
+        if (value.empty()) {
+            return {};
+        }
+
+        const size_t size = utf8_to_utf16(value.data(), value.size(), nullptr, 0);
+        if (size == 0) {
+            return {};
+        }
+
+        std::wstring result(size, L'\0');
+        utf8_to_utf16(value.data(), value.size(), result.data(), result.size());
+        return result;
+    }
+
+    static inline std::string NormalizeUtf8Canonical(std::string_view value) {
+        if (value.empty()) {
+            return {};
+        }
+
+#ifdef _WIN32
+        std::wstring wide = Utf8ToUtf16String(value);
+        if (wide.empty()) {
+            return std::string(value);
+        }
+
+        const int needed = NormalizeString(
+            NormalizationC,
+            wide.data(),
+            static_cast<int>(wide.size()),
+            nullptr,
+            0);
+        if (needed <= 0) {
+            return std::string(value);
+        }
+
+        std::wstring normalized(static_cast<std::size_t>(needed), L'\0');
+        const int written = NormalizeString(
+            NormalizationC,
+            wide.data(),
+            static_cast<int>(wide.size()),
+            normalized.data(),
+            needed);
+        if (written <= 0) {
+            return std::string(value);
+        }
+
+        normalized.resize(static_cast<std::size_t>(written));
+        return Utf16ToUtf8String(normalized);
+#elif defined(__APPLE__)
+        CFStringRef source = CFStringCreateWithBytes(
+            kCFAllocatorDefault,
+            reinterpret_cast<const UInt8*>(value.data()),
+            static_cast<CFIndex>(value.size()),
+            kCFStringEncodingUTF8,
+            false);
+        if (source == nullptr) {
+            return std::string(value);
+        }
+
+        CFMutableStringRef normalized = CFStringCreateMutableCopy(kCFAllocatorDefault, 0, source);
+        CFRelease(source);
+        if (normalized == nullptr) {
+            return std::string(value);
+        }
+
+        CFStringNormalize(normalized, kCFStringNormalizationFormC);
+        const CFIndex length = CFStringGetLength(normalized);
+        const CFIndex maxUtf8Bytes = CFStringGetMaximumSizeForEncoding(length, kCFStringEncodingUTF8);
+        if (maxUtf8Bytes < 0) {
+            CFRelease(normalized);
+            return std::string(value);
+        }
+
+        std::vector<char> buffer(static_cast<std::size_t>(maxUtf8Bytes) + 1, '\0');
+        if (!CFStringGetCString(normalized, buffer.data(), static_cast<CFIndex>(buffer.size()), kCFStringEncodingUTF8)) {
+            CFRelease(normalized);
+            return std::string(value);
+        }
+
+        CFRelease(normalized);
+        return std::string(buffer.data());
+#else
+        return std::string(value);
+#endif
+    }
+}
+
+static inline std::string CanonicalizeKeyDerivationText(std::string_view value) {
+    return clipp_platform_detail::FoldKeyDerivationTextVariants(
+        clipp_platform_detail::NormalizeUtf8Canonical(value));
+}
 
 static inline void strncpys(char* dst, const char* src, size_t maxlen) {
     if (!dst || !src || maxlen == 0) return;

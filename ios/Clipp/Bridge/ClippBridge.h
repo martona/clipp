@@ -20,10 +20,22 @@ NS_SWIFT_NAME(NetworkKeyBridge)
 @interface CLPNetworkKeyBridge : NSObject
 
 + (nullable CLPNetworkKeyStatus*)loadStatusWithError:(NSError**)error NS_SWIFT_NAME(loadStatus());
++ (nullable CLPNetworkKeyStatus*)updateNetworkName:(NSString*)networkName
+                                             error:(NSError**)error NS_SWIFT_NAME(updateNetworkName(_:));
 + (nullable CLPNetworkKeyStatus*)deriveAndStoreKeyWithNetworkName:(NSString*)networkName
                                                            secret:(NSString*)secret
                                                             error:(NSError**)error NS_SWIFT_NAME(deriveAndStoreKey(networkName:secret:));
 + (BOOL)clearNetworkKeyWithError:(NSError**)error NS_SWIFT_NAME(clearNetworkKey());
+
+@end
+
+NS_SWIFT_NAME(NetworkRuntimeBridge)
+@interface CLPNetworkRuntimeBridge : NSObject
+
++ (BOOL)startWithError:(NSError**)error NS_SWIFT_NAME(start());
++ (void)stop;
++ (void)notifyNetworkKeyChanged;
++ (BOOL)isRunning;
 
 @end
 

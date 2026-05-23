@@ -123,6 +123,7 @@ if (WIN32)
         shell32
         ws2_32
         Crypt32
+        Normaliz
     )
     if (MSVC)
         target_link_options(clipp-win32 PRIVATE

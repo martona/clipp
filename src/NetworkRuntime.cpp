@@ -1,11 +1,17 @@
 #include "NetworkRuntime.h"
 
-#include "Clipboard.h"
 #include "Logger.h"
 #include "MDNSThread.h"
 #include "PeerManager.h"
 #include "Settings.h"
 #include "utils.h"
+
+#if defined(__APPLE__) && (TARGET_OS_IPHONE || TARGET_OS_SIMULATOR)
+#define CLIPP_IOS_CLIPBOARD_RECEIVE_STUB 1
+#else
+#include "Clipboard.h"
+#define CLIPP_IOS_CLIPBOARD_RECEIVE_STUB 0
+#endif
 
 extern PeerManager g_peerManager;
 extern Settings g_settings;
@@ -101,7 +107,11 @@ void NetworkRuntime::ThreadProc() {
 
 void NetworkRuntime::OnClipboardReceived(const std::wstring& hostName, const HostId&, ClipboardPayload& payload) {
     g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Received clipboard data from client %ls (format ID: %u, size: %zu bytes)", hostName.c_str(), payload.formatId, payload.rawData.size());
+#if CLIPP_IOS_CLIPBOARD_RECEIVE_STUB
+    g_logger.log(__FUNCTION__, Logger::Level::Info, L"iOS clipboard receive callback is stubbed; payload was validated and ignored.");
+#else
     SetClipboardData(payload);
+#endif
 }
 
 void NetworkRuntime::OnMDNSNotification(const char* hostNameUtf8,

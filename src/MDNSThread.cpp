@@ -2,6 +2,7 @@
 #include "MDNSThread.h"
 #include "Settings.h"
 #include "KeyManager.h"
+#include "Logger.h"
 #include <sodium.h>
 #include <thread>
 #include <future>
@@ -167,12 +168,21 @@ static bool ParseDiscoveryPacket(mdns_packet& pkt,
 static bool SendDiscoveryPacket(SOCKET sock, const sockaddr_in& targetAddr, const std::string& hostName) {
     mdns_packet pkt = BuildMDNSPacket(hostName, "query");
     encrypted_mdns_packet encryptedPacket{};
-    if (!EncryptPacket(pkt, encryptedPacket))
+    if (!EncryptPacket(pkt, encryptedPacket)) {
+        g_logger.log(__FUNCTION__, Logger::Level::Debug, "mDNS: unable to encrypt discovery packet.");
         return false;
+    }
 
     const auto sent = sendto(sock, reinterpret_cast<const char*>(&encryptedPacket), sizeof(encryptedPacket), 0,
         reinterpret_cast<const sockaddr*>(&targetAddr), sizeof(targetAddr));
-    return sent >= 0 && static_cast<size_t>(sent) == sizeof(encryptedPacket);
+    const bool sentComplete = sent >= 0 && static_cast<size_t>(sent) == sizeof(encryptedPacket);
+    g_logger.log(__FUNCTION__,
+        sentComplete ? Logger::Level::DDebug : Logger::Level::Warning,
+        "mDNS: sent discovery query for host '%s' (%zu bytes, result=%ld).",
+        hostName.c_str(),
+        sizeof(encryptedPacket),
+        static_cast<long>(sent));
+    return sentComplete;
 }
 
 static void WakeMDNSThread() {
@@ -185,29 +195,42 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
 
 	in_addr multicastAddrn = {};
     if (1 != inet_pton(AF_INET, g_settings.multicastIp().c_str(), &multicastAddrn)) {
+        g_logger.log(__FUNCTION__, Logger::Level::Error, "mDNS: invalid multicast IP '%s'.", g_settings.multicastIp().c_str());
         initPromise.set_value(false);
 		return;
     }
 	in_addr listenerAddrn = {};
     if (1 != inet_pton(AF_INET, g_settings.listenerIp().c_str(), &listenerAddrn)) {
+        g_logger.log(__FUNCTION__, Logger::Level::Error, "mDNS: invalid listener IP '%s'.", g_settings.listenerIp().c_str());
         initPromise.set_value(false);
         return;
     }
 
     const std::string localHostName = GetLocalHostName();
+    g_logger.log(__FUNCTION__,
+        Logger::Level::Info,
+        "mDNS: starting for host '%s' on %s:%hu, multicast %s:%hu.",
+        localHostName.c_str(),
+        g_settings.listenerIp().c_str(),
+        static_cast<unsigned short>(g_settings.mdnsPort()),
+        g_settings.multicastIp().c_str(),
+        static_cast<unsigned short>(g_settings.mdnsPort()));
 
     SOCKET sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sock == INVALID_SOCKET) {
+        g_logger.log(__FUNCTION__, Logger::Level::Error, "mDNS: socket creation failed.");
         initPromise.set_value(false);
         return;
     }
     if (!g_settings.getHostID(g_hostId)) {
+        g_logger.log(__FUNCTION__, Logger::Level::Error, "mDNS: host ID unavailable.");
         closesocket(sock);
         initPromise.set_value(false);
         return;
     }
 
     if (!g_mdnsWakeEvent.Initialize()) {
+        g_logger.log(__FUNCTION__, Logger::Level::Error, "mDNS: wake socket creation failed.");
         closesocket(sock);
         initPromise.set_value(false);
         return;
@@ -226,6 +249,7 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
     bindAddr.sin_port = htons(static_cast<u_short>(g_settings.mdnsPort()));
     bindAddr.sin_addr.s_addr = listenerAddrn.s_addr;
     if (bind(sock, reinterpret_cast<const sockaddr*>(&bindAddr), sizeof(bindAddr)) == SOCKET_ERROR) {
+        g_logger.log(__FUNCTION__, Logger::Level::Error, "mDNS: bind failed.");
         g_mdnsWakeEvent.Close();
         closesocket(sock);
         initPromise.set_value(false);
@@ -235,7 +259,9 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
     ip_mreq group{};
     group.imr_multiaddr.s_addr = multicastAddrn.s_addr;
     group.imr_interface.s_addr = listenerAddrn.s_addr;
-    setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, reinterpret_cast<const char*>(&group), sizeof(group));
+    if (setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, reinterpret_cast<const char*>(&group), sizeof(group)) == SOCKET_ERROR) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, "mDNS: joining multicast group failed; continuing to listen for direct traffic.");
+    }
 
     sockaddr_in multicastAddr{};
     multicastAddr.sin_family = AF_INET;
@@ -249,6 +275,7 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
     g_mdnsSendImmediately = true;
     g_mdnsRunning = true;
     initPromise.set_value(true);
+    g_logger.log(__FUNCTION__, Logger::Level::Info, "mDNS: thread initialized.");
 
     auto nextSendTime = std::chrono::steady_clock::now();
     std::array<char, 1024> recvBuffer{};
@@ -295,12 +322,20 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
             if (bytesRead <= 0)
                 continue;
 
-            if (!HasNetworkKey())
+            char senderIpForLog[INET_ADDRSTRLEN] = {0};
+            inet_ntop(AF_INET, &fromAddr.sin_addr, senderIpForLog, sizeof(senderIpForLog));
+            g_logger.log(__FUNCTION__, Logger::Level::DDebug, "mDNS: received %ld bytes from %s.", static_cast<long>(bytesRead), senderIpForLog);
+
+            if (!HasNetworkKey()) {
+                g_logger.log(__FUNCTION__, Logger::Level::DDebug, "mDNS: ignored packet because no network key is configured.");
                 continue;
+            }
 
             mdns_packet decryptedPacket;
-            if (!DecryptPacket(recvBuffer.data(), static_cast<size_t>(bytesRead), decryptedPacket))
+            if (!DecryptPacket(recvBuffer.data(), static_cast<size_t>(bytesRead), decryptedPacket)) {
+                g_logger.log(__FUNCTION__, Logger::Level::DDebug, "mDNS: unable to decrypt packet.");
                 continue;
+            }
 
             std::string discoveredHost, verb, discoveredQueryID, discoveredNonce;
 			unsigned short discoveredPort = 0;
@@ -315,12 +350,14 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
                 &rawQueryID,
                 remoteHostId))
             {
+                g_logger.log(__FUNCTION__, Logger::Level::DDebug, "mDNS: ignored decrypted packet that did not match the Clipp discovery schema.");
                 continue;
             }
 
             if (verb == "query" && rawQueryID != nullptr) {
 				// ignore our own queries
                 if (remoteHostId == g_hostId) {
+                    g_logger.log(__FUNCTION__, Logger::Level::DDebug, "mDNS: ignored self query.");
                     continue;
                 }
                 mdns_packet responsePacket = BuildMDNSPacket(localHostName, "response", rawQueryID);
@@ -328,6 +365,7 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
                 if (EncryptPacket(responsePacket, encryptedResponse)) {
                     sendto(sock, reinterpret_cast<const char*>(&encryptedResponse), sizeof(encryptedResponse), 0,
                         reinterpret_cast<const sockaddr*>(&fromAddr), sizeof(fromAddr));
+                    g_logger.log(__FUNCTION__, Logger::Level::DDebug, "mDNS: sent discovery response to %s.", senderIpForLog);
                 }
             }
 
@@ -356,6 +394,7 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
         g_mdnsWakeEvent.Close();
     }
     g_mdnsRunning = false;
+    g_logger.log(__FUNCTION__, Logger::Level::Info, "mDNS: thread exiting.");
 }
 
 bool StartMDNS(MDNSCallback callback) {

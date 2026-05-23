@@ -72,6 +72,12 @@ struct ContentView: View {
         didCheckInitialNetworkKey = true
 
         do {
+            try NetworkRuntimeBridge.start()
+        } catch {
+            print("Clipp network runtime failed to start: \(error.localizedDescription)")
+        }
+
+        do {
             let status = try await Task.detached(priority: .userInitiated) {
                 try NetworkKeyBridge.loadStatus()
             }.value

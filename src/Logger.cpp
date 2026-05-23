@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdarg>
 #include <cwchar>
+#include <cstdio>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -12,6 +13,19 @@
 Logger g_logger;
 
 static constexpr size_t kMaxRetainedLogLines = 1000;
+
+#if defined(__APPLE__) && (TARGET_OS_IPHONE || TARGET_OS_SIMULATOR)
+static std::string WideToUtf8(const std::wstring& value) {
+    if (value.empty()) return "";
+
+    const size_t size = utf16_to_utf8(value.c_str(), value.size(), nullptr, 0);
+    if (size == 0) return "";
+
+    std::string narrow(size, '\0');
+    utf16_to_utf8(value.c_str(), value.size(), narrow.data(), size);
+    return narrow;
+}
+#endif
 
 void Logger::SetMinimumLevel(Level level) {
     minimumLevel_.store(LevelPriority(level), std::memory_order_relaxed);
@@ -123,6 +137,14 @@ void Logger::writeLine(const wchar_t* function, Level level, const wchar_t* mess
     }
 
     std::wcout << wstr;
+#if defined(__APPLE__) && (TARGET_OS_IPHONE || TARGET_OS_SIMULATOR)
+    const std::wstring debugStr = tsStr + L" [" + lvlStr + L"] [" + fnStr + L"] " + msgStr + L"\n";
+    const std::string debugUtf8 = WideToUtf8(debugStr);
+    if (!debugUtf8.empty()) {
+        std::fputs(debugUtf8.c_str(), stderr);
+        std::fflush(stderr);
+    }
+#endif
     for (const auto& reflector : logReflectors_) {
         reflector(wstr);
     }
