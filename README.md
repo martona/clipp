@@ -1,6 +1,6 @@
-# Project Title
+# Clipp v1.0
 
-A brief description of your project and its purpose.
+Secure cross-platform clipboard sync for trusted devices.
 
 ## Features
 - Feature 1
