@@ -243,7 +243,7 @@ private final class NetworkKeyViewModel: ObservableObject {
             statusMessage = "Network name cannot be empty."
         } else if !secret.isEmpty && secret.count < 8 {
             statusIsError = true
-            statusMessage = "Password must be at least 8 characters."
+            statusMessage = "Secret must be at least 8 characters."
         } else if !secret.isEmpty {
             statusIsError = false
             statusMessage = "Ready to derive and store a network key."
@@ -404,10 +404,10 @@ private struct AboutPanelView: View {
                         .accessibilityHidden(true)
 
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Clipp 1.0")
+                        Text("Clipp v1.0")
                             .font(.title2.weight(.semibold))
 
-                        Text("Secure cross-platform clipboard sync for trusted devices")
+                        Text("Secure cross-platform clipboard sync for trusted devices.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }

@@ -255,7 +255,7 @@ void RequestMacOSShowMainWindow() {
 
     NSButton* minimizeButton = [self makeActionButtonWithTitle:@"Minimize to Menu Bar"
                                                         action:@selector(minimizeToMenuBar:)];
-    NSButton* exitButton = [self makeActionButtonWithTitle:@"Exit Application"
+    NSButton* exitButton = [self makeActionButtonWithTitle:@"Exit Clipp"
                                                     action:@selector(exitApplication:)];
     [actionStack addArrangedSubview:minimizeButton];
     [actionStack addArrangedSubview:exitButton];

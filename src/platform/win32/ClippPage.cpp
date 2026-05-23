@@ -67,7 +67,7 @@ void ClippPage::BuildView() {
     content.Children().Append(heading);
 
     TextBlock intro;
-    intro.Text(L"Secure cross-platform clipboard sync with peer-to-peer networking.");
+    intro.Text(L"Secure cross-platform clipboard sync for trusted devices.");
     intro.FontSize(14);
     intro.TextWrapping(TextWrapping::WrapWholeWords);
     content.Children().Append(intro);
@@ -139,7 +139,7 @@ void ClippPage::BuildNetworkSecretSection(winrt::Windows::UI::Xaml::Controls::St
         passwordInfoPanel_.Visibility(Visibility::Visible);
 
         if (pwd.size() < 8) {
-            passwordInfoText_.Text(L"Password must be at least 8 characters.");
+            passwordInfoText_.Text(L"Secret must be at least 8 characters.");
             return;
         }
 

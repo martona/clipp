@@ -409,7 +409,7 @@ private:
             MinimizeToTray();
         });
 
-        Button exitButton = CreateSidebarButton(L"Exit Application");
+        Button exitButton = CreateSidebarButton(L"Exit Clipp");
         exitButton.Click([this](auto const&, auto const&) {
             ExitApplication();
         });

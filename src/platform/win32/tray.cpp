@@ -58,7 +58,7 @@ LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                 AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
                 AppendMenuW(hMenu, MF_STRING, ID_TRAY_ABOUT, L"About Clipp");
                 AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
-                AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, L"Exit");
+                AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, L"Exit Clipp");
 
                 // 2. Windows bug workaround: You must bring the hidden window
                 // to the foreground before showing the menu, or it won't disappear

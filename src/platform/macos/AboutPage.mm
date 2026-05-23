@@ -110,12 +110,12 @@ void MacOSAboutPage::BuildView() {
     contentStack.distribution = NSStackViewDistributionFill;
     contentStack.spacing = 14.0;
 
-    NSTextField* heading = [NSTextField labelWithString:@"Clipp 1.0"];
+    NSTextField* heading = [NSTextField labelWithString:@"Clipp v1.0"];
     heading.translatesAutoresizingMaskIntoConstraints = NO;
     heading.font = [NSFont systemFontOfSize:28 weight:NSFontWeightSemibold];
     heading.textColor = [NSColor labelColor];
 
-    NSTextField* intro = MakeAboutText(@"Secure cross-platform clipboard sync for trusted devices",
+    NSTextField* intro = MakeAboutText(@"Secure cross-platform clipboard sync for trusted devices.",
                                        14.0,
                                        [NSColor secondaryLabelColor]);
 

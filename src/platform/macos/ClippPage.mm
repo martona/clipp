@@ -288,7 +288,7 @@ void MacOSClippPage::BuildView() {
     heading.font = [NSFont systemFontOfSize:28 weight:NSFontWeightSemibold];
     heading.textColor = [NSColor labelColor];
 
-    NSTextField* intro = MacOSMakeWrappingLabel(@"Secure cross-platform clipboard sync with peer-to-peer networking.",
+    NSTextField* intro = MacOSMakeWrappingLabel(@"Secure cross-platform clipboard sync for trusted devices.",
                                            14.0,
                                            [NSColor secondaryLabelColor]);
 
@@ -479,7 +479,7 @@ void MacOSClippPage::DerivePasswordFromCurrentField() {
     passwordInfoPanel_.hidden = NO;
 
     if (passwordText.length < 8) {
-        MacOSSetFieldText(passwordInfoText_, @"Password must be at least 8 characters.");
+        MacOSSetFieldText(passwordInfoText_, @"Secret must be at least 8 characters.");
         return;
     }
 

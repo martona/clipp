@@ -143,9 +143,9 @@ AboutPage::AboutPage() {
     content.Padding(ThicknessHelper::FromUniformLength(24));
     content.Spacing(14);
 
-    content.Children().Append(CreateTextBlock(L"Clipp 1.0", 28, 1.0, true));
+    content.Children().Append(CreateTextBlock(L"Clipp v1.0", 28, 1.0, true));
     content.Children().Append(CreateTextBlock(
-        L"Secure cross-platform clipboard sync for trusted devices",
+        L"Secure cross-platform clipboard sync for trusted devices.",
         14,
         0.8));
 
