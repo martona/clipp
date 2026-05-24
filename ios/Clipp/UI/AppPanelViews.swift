@@ -8,13 +8,15 @@
 import SwiftUI
 import Combine
 
-enum AppPanel: String, CaseIterable, Identifiable {
+enum AppPanel: String, Identifiable {
     case network
     case settings
-    case logs
     case about
+    case diagnostics
 
     var id: String { rawValue }
+
+    static let allCases: [AppPanel] = [.network, .settings, .about]
 
     var title: String {
         switch self {
@@ -22,10 +24,10 @@ enum AppPanel: String, CaseIterable, Identifiable {
             CLP_UI_NETWORK
         case .settings:
             CLP_UI_SETTINGS
-        case .logs:
-            CLP_UI_LOGS
         case .about:
             CLP_UI_ABOUT
+        case .diagnostics:
+            CLP_UI_DIAGNOSTICS
         }
     }
 
@@ -35,16 +37,17 @@ enum AppPanel: String, CaseIterable, Identifiable {
             "antenna.radiowaves.left.and.right"
         case .settings:
             "gearshape"
-        case .logs:
-            "terminal"
         case .about:
             "info.circle"
+        case .diagnostics:
+            "terminal"
         }
     }
 }
 
 struct AppPanelSheet: View {
     let panel: AppPanel
+    let openPanel: (AppPanel) -> Void
 
     @Environment(\.dismiss) private var dismiss
 
@@ -56,10 +59,12 @@ struct AppPanelSheet: View {
                     NetworkPanelView()
                 case .settings:
                     SettingsPanelView()
-                case .logs:
-                    LogsPanelView()
                 case .about:
-                    AboutPanelView()
+                    AboutPanelView {
+                        openPanel(.diagnostics)
+                    }
+                case .diagnostics:
+                    DiagnosticsPanelView()
                 }
             }
             .navigationTitle(panel.title)
@@ -767,7 +772,7 @@ private struct SettingsStatusText: View {
     }
 }
 
-private struct LogsPanelView: View {
+private struct DiagnosticsPanelView: View {
     private let lines = [
         "09:41:02 discovery started",
         "09:41:04 peer MacBook Pro reachable",
@@ -789,6 +794,8 @@ private struct LogsPanelView: View {
 }
 
 private struct AboutPanelView: View {
+    let openDiagnostics: () -> Void
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
@@ -837,6 +844,13 @@ private struct AboutPanelView: View {
                 Text(CLP_UI_THIRD_PARTY_LICENSE_NOTE)
                     .font(.footnote)
                     .foregroundStyle(.tertiary)
+
+                Button {
+                    openDiagnostics()
+                } label: {
+                    Label(CLP_UI_DIAGNOSTICS, systemImage: "terminal")
+                }
+                .buttonStyle(.bordered)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(24)

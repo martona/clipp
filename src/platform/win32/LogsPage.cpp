@@ -66,7 +66,7 @@ void LogsPage::BuildView() {
     header.Spacing(8);
 
     TextBlock heading;
-    heading.Text(CLP_W(CLP_UI_LOGS));
+    heading.Text(CLP_W(CLP_UI_DIAGNOSTICS));
     heading.FontSize(28);
     heading.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
     heading.TextWrapping(TextWrapping::Wrap);

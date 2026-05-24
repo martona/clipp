@@ -13,6 +13,7 @@
 #define CLP_UI_NETWORK "Network"
 #define CLP_UI_SETTINGS "Settings"
 #define CLP_UI_LOGS "Logs"
+#define CLP_UI_DIAGNOSTICS "Diagnostics"
 #define CLP_UI_ABOUT "About"
 #define CLP_UI_OPEN_CLIPP "Open Clipp"
 #define CLP_UI_ABOUT_CLIPP "About Clipp"

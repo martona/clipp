@@ -167,8 +167,8 @@ public:
         Clipp = 0,
         Network = 1,
         Settings = 2,
-        Logs = 3,
-        About = 4,
+        About = 3,
+        Logs = 4,
     };
 
     MainXamlDialog() = default;
@@ -268,28 +268,9 @@ private:
 
         case WM_SHOWWINDOW:
             if (wParam) {
-                if (clippPage_) {
-                    clippPage_->OnShown();
-                }
-                if (networkPage_) {
-                    networkPage_->OnShown();
-                }
-                if (logsPage_) {
-                    logsPage_->OnShown();
-                }
-                if (settingsPage_) {
-                    settingsPage_->OnShown();
-                }
+                ActivatePage(currentPageID_);
             } else {
-                if (clippPage_) {
-                    clippPage_->OnHidden();
-                }
-                if (networkPage_) {
-                    networkPage_->OnHidden();
-                }
-                if (logsPage_) {
-                    logsPage_->OnHidden();
-                }
+                DeactivatePage(currentPageID_);
             }
             return 0;
 
@@ -380,7 +361,9 @@ private:
         networkPage_ = std::make_unique<NetworkPage>(hwnd_, derivedKeyMessage_, peerDisplayUpdateMessage_, g_peerDisplay, g_peerManager);
         settingsPage_ = std::make_unique<SettingsPage>();
         logsPage_ = std::make_unique<LogsPage>();
-        aboutPage_ = std::make_unique<AboutPage>();
+        aboutPage_ = std::make_unique<AboutPage>([this]() {
+            SelectPage(PageID::Logs);
+        });
 
         Grid root;
         root.HorizontalAlignment(HorizontalAlignment::Stretch);
@@ -407,7 +390,6 @@ private:
             { L"\xE77F", CLP_W(CLP_UI_APP_NAME) },
             { L"\xE968", CLP_W(CLP_UI_NETWORK) },
             { L"\xE713", CLP_W(CLP_UI_SETTINGS) },
-            { L"\xE8A5", CLP_W(CLP_UI_LOGS) },
             { L"\xE946", CLP_W(CLP_UI_ABOUT) },
         };
 
@@ -458,7 +440,10 @@ private:
 
         menu_.SelectionChanged([this](auto const& sender, auto const&) {
             auto menu = sender.as<ListBox>();
-            ShowPage(static_cast<PageID>(menu.SelectedIndex()));
+            const int32_t selectedIndex = menu.SelectedIndex();
+            if (selectedIndex >= 0) {
+                ShowPage(static_cast<PageID>(selectedIndex));
+            }
         });
         menu_.SelectedIndex(0);
 
@@ -515,33 +500,90 @@ private:
             return;
         }
 
+        if (currentPageID_ != pageID) {
+            DeactivatePage(currentPageID_);
+        }
+
         switch (pageID) {
         case PageID::Clipp:
-            clippPage_->OnShown();
             contentPresenter_.Content(clippPage_->View());
             break;
         case PageID::Network:
-            networkPage_->OnShown();
             contentPresenter_.Content(networkPage_->View());
             break;
         case PageID::Settings:
-            settingsPage_->OnShown();
             contentPresenter_.Content(settingsPage_->View());
-            break;
-        case PageID::Logs:
-            contentPresenter_.Content(logsPage_->View());
             break;
         case PageID::About:
             contentPresenter_.Content(aboutPage_->View());
             break;
+        case PageID::Logs:
+            contentPresenter_.Content(logsPage_->View());
+            break;
         }
+
+        currentPageID_ = pageID;
+        ActivatePage(pageID);
     }
 
     void SelectPage(PageID pageID) {
-        if (menu_) {
+        if (menu_ && pageID == PageID::Logs) {
+            menu_.SelectedIndex(-1);
+            ShowPage(pageID);
+        } else if (menu_) {
             menu_.SelectedIndex(static_cast<int32_t>(pageID));
         } else {
             ShowPage(pageID);
+        }
+    }
+
+    void ActivatePage(PageID pageID) {
+        switch (pageID) {
+        case PageID::Clipp:
+            if (clippPage_) {
+                clippPage_->OnShown();
+            }
+            break;
+        case PageID::Network:
+            if (networkPage_) {
+                networkPage_->OnShown();
+            }
+            break;
+        case PageID::Settings:
+            if (settingsPage_) {
+                settingsPage_->OnShown();
+            }
+            break;
+        case PageID::About:
+            break;
+        case PageID::Logs:
+            if (logsPage_) {
+                logsPage_->OnShown();
+            }
+            break;
+        }
+    }
+
+    void DeactivatePage(PageID pageID) {
+        switch (pageID) {
+        case PageID::Clipp:
+            if (clippPage_) {
+                clippPage_->OnHidden();
+            }
+            break;
+        case PageID::Network:
+            if (networkPage_) {
+                networkPage_->OnHidden();
+            }
+            break;
+        case PageID::Settings:
+        case PageID::About:
+            break;
+        case PageID::Logs:
+            if (logsPage_) {
+                logsPage_->OnHidden();
+            }
+            break;
         }
     }
 
@@ -727,6 +769,7 @@ private:
     winrt::Windows::UI::Xaml::Hosting::DesktopWindowXamlSource xamlSource_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::ListBox menu_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::ContentControl contentPresenter_{ nullptr };
+    PageID currentPageID_ = PageID::Clipp;
     std::unique_ptr<ClippPage> clippPage_;
     std::unique_ptr<NetworkPage> networkPage_;
     std::unique_ptr<SettingsPage> settingsPage_;

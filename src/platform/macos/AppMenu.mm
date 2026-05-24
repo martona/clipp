@@ -26,7 +26,8 @@ std::atomic_bool g_pendingOpenNetworkPage{ false };
 constexpr NSInteger kPageClipp = 0;
 constexpr NSInteger kPageNetwork = 1;
 constexpr NSInteger kPageSettings = 2;
-constexpr NSInteger kPageLogs = 3;
+constexpr NSInteger kPageAbout = 3;
+constexpr NSInteger kPageLogs = 4;
 
 void MakePageFlexible(NSView* view) {
     [view setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
@@ -273,7 +274,6 @@ void RequestMacOSShowMainWindow(bool showNetworkPage) {
         CLP_NS(CLP_UI_APP_NAME),
         CLP_NS(CLP_UI_NETWORK),
         CLP_NS(CLP_UI_SETTINGS),
-        CLP_NS(CLP_UI_LOGS),
         CLP_NS(CLP_UI_ABOUT)
     ];
     NSMutableArray<NSButton*>* buttons = [NSMutableArray arrayWithCapacity:titles.count];
@@ -325,13 +325,15 @@ void RequestMacOSShowMainWindow(bool showNetworkPage) {
         [controller networkKeyChanged];
     });
     settingsPage_ = std::make_unique<MacOSSettingsPage>();
-    aboutPage_ = std::make_unique<MacOSAboutPage>();
+    aboutPage_ = std::make_unique<MacOSAboutPage>([controller]() {
+        [controller selectPage:kPageLogs];
+    });
     self.pageViews = @[
         clippPage_->View(),
         networkPage_->View(),
         settingsPage_->View(),
-        [self makeLogsPage],
         aboutPage_->View(),
+        [self makeLogsPage],
     ];
     self.window.autorecalculatesKeyViewLoop = NO;
 }
@@ -437,7 +439,7 @@ void RequestMacOSShowMainWindow(bool showNetworkPage) {
     NSView* page = [[NSView alloc] initWithFrame:NSZeroRect];
     page.translatesAutoresizingMaskIntoConstraints = NO;
 
-    NSTextField* heading = [NSTextField labelWithString:CLP_NS(CLP_UI_LOGS)];
+    NSTextField* heading = [NSTextField labelWithString:CLP_NS(CLP_UI_DIAGNOSTICS)];
     heading.translatesAutoresizingMaskIntoConstraints = NO;
     heading.font = [NSFont systemFontOfSize:28 weight:NSFontWeightSemibold];
     heading.textColor = [NSColor labelColor];
@@ -653,8 +655,8 @@ void RequestMacOSShowMainWindow(bool showNetworkPage) {
 
     if (pageIndex == kPageSettings && settingsPage_ != nullptr && self.pageButtons.count > kPageSettings) {
         NSView* settingsButton = self.pageButtons[kPageSettings];
-        NSView* nextAfterSettings = self.pageButtons.count > kPageLogs
-            ? self.pageButtons[kPageLogs]
+        NSView* nextAfterSettings = self.pageButtons.count > kPageAbout
+            ? self.pageButtons[kPageAbout]
             : (self.actionButtons.count > 0 ? self.actionButtons[0] : self.pageButtons[0]);
 
         settingsButton.nextKeyView = settingsPage_->FirstKeyView();

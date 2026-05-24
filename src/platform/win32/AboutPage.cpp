@@ -4,6 +4,7 @@
 #include "platform/uistrings.h"
 
 #include <cstdint>
+#include <utility>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -25,6 +26,7 @@
 #include <winrt/Windows.UI.Text.h>
 #include <winrt/Windows.UI.Xaml.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
+#include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
 #include <winrt/Windows.UI.Xaml.Media.Imaging.h>
 #include <winrt/base.h>
@@ -129,7 +131,8 @@ void AppendAcknowledgement(
 }
 }
 
-AboutPage::AboutPage() {
+AboutPage::AboutPage(std::function<void()> diagnosticsCallback)
+    : diagnosticsCallback_(std::move(diagnosticsCallback)) {
     using namespace winrt::Windows::Foundation;
     using namespace winrt::Windows::UI::Xaml;
     using namespace winrt::Windows::UI::Xaml::Controls;
@@ -207,6 +210,17 @@ AboutPage::AboutPage() {
         12,
         0.68);
     content.Children().Append(note);
+
+    Button diagnosticsButton;
+    diagnosticsButton.Content(winrt::box_value(winrt::hstring{ CLP_W(CLP_UI_DIAGNOSTICS) }));
+    diagnosticsButton.HorizontalAlignment(HorizontalAlignment::Left);
+    diagnosticsButton.Padding(ThicknessHelper::FromLengths(12, 6, 12, 6));
+    diagnosticsButton.Click([this](auto const&, auto const&) {
+        if (diagnosticsCallback_) {
+            diagnosticsCallback_();
+        }
+    });
+    content.Children().Append(diagnosticsButton);
 
     ScrollViewer scroll;
     scroll.HorizontalAlignment(HorizontalAlignment::Stretch);

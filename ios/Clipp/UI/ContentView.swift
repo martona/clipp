@@ -92,7 +92,9 @@ struct ContentView: View {
                 }
             }
             .sheet(item: $activePanel) { panel in
-                AppPanelSheet(panel: panel)
+                AppPanelSheet(panel: panel) { destination in
+                    activePanel = destination
+                }
             }
             .sheet(item: $inspectedItem) { item in
                 ClipboardInspectSheet(item: item) {

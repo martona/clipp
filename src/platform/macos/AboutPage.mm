@@ -5,6 +5,8 @@
 #include "UiHelpers.h"
 #include "platform/uistrings.h"
 
+#include <utility>
+
 #import <AppKit/AppKit.h>
 
 @interface MacOSAboutFlippedView : NSView
@@ -14,6 +16,33 @@
 
 - (BOOL)isFlipped {
     return YES;
+}
+
+@end
+
+@interface MacOSAboutDiagnosticsButtonTarget : NSObject {
+@private
+    MacOSAboutPage* owner_;
+}
+- (instancetype)initWithOwner:(MacOSAboutPage*)owner;
+- (void)showDiagnostics:(id)sender;
+@end
+
+@implementation MacOSAboutDiagnosticsButtonTarget
+
+- (instancetype)initWithOwner:(MacOSAboutPage*)owner {
+    self = [super init];
+    if (self != nil) {
+        owner_ = owner;
+    }
+    return self;
+}
+
+- (void)showDiagnostics:(id)sender {
+    (void)sender;
+    if (owner_ != nullptr) {
+        owner_->ShowDiagnostics();
+    }
 }
 
 @end
@@ -80,12 +109,19 @@ void AddWrappedArrangedSubview(NSStackView* stack, NSTextField* label) {
 }
 }
 
-MacOSAboutPage::MacOSAboutPage() {
+MacOSAboutPage::MacOSAboutPage(std::function<void()> diagnosticsCallback)
+    : diagnosticsCallback_(std::move(diagnosticsCallback)) {
     BuildView();
 }
 
 NSView* MacOSAboutPage::View() const {
     return root_;
+}
+
+void MacOSAboutPage::ShowDiagnostics() {
+    if (diagnosticsCallback_) {
+        diagnosticsCallback_();
+    }
 }
 
 void MacOSAboutPage::BuildView() {
@@ -159,11 +195,19 @@ void MacOSAboutPage::BuildView() {
                                       12.0,
                                       [NSColor tertiaryLabelColor]);
 
+    diagnosticsButtonTarget_ = [[MacOSAboutDiagnosticsButtonTarget alloc] initWithOwner:this];
+    NSButton* diagnosticsButton = [NSButton buttonWithTitle:CLP_NS(CLP_UI_DIAGNOSTICS)
+                                                     target:diagnosticsButtonTarget_
+                                                     action:@selector(showDiagnostics:)];
+    diagnosticsButton.translatesAutoresizingMaskIntoConstraints = NO;
+    diagnosticsButton.bezelStyle = NSBezelStyleRounded;
+
     [contentStack addArrangedSubview:heading];
     [contentStack addArrangedSubview:intro];
     [contentStack addArrangedSubview:projectBand];
     [contentStack addArrangedSubview:acknowledgements];
     [contentStack addArrangedSubview:note];
+    [contentStack addArrangedSubview:diagnosticsButton];
 
     [documentView addSubview:contentStack];
     [root_ addSubview:scrollView];
