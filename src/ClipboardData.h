@@ -7,8 +7,10 @@
 #include "ClipboardLimits.h"
 #include "Logger.h"
 
-#ifdef __APPLE__
+#ifndef CF_UNICODETEXT
 	#define CF_UNICODETEXT 13
+#endif
+#ifndef CF_DIB
 	#define CF_DIB 8
 #endif
 
