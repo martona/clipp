@@ -352,21 +352,417 @@ private struct NetworkKeyStatusCard: View {
 }
 
 private struct SettingsPanelView: View {
+    @StateObject private var model = SettingsViewModel()
+    @State private var confirmingHostIDReset = false
+
     var body: some View {
         Form {
-            Section("Clipboard") {
-                Toggle("Receive from trusted devices", isOn: .constant(true))
-                    .disabled(true)
-                Toggle("Send copied text from this iPhone", isOn: .constant(true))
-                    .disabled(true)
-                Toggle("Collapse one-line items", isOn: .constant(true))
-                    .disabled(true)
+            Section {
+                HistoryLimitSlider(
+                    title: CLP_UI_HISTORY_MEMORY_LIMIT,
+                    stops: SettingsLimitStop.memoryStops,
+                    selection: $model.historyMemoryIndex
+                ) {
+                    model.applyClipboardHistorySettings()
+                }
+
+                HistoryLimitSlider(
+                    title: CLP_UI_HISTORY_TIME_LIMIT,
+                    stops: SettingsLimitStop.ageStops,
+                    selection: $model.historyAgeIndex
+                ) {
+                    model.applyClipboardHistorySettings()
+                }
+
+                HistoryLimitSlider(
+                    title: CLP_UI_HISTORY_ITEM_LIMIT,
+                    stops: SettingsLimitStop.itemStops,
+                    selection: $model.historyItemIndex
+                ) {
+                    model.applyClipboardHistorySettings()
+                }
+            } header: {
+                Text(CLP_UI_CLIPBOARD_HISTORY)
+            } footer: {
+                if model.historyStatusMessage != nil {
+                    SettingsStatusText(message: model.historyStatusMessage, isError: model.historyStatusIsError)
+                }
             }
 
-            Section("Notifications") {
-                Toggle("Notify when peers connect", isOn: .constant(false))
-                    .disabled(true)
+            Section {
+                SettingsTextFieldRow(
+                    title: CLP_UI_TCP_PORT,
+                    text: $model.tcpPort,
+                    keyboardType: .numberPad
+                ) {
+                    model.applyNetworkSettings()
+                }
+
+                SettingsTextFieldRow(
+                    title: CLP_UI_UDP_PORT,
+                    text: $model.udpPort,
+                    keyboardType: .numberPad
+                ) {
+                    model.applyNetworkSettings()
+                }
+
+                SettingsTextFieldRow(
+                    title: CLP_UI_LISTENER_IP,
+                    text: $model.listenerIP,
+                    keyboardType: .numbersAndPunctuation
+                ) {
+                    model.applyNetworkSettings()
+                }
+
+                SettingsTextFieldRow(
+                    title: CLP_UI_MULTICAST_IP,
+                    text: $model.multicastIP,
+                    keyboardType: .numbersAndPunctuation
+                ) {
+                    model.applyNetworkSettings()
+                }
+
+                Button {
+                    model.applyNetworkSettings()
+                } label: {
+                    Label(CLP_UI_APPLY_NETWORK_SETTINGS, systemImage: "arrow.clockwise")
+                }
+                .disabled(!model.canApplyNetworkSettings)
+            } header: {
+                Text(CLP_UI_NETWORK)
+            } footer: {
+                if model.networkStatusMessage != nil {
+                    SettingsStatusText(message: model.networkStatusMessage, isError: model.networkStatusIsError)
+                }
             }
+
+            Section {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(CLP_UI_CURRENT_HOST_ID)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Text(model.hostID.isEmpty ? CLP_UI_UNAVAILABLE : model.hostID)
+                        .font(.system(.footnote, design: .monospaced))
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .padding(.vertical, 2)
+
+                Button(role: .destructive) {
+                    confirmingHostIDReset = true
+                } label: {
+                    Label(CLP_UI_RESET, systemImage: "arrow.counterclockwise")
+                }
+
+                if model.hasHostIDCollisionWarning {
+                    Label(CLP_UI_HOST_ID_COLLISION_WARNING, systemImage: "exclamationmark.triangle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                }
+            } header: {
+                Text(CLP_UI_HOST_ID)
+            } footer: {
+                if model.hostIDStatusMessage != nil {
+                    SettingsStatusText(message: model.hostIDStatusMessage, isError: model.hostIDStatusIsError)
+                }
+            }
+        }
+        .task {
+            model.load()
+        }
+        .alert("Reset Host ID?", isPresented: $confirmingHostIDReset) {
+            Button("Cancel", role: .cancel) {}
+            Button(CLP_UI_RESET, role: .destructive) {
+                model.resetHostID()
+            }
+        } message: {
+            Text(CLP_UI_HOST_ID_COLLISION_WARNING)
+        }
+    }
+}
+
+private struct SettingsTextFieldRow: View {
+    let title: String
+    @Binding var text: String
+    let keyboardType: UIKeyboardType
+    let onSubmit: () -> Void
+
+    var body: some View {
+        LabeledContent {
+            TextField(title, text: $text)
+                .keyboardType(keyboardType)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .multilineTextAlignment(.trailing)
+                .onSubmit {
+                    onSubmit()
+                }
+        } label: {
+            Text(title)
+        }
+    }
+}
+
+private struct SettingsLimitStop: Identifiable {
+    let value: UInt64
+    let label: String
+
+    var id: String {
+        "\(value)-\(label)"
+    }
+
+    private static let mib: UInt64 = 1024 * 1024
+    private static let gib: UInt64 = 1024 * mib
+
+    static let memoryStops = [
+        SettingsLimitStop(value: 1 * mib, label: "1 MB"),
+        SettingsLimitStop(value: 8 * mib, label: "8 MB"),
+        SettingsLimitStop(value: 32 * mib, label: "32 MB"),
+        SettingsLimitStop(value: 128 * mib, label: "128 MB"),
+        SettingsLimitStop(value: 256 * mib, label: "256 MB"),
+        SettingsLimitStop(value: 512 * mib, label: "512 MB"),
+        SettingsLimitStop(value: 1 * gib, label: "1 GB"),
+        SettingsLimitStop(value: 2 * gib, label: "2 GB"),
+        SettingsLimitStop(value: 0, label: CLP_UI_UNLIMITED)
+    ]
+
+    static let ageStops = [
+        SettingsLimitStop(value: 1, label: "1 second"),
+        SettingsLimitStop(value: 10, label: "10 seconds"),
+        SettingsLimitStop(value: 60, label: "1 minute"),
+        SettingsLimitStop(value: 10 * 60, label: "10 minutes"),
+        SettingsLimitStop(value: 60 * 60, label: "1 hour"),
+        SettingsLimitStop(value: 6 * 60 * 60, label: "6 hours"),
+        SettingsLimitStop(value: 24 * 60 * 60, label: "1 day"),
+        SettingsLimitStop(value: 7 * 24 * 60 * 60, label: "7 days"),
+        SettingsLimitStop(value: 30 * 24 * 60 * 60, label: "30 days"),
+        SettingsLimitStop(value: 0, label: CLP_UI_UNLIMITED)
+    ]
+
+    static let itemStops = [
+        SettingsLimitStop(value: 1, label: "1 item"),
+        SettingsLimitStop(value: 10, label: "10 items"),
+        SettingsLimitStop(value: 50, label: "50 items"),
+        SettingsLimitStop(value: 100, label: "100 items"),
+        SettingsLimitStop(value: 500, label: "500 items"),
+        SettingsLimitStop(value: 1000, label: "1000 items"),
+        SettingsLimitStop(value: 5000, label: "5000 items"),
+        SettingsLimitStop(value: 10000, label: "10000 items"),
+        SettingsLimitStop(value: 0, label: CLP_UI_UNLIMITED)
+    ]
+}
+
+private struct HistoryLimitSlider: View {
+    let title: String
+    let stops: [SettingsLimitStop]
+    @Binding var selection: Double
+    let onChange: () -> Void
+
+    private var selectedLabel: String {
+        guard !stops.isEmpty else {
+            return ""
+        }
+
+        let index = min(max(Int(selection.rounded()), 0), stops.count - 1)
+        return stops[index].label
+    }
+
+    private var sliderSelection: Binding<Double> {
+        Binding(
+            get: {
+                selection
+            },
+            set: { newValue in
+                selection = newValue.rounded()
+                onChange()
+            }
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(selectedLabel)
+                    .font(.footnote.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            Slider(
+                value: sliderSelection,
+                in: 0...Double(max(stops.count - 1, 0)),
+                step: 1
+            )
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+@MainActor
+private final class SettingsViewModel: ObservableObject {
+    @Published var historyMemoryIndex = 0.0
+    @Published var historyAgeIndex = 0.0
+    @Published var historyItemIndex = 0.0
+    @Published var tcpPort = ""
+    @Published var udpPort = ""
+    @Published var listenerIP = ""
+    @Published var multicastIP = ""
+    @Published var hostID = ""
+    @Published var hasHostIDCollisionWarning = false
+    @Published var historyStatusMessage: String?
+    @Published var historyStatusIsError = false
+    @Published var networkStatusMessage: String?
+    @Published var networkStatusIsError = false
+    @Published var hostIDStatusMessage: String?
+    @Published var hostIDStatusIsError = false
+
+    private var loadingSnapshot = false
+    private var storedTcpPort = ""
+    private var storedUdpPort = ""
+    private var storedListenerIP = ""
+    private var storedMulticastIP = ""
+
+    var canApplyNetworkSettings: Bool {
+        !loadingSnapshot && (
+            tcpPort.trimmingCharacters(in: .whitespacesAndNewlines) != storedTcpPort ||
+            udpPort.trimmingCharacters(in: .whitespacesAndNewlines) != storedUdpPort ||
+            listenerIP.trimmingCharacters(in: .whitespacesAndNewlines) != storedListenerIP ||
+            multicastIP.trimmingCharacters(in: .whitespacesAndNewlines) != storedMulticastIP
+        )
+    }
+
+    func load() {
+        do {
+            apply(snapshot: try SettingsBridge.loadSnapshot())
+            clearStatusMessages()
+        } catch {
+            networkStatusIsError = true
+            networkStatusMessage = error.localizedDescription
+        }
+    }
+
+    func applyClipboardHistorySettings() {
+        guard !loadingSnapshot else {
+            return
+        }
+
+        do {
+            let snapshot = try SettingsBridge.updateClipboardHistory(
+                memoryLimitBytes: selectedValue(SettingsLimitStop.memoryStops, historyMemoryIndex),
+                maxAgeSeconds: selectedValue(SettingsLimitStop.ageStops, historyAgeIndex),
+                maxItems: selectedValue(SettingsLimitStop.itemStops, historyItemIndex)
+            )
+            apply(snapshot: snapshot)
+            historyStatusIsError = false
+            historyStatusMessage = CLP_UI_CLIPBOARD_HISTORY_SETTINGS_APPLIED
+        } catch {
+            historyStatusIsError = true
+            historyStatusMessage = error.localizedDescription
+        }
+    }
+
+    func applyNetworkSettings() {
+        let parsedTcpPort = parsePort(tcpPort)
+        let parsedUdpPort = parsePort(udpPort)
+
+        guard let parsedTcpPort, let parsedUdpPort else {
+            networkStatusIsError = true
+            networkStatusMessage = "Ports must be between 1 and 65535."
+            return
+        }
+
+        do {
+            let snapshot = try SettingsBridge.updateNetwork(
+                tcpPort: parsedTcpPort,
+                udpPort: parsedUdpPort,
+                listenerIP: listenerIP,
+                multicastIP: multicastIP
+            )
+            apply(snapshot: snapshot)
+            networkStatusIsError = false
+            networkStatusMessage = CLP_UI_NETWORK_SETTINGS_APPLIED
+        } catch {
+            networkStatusIsError = true
+            networkStatusMessage = error.localizedDescription
+        }
+    }
+
+    func resetHostID() {
+        do {
+            apply(snapshot: try SettingsBridge.resetHostID())
+            hostIDStatusIsError = false
+            hostIDStatusMessage = CLP_UI_HOST_ID_RESET
+        } catch {
+            hostIDStatusIsError = true
+            hostIDStatusMessage = error.localizedDescription
+        }
+    }
+
+    private func apply(snapshot: SettingsSnapshot) {
+        loadingSnapshot = true
+        historyMemoryIndex = Double(stopIndex(SettingsLimitStop.memoryStops, snapshot.clipboardHistoryMemoryLimitBytes))
+        historyAgeIndex = Double(stopIndex(SettingsLimitStop.ageStops, snapshot.clipboardHistoryMaxAgeSeconds))
+        historyItemIndex = Double(stopIndex(SettingsLimitStop.itemStops, snapshot.clipboardHistoryMaxItems))
+
+        storedTcpPort = String(snapshot.tcpPort)
+        storedUdpPort = String(snapshot.udpPort)
+        storedListenerIP = snapshot.listenerIP
+        storedMulticastIP = snapshot.multicastIP
+        tcpPort = storedTcpPort
+        udpPort = storedUdpPort
+        listenerIP = storedListenerIP
+        multicastIP = storedMulticastIP
+        hostID = snapshot.hostID
+        hasHostIDCollisionWarning = snapshot.hasHostIDCollisionWarning
+        loadingSnapshot = false
+    }
+
+    private func clearStatusMessages() {
+        historyStatusMessage = nil
+        networkStatusMessage = nil
+        hostIDStatusMessage = nil
+    }
+
+    private func parsePort(_ text: String) -> Int? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let value = Int(trimmed), value >= 1, value <= 65535 else {
+            return nil
+        }
+        return value
+    }
+
+    private func selectedValue(_ stops: [SettingsLimitStop], _ index: Double) -> UInt64 {
+        guard !stops.isEmpty else {
+            return 0
+        }
+
+        return stops[min(max(Int(index.rounded()), 0), stops.count - 1)].value
+    }
+
+    private func stopIndex(_ stops: [SettingsLimitStop], _ value: UInt64) -> Int {
+        if let exact = stops.firstIndex(where: { $0.value == value }) {
+            return exact
+        }
+
+        for index in stops.indices.dropLast() where value <= stops[index].value {
+            return index
+        }
+
+        return max(stops.count - 1, 0)
+    }
+}
+
+private struct SettingsStatusText: View {
+    let message: String?
+    let isError: Bool
+
+    var body: some View {
+        if let message {
+            Text(message)
+                .foregroundStyle(isError ? .red : .secondary)
         }
     }
 }

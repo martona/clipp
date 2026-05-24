@@ -121,4 +121,47 @@ NS_SWIFT_NAME(NetworkRuntimeBridge)
 
 @end
 
+NS_SWIFT_NAME(SettingsSnapshot)
+@interface CLPSettingsSnapshot : NSObject
+
+@property(nonatomic, assign, readonly) unsigned long long clipboardHistoryMemoryLimitBytes;
+@property(nonatomic, assign, readonly) unsigned long long clipboardHistoryMaxAgeSeconds;
+@property(nonatomic, assign, readonly) unsigned long long clipboardHistoryMaxItems;
+@property(nonatomic, assign, readonly) NSInteger tcpPort;
+@property(nonatomic, assign, readonly) NSInteger udpPort;
+@property(nonatomic, copy, readonly) NSString* listenerIP;
+@property(nonatomic, copy, readonly) NSString* multicastIP;
+@property(nonatomic, copy, readonly) NSString* hostID;
+@property(nonatomic, assign, readonly) BOOL hasHostIDCollisionWarning;
+
+- (instancetype)initWithClipboardHistoryMemoryLimitBytes:(unsigned long long)clipboardHistoryMemoryLimitBytes
+                         clipboardHistoryMaxAgeSeconds:(unsigned long long)clipboardHistoryMaxAgeSeconds
+                              clipboardHistoryMaxItems:(unsigned long long)clipboardHistoryMaxItems
+                                               tcpPort:(NSInteger)tcpPort
+                                               udpPort:(NSInteger)udpPort
+                                            listenerIP:(NSString*)listenerIP
+                                           multicastIP:(NSString*)multicastIP
+                                                hostID:(NSString*)hostID
+                             hasHostIDCollisionWarning:(BOOL)hasHostIDCollisionWarning NS_DESIGNATED_INITIALIZER;
+- (instancetype)init NS_UNAVAILABLE;
+
+@end
+
+NS_SWIFT_NAME(SettingsBridge)
+@interface CLPSettingsBridge : NSObject
+
++ (nullable CLPSettingsSnapshot*)loadSnapshotWithError:(NSError**)error NS_SWIFT_NAME(loadSnapshot());
++ (nullable CLPSettingsSnapshot*)updateClipboardHistoryMemoryLimitBytes:(unsigned long long)memoryLimitBytes
+                                                           maxAgeSeconds:(unsigned long long)maxAgeSeconds
+                                                                maxItems:(unsigned long long)maxItems
+                                                                   error:(NSError**)error NS_SWIFT_NAME(updateClipboardHistory(memoryLimitBytes:maxAgeSeconds:maxItems:));
++ (nullable CLPSettingsSnapshot*)updateNetworkTcpPort:(NSInteger)tcpPort
+                                              udpPort:(NSInteger)udpPort
+                                           listenerIP:(NSString*)listenerIP
+                                          multicastIP:(NSString*)multicastIP
+                                                error:(NSError**)error NS_SWIFT_NAME(updateNetwork(tcpPort:udpPort:listenerIP:multicastIP:));
++ (nullable CLPSettingsSnapshot*)resetHostIDWithError:(NSError**)error NS_SWIFT_NAME(resetHostID());
+
+@end
+
 NS_ASSUME_NONNULL_END

@@ -13,6 +13,7 @@
 #include "../../../src/PeerManager.h"
 #include "../../../src/Settings.h"
 #include "../../../src/platform/uiClippPage.h"
+#include "../../../src/platform/uiSettingsPage.h"
 
 #include <sodium.h>
 #include <signal.h>
@@ -36,9 +37,11 @@ constexpr NSInteger kClippNetworkKeyErrorBase = 4100;
 constexpr NSInteger kClippNetworkRuntimeErrorBase = 4200;
 constexpr NSInteger kClippClipboardActivityErrorBase = 4300;
 constexpr NSInteger kClippOutgoingClipboardErrorBase = 4400;
+constexpr NSInteger kClippSettingsErrorBase = 4500;
 NSString* const kClipboardActivityDidChangeNotification = @"net.clipp.ios.clipboard-activity-did-change";
 std::mutex g_runtimeBridgeMutex;
 bool g_runtimeBridgeStarted = false;
+std::once_flag g_clipboardHistoryLimitsOnce;
 std::once_flag g_clipboardActivityWatcherOnce;
 std::size_t g_clipboardActivityWatcherID = 0;
 ClipboardActivityStore g_clipboardActivityStore;
@@ -117,6 +120,42 @@ bool StartNetworkRuntimeIfNeeded(NSError** error) {
     return true;
 }
 
+bool RestartNetworkRuntime(NSError** error) {
+    if (!EnsureSodium(error) || !EnsureHostID(error)) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(g_runtimeBridgeMutex);
+    if (g_runtimeBridgeStarted) {
+        if (!g_networkRuntime.Restart()) {
+            AssignError(error, kClippSettingsErrorBase + 1, @"Unable to restart network runtime.");
+            return false;
+        }
+    } else {
+        if (!g_networkRuntime.Start()) {
+            AssignError(error, kClippSettingsErrorBase + 2, @"Unable to start network runtime.");
+            return false;
+        }
+        g_runtimeBridgeStarted = true;
+    }
+
+    g_logger.log("iOS", Logger::Level::Info, "Network runtime restarted after settings change.");
+    return true;
+}
+
+void ApplyClipboardHistoryLimitsFromSettings() {
+    g_clipboardActivityStore.SetLimits(
+        g_settings.clipboardHistoryMemoryLimitBytes(),
+        g_settings.clipboardHistoryMaxAgeSeconds(),
+        g_settings.clipboardHistoryMaxItems());
+}
+
+void EnsureClipboardHistoryLimitsApplied() {
+    std::call_once(g_clipboardHistoryLimitsOnce, [] {
+        ApplyClipboardHistoryLimitsFromSettings();
+    });
+}
+
 std::string ToStdString(NSString* value) {
     if (value == nil) {
         return {};
@@ -171,6 +210,7 @@ void ClipboardActivityWatcher(const ClipboardActivityUpdate&, void*) {
 }
 
 void EnsureClipboardActivityWatcher() {
+    EnsureClipboardHistoryLimitsApplied();
     std::call_once(g_clipboardActivityWatcherOnce, [] {
         const ClipboardActivityRegistration registration =
             g_clipboardActivityStore.QueryAndRegister(ClipboardActivityWatcher, nullptr);
@@ -303,6 +343,24 @@ CLPNetworkKeyStatus* LoadNetworkKeyStatus(NSError** error) {
     return [[CLPNetworkKeyStatus alloc] initWithNetworkName:networkName
                                                 fingerprint:fingerprint
                                              hasNetworkKey:hasKey];
+}
+
+CLPSettingsSnapshot* LoadSettingsSnapshot(NSError** error) {
+    HostId hostID;
+    if (!g_settings.ensureHostID(hostID)) {
+        AssignError(error, kClippSettingsErrorBase + 3, @"Unable to initialize host ID.");
+        return nil;
+    }
+
+    return [[CLPSettingsSnapshot alloc] initWithClipboardHistoryMemoryLimitBytes:g_settings.clipboardHistoryMemoryLimitBytes()
+                                                 clipboardHistoryMaxAgeSeconds:g_settings.clipboardHistoryMaxAgeSeconds()
+                                                      clipboardHistoryMaxItems:g_settings.clipboardHistoryMaxItems()
+                                                                       tcpPort:g_settings.tcpPort()
+                                                                       udpPort:g_settings.mdnsPort()
+                                                                    listenerIP:ToNSString(g_settings.listenerIp())
+                                                                   multicastIP:ToNSString(g_settings.multicastIp())
+                                                                        hostID:ToNSString(hostID.ToHexString())
+                                                     hasHostIDCollisionWarning:MDNSHasHostIDCollisionWarning()];
 }
 }
 
@@ -689,6 +747,155 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const Clipboard
 
     return [[CLPNetworkTrafficSnapshot alloc] initWithBytesSent:bytesSent
                                                   bytesReceived:bytesReceived];
+}
+
+@end
+
+@implementation CLPSettingsSnapshot
+
+- (instancetype)initWithClipboardHistoryMemoryLimitBytes:(unsigned long long)clipboardHistoryMemoryLimitBytes
+                         clipboardHistoryMaxAgeSeconds:(unsigned long long)clipboardHistoryMaxAgeSeconds
+                              clipboardHistoryMaxItems:(unsigned long long)clipboardHistoryMaxItems
+                                               tcpPort:(NSInteger)tcpPort
+                                               udpPort:(NSInteger)udpPort
+                                            listenerIP:(NSString*)listenerIP
+                                           multicastIP:(NSString*)multicastIP
+                                                hostID:(NSString*)hostID
+                             hasHostIDCollisionWarning:(BOOL)hasHostIDCollisionWarning {
+    self = [super init];
+    if (self) {
+        _clipboardHistoryMemoryLimitBytes = clipboardHistoryMemoryLimitBytes;
+        _clipboardHistoryMaxAgeSeconds = clipboardHistoryMaxAgeSeconds;
+        _clipboardHistoryMaxItems = clipboardHistoryMaxItems;
+        _tcpPort = tcpPort;
+        _udpPort = udpPort;
+        _listenerIP = [listenerIP copy];
+        _multicastIP = [multicastIP copy];
+        _hostID = [hostID copy];
+        _hasHostIDCollisionWarning = hasHostIDCollisionWarning;
+    }
+    return self;
+}
+
+@end
+
+@implementation CLPSettingsBridge
+
++ (CLPSettingsSnapshot*)loadSnapshotWithError:(NSError**)error {
+    EnsureClipboardHistoryLimitsApplied();
+    return LoadSettingsSnapshot(error);
+}
+
++ (CLPSettingsSnapshot*)updateClipboardHistoryMemoryLimitBytes:(unsigned long long)memoryLimitBytes
+                                                 maxAgeSeconds:(unsigned long long)maxAgeSeconds
+                                                      maxItems:(unsigned long long)maxItems
+                                                         error:(NSError**)error {
+    bool changed = false;
+    if (memoryLimitBytes != g_settings.clipboardHistoryMemoryLimitBytes()) {
+        if (!g_settings.set_clipboardHistoryMemoryLimitBytes(memoryLimitBytes)) {
+            AssignError(error, kClippSettingsErrorBase + 4, @"Unable to save clipboard history memory limit.");
+            return nil;
+        }
+        changed = true;
+    }
+    if (maxAgeSeconds != g_settings.clipboardHistoryMaxAgeSeconds()) {
+        if (!g_settings.set_clipboardHistoryMaxAgeSeconds(maxAgeSeconds)) {
+            AssignError(error, kClippSettingsErrorBase + 5, @"Unable to save clipboard history time limit.");
+            return nil;
+        }
+        changed = true;
+    }
+    if (maxItems != g_settings.clipboardHistoryMaxItems()) {
+        if (!g_settings.set_clipboardHistoryMaxItems(maxItems)) {
+            AssignError(error, kClippSettingsErrorBase + 6, @"Unable to save clipboard history item limit.");
+            return nil;
+        }
+        changed = true;
+    }
+
+    if (changed) {
+        ApplyClipboardHistoryLimitsFromSettings();
+    } else {
+        EnsureClipboardHistoryLimitsApplied();
+    }
+    return LoadSettingsSnapshot(error);
+}
+
++ (CLPSettingsSnapshot*)updateNetworkTcpPort:(NSInteger)tcpPort
+                                     udpPort:(NSInteger)udpPort
+                                  listenerIP:(NSString*)listenerIP
+                                 multicastIP:(NSString*)multicastIP
+                                       error:(NSError**)error {
+    if (!Settings::IsValidPort(static_cast<int>(tcpPort))) {
+        AssignError(error, kClippSettingsErrorBase + 7, @"TCP port must be between 1 and 65535.");
+        return nil;
+    }
+    if (!Settings::IsValidPort(static_cast<int>(udpPort))) {
+        AssignError(error, kClippSettingsErrorBase + 8, @"UDP port must be between 1 and 65535.");
+        return nil;
+    }
+
+    const std::string listenerIPValue = uiSettingsPage::TrimAscii(ToStdString(listenerIP));
+    if (!Settings::IsValidListenerIp(listenerIPValue)) {
+        AssignError(error, kClippSettingsErrorBase + 9, @"Listener IP must be a valid IPv4 address.");
+        return nil;
+    }
+
+    const std::string multicastIPValue = uiSettingsPage::TrimAscii(ToStdString(multicastIP));
+    if (!Settings::IsValidMulticastIp(multicastIPValue)) {
+        AssignError(error, kClippSettingsErrorBase + 10, @"Multicast IP must be a valid multicast IPv4 address.");
+        return nil;
+    }
+
+    bool changed = false;
+    if (static_cast<int>(tcpPort) != g_settings.tcpPort()) {
+        if (!g_settings.set_tcpPort(static_cast<int>(tcpPort))) {
+            AssignError(error, kClippSettingsErrorBase + 11, @"Unable to save TCP port.");
+            return nil;
+        }
+        changed = true;
+    }
+    if (static_cast<int>(udpPort) != g_settings.mdnsPort()) {
+        if (!g_settings.set_mdnsPort(static_cast<int>(udpPort))) {
+            AssignError(error, kClippSettingsErrorBase + 12, @"Unable to save UDP port.");
+            return nil;
+        }
+        changed = true;
+    }
+    if (listenerIPValue != g_settings.listenerIp()) {
+        if (!g_settings.set_listenerIp(listenerIPValue)) {
+            AssignError(error, kClippSettingsErrorBase + 13, @"Unable to save listener IP.");
+            return nil;
+        }
+        changed = true;
+    }
+    if (multicastIPValue != g_settings.multicastIp()) {
+        if (!g_settings.set_multicastIp(multicastIPValue)) {
+            AssignError(error, kClippSettingsErrorBase + 14, @"Unable to save multicast IP.");
+            return nil;
+        }
+        changed = true;
+    }
+
+    if (changed) {
+        if (!RestartNetworkRuntime(error)) {
+            return nil;
+        }
+    }
+
+    return LoadSettingsSnapshot(error);
+}
+
++ (CLPSettingsSnapshot*)resetHostIDWithError:(NSError**)error {
+    HostId hostID;
+    if (!g_settings.resetHostID(hostID)) {
+        AssignError(error, kClippSettingsErrorBase + 15, @"Unable to reset Host ID.");
+        return nil;
+    }
+
+    MDNSNotifyHostIDChange();
+    g_peerManager.ClearPeers();
+    return LoadSettingsSnapshot(error);
 }
 
 @end
