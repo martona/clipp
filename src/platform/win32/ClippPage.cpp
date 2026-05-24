@@ -392,7 +392,7 @@ void ClippPage::CopyActivityItem(uint64_t itemID) {
         return;
     }
 
-    SetClipboardData(*payload);
+    SetClipboardData(*payload, true, activityStore_.PayloadReference(itemID));
 }
 
 void ClippPage::OnShown() {

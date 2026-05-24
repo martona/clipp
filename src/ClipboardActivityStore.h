@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -72,6 +73,7 @@ public:
     std::vector<ClipboardActivityItemHeader> Snapshot();
     std::optional<ClipboardActivityDisplayItem> DisplayItem(uint64_t itemID) const;
     std::optional<ClipboardPayload> PayloadForClipboard(uint64_t itemID) const;
+    std::shared_ptr<const ClipboardPayload> PayloadReference(uint64_t itemID) const;
     bool Remove(uint64_t itemID);
     void Clear();
 
@@ -81,7 +83,7 @@ public:
 private:
     struct Item {
         ClipboardActivityItemHeader header;
-        ClipboardPayload payload;
+        std::shared_ptr<const ClipboardPayload> payload;
     };
 
     struct Limits {
@@ -96,7 +98,7 @@ private:
         void* userData{};
     };
 
-    static ClipboardPayload MakeStoredPayload(const ClipboardPayload& payload);
+    static std::shared_ptr<const ClipboardPayload> MakeStoredPayload(const ClipboardPayload& payload);
     static std::optional<ClipboardActivityDisplayItem> BuildDisplayItem(const Item& item);
     static std::vector<ClipboardActivityItemHeader> SnapshotLocked(const std::vector<Item>& items);
     static uint64_t EstimateItemBytes(const Item& item);

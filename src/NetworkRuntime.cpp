@@ -120,8 +120,8 @@ void NetworkRuntime::OnClipboardReceived(const std::wstring& hostName, const Hos
         return;
     }
 
-    g_clipboardActivityStore.AddIncoming(hostName, payload);
-    SetClipboardData(payload);
+    const uint64_t itemID = g_clipboardActivityStore.AddIncoming(hostName, payload);
+    SetClipboardData(payload, true, g_clipboardActivityStore.PayloadReference(itemID));
 #endif
 }
 

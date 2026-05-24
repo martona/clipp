@@ -2,6 +2,8 @@
 #include "platform.h"
 #include "ClipboardData.h"
 
+#include <memory>
+
 // Creates an invisible window for clipboard notifications
 using ClipboardCallback = void(*)(PlatformWindowHandle);
 
@@ -17,4 +19,7 @@ void StopClipboardNotification();
 // Reads the clipboard data and returns it as packet
 ClipboardPayload ReadClipboardData(PlatformWindowHandle hwnd);
 bool IsClipboardDataCurrent(const ClipboardPayload& payload);
-void SetClipboardData(ClipboardPayload& payload, bool markAsClippOriginated = true);
+void SetClipboardData(
+    ClipboardPayload& payload,
+    bool markAsClippOriginated = true,
+    std::shared_ptr<const ClipboardPayload> delayedRenderPayloadReference = nullptr);

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cwctype>
 #include <limits>
+#include <memory>
 #include <string_view>
 #include <utility>
 
@@ -155,15 +156,28 @@ std::optional<ClipboardActivityDisplayItem> ClipboardActivityStore::DisplayItem(
 
 std::optional<ClipboardPayload> ClipboardActivityStore::PayloadForClipboard(uint64_t itemID) const {
     const auto item = FindItem(itemID);
-    if (!item) {
+    if (!item || !item->payload) {
         return std::nullopt;
     }
 
-    ClipboardPayload payload = item->payload;
+    ClipboardPayload payload = *item->payload;
     if (!payload.ZstdDecompress()) {
         return std::nullopt;
     }
     return payload;
+}
+
+std::shared_ptr<const ClipboardPayload> ClipboardActivityStore::PayloadReference(uint64_t itemID) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto found = std::find_if(items_.begin(), items_.end(), [itemID](const Item& item) {
+        return item.header.id == itemID;
+    });
+
+    if (found == items_.end()) {
+        return nullptr;
+    }
+
+    return found->payload;
 }
 
 bool ClipboardActivityStore::Remove(uint64_t itemID) {
@@ -239,16 +253,20 @@ void ClipboardActivityStore::Unregister(std::size_t watcherID) {
     }), watchers_.end());
 }
 
-ClipboardPayload ClipboardActivityStore::MakeStoredPayload(const ClipboardPayload& payload) {
+std::shared_ptr<const ClipboardPayload> ClipboardActivityStore::MakeStoredPayload(const ClipboardPayload& payload) {
     ClipboardPayload stored = payload;
     if (!stored.isCompressed) {
         stored.ZstdCompress();
     }
-    return stored;
+    return std::make_shared<const ClipboardPayload>(std::move(stored));
 }
 
 std::optional<ClipboardActivityDisplayItem> ClipboardActivityStore::BuildDisplayItem(const Item& item) {
-    ClipboardPayload payload = item.payload;
+    if (!item.payload) {
+        return std::nullopt;
+    }
+
+    ClipboardPayload payload = *item.payload;
     if (!payload.ZstdDecompress()) {
         return std::nullopt;
     }
@@ -296,7 +314,9 @@ std::vector<ClipboardActivityItemHeader> ClipboardActivityStore::SnapshotLocked(
 
 uint64_t ClipboardActivityStore::EstimateItemBytes(const Item& item) {
     constexpr uint64_t kMetadataEstimateBytes = 256;
-    const uint64_t payloadBytes = static_cast<uint64_t>(item.payload.rawData.size());
+    const uint64_t payloadBytes = item.payload != nullptr
+        ? static_cast<uint64_t>(item.payload->rawData.size())
+        : 0;
     const uint64_t deviceNameBytes = static_cast<uint64_t>(item.header.deviceName.size() * sizeof(wchar_t));
     return kMetadataEstimateBytes + payloadBytes + deviceNameBytes;
 }
@@ -332,9 +352,9 @@ uint64_t ClipboardActivityStore::AddItem(ClipboardActivityDirection direction, c
         item.header.deviceName = deviceName;
         item.header.timestamp = std::chrono::system_clock::now();
         item.payload = MakeStoredPayload(payload);
-        item.header.formatId = item.payload.formatId;
-        item.header.encodedBytes = item.payload.rawData.size();
-        item.header.decodedBytes = item.payload.decodedDataSize;
+        item.header.formatId = item.payload->formatId;
+        item.header.encodedBytes = item.payload->rawData.size();
+        item.header.decodedBytes = item.payload->decodedDataSize;
 
         itemID = item.header.id;
         updates.push_back({

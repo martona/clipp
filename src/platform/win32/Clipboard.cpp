@@ -5,6 +5,8 @@
 #include <cstring>
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <vector>
 #include <utility>
 #include <lodepng.h>
@@ -20,6 +22,13 @@ static ClipboardHashGuard g_clipboardHashGuard;
 #define CLIPBOARD_DEBOUNCE_INTERVAL_MS 250
 
 static ClipboardCallback g_clipboardCallback = nullptr;
+
+struct DelayedClipboardRenderState {
+    std::mutex mutex;
+    std::shared_ptr<const ClipboardPayload> payload;
+};
+
+static DelayedClipboardRenderState g_delayedClipboardRenderState;
 
 #ifndef BI_ALPHABITFIELDS
 #define BI_ALPHABITFIELDS 6L
@@ -429,11 +438,147 @@ static bool PNGToDIB(const std::vector<unsigned char>& pngData, std::vector<unsi
     return true;
 }
 
+static void ClearDelayedClipboardRenderState() {
+    std::lock_guard<std::mutex> lock(g_delayedClipboardRenderState.mutex);
+    if (g_delayedClipboardRenderState.payload) {
+        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Clearing delayed clipboard render payload.");
+    }
+    g_delayedClipboardRenderState.payload.reset();
+}
+
+static void SetDelayedClipboardRenderState(std::shared_ptr<const ClipboardPayload> payload) {
+    const size_t payloadBytes = payload ? payload->rawData.size() : 0;
+    std::lock_guard<std::mutex> lock(g_delayedClipboardRenderState.mutex);
+    g_delayedClipboardRenderState.payload = std::move(payload);
+    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Stored delayed clipboard render payload reference (encoded bytes: %zu).", payloadBytes);
+}
+
+static std::shared_ptr<const ClipboardPayload> DelayedClipboardRenderPayload() {
+    std::lock_guard<std::mutex> lock(g_delayedClipboardRenderState.mutex);
+    return g_delayedClipboardRenderState.payload;
+}
+
+static std::shared_ptr<const ClipboardPayload> MakeDelayedClipboardRenderPayload(
+    const ClipboardPayload& payload,
+    std::shared_ptr<const ClipboardPayload> delayedRenderPayloadReference) {
+    if (delayedRenderPayloadReference) {
+        return delayedRenderPayloadReference;
+    }
+
+    ClipboardPayload stored = payload;
+    if (!stored.isCompressed) {
+        if (!stored.ZstdCompress()) {
+            return nullptr;
+        }
+    }
+    return std::make_shared<const ClipboardPayload>(std::move(stored));
+}
+
+static HGLOBAL CreateClipboardGlobalMemory(const std::vector<unsigned char>& data, const wchar_t* description) {
+    if (data.empty()) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot allocate empty clipboard data for %ls", description);
+        return nullptr;
+    }
+
+    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, data.size());
+    if (!hMem) {
+        LogLastError(__FUNCTION__, L"Failed to allocate delayed clipboard render buffer");
+        return nullptr;
+    }
+
+    void* dst = GlobalLock(hMem);
+    if (!dst) {
+        LogLastError(__FUNCTION__, L"Failed to lock delayed clipboard render buffer");
+        GlobalFree(hMem);
+        return nullptr;
+    }
+
+    std::memcpy(dst, data.data(), data.size());
+    GlobalUnlock(hMem);
+    return hMem;
+}
+
+static bool RenderDelayedClipboardFormat(UINT format) {
+    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Delayed clipboard render requested for format %u.", format);
+
+    if (format != CF_DIB) {
+        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Ignoring delayed clipboard render request for unsupported format %u.", format);
+        return false;
+    }
+
+    auto renderPayload = DelayedClipboardRenderPayload();
+    if (!renderPayload) {
+        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Ignoring delayed CF_DIB render request because no payload is retained.");
+        return false;
+    }
+
+    ClipboardPayload payload = *renderPayload;
+    if (payload.formatId != CF_DIB) {
+        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Ignoring delayed CF_DIB render request because retained payload format is %u.", payload.formatId);
+        return false;
+    }
+
+    if (!payload.ZstdDecompress()) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Delayed clipboard PNG payload could not be decompressed.");
+        return false;
+    }
+
+    std::vector<unsigned char> dibData;
+    {
+        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Rendering delayed CF_DIB from PNG payload (%zu bytes).", payload.rawData.size());
+        ScopedTimer timer(L"Delayed clipboard PNG to CF_DIB rendering");
+        if (!PNGToDIB(payload.rawData, dibData)) {
+            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to render delayed PNG clipboard payload as CF_DIB.");
+            return false;
+        }
+    }
+
+    HGLOBAL hMem = CreateClipboardGlobalMemory(dibData, L"CF_DIB");
+    if (!hMem) {
+        return false;
+    }
+
+    if (!::SetClipboardData(CF_DIB, hMem)) {
+        LogLastError(__FUNCTION__, L"Failed to set delayed CF_DIB clipboard data");
+        GlobalFree(hMem);
+        return false;
+    }
+
+    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Rendered delayed CF_DIB clipboard data from PNG payload (PNG: %zu bytes, DIB: %zu bytes)", payload.rawData.size(), dibData.size());
+    return true;
+}
+
+static void RenderAllDelayedClipboardFormats(HWND hwnd) {
+    if (!DelayedClipboardRenderPayload()) {
+        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Ignoring WM_RENDERALLFORMATS because no delayed payload is retained.");
+        return;
+    }
+
+    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Rendering all delayed clipboard formats before clipboard owner shutdown.");
+    if (!OpenClipboard(hwnd)) {
+        LogLastError(__FUNCTION__, L"Failed to open clipboard while rendering all delayed formats");
+        return;
+    }
+
+    RenderDelayedClipboardFormat(CF_DIB);
+    CloseClipboard();
+    ClearDelayedClipboardRenderState();
+}
+
 LRESULT CALLBACK ClipboardWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_CREATE:
         // Register for clipboard update notifications
         AddClipboardFormatListener(hwnd);
+        return 0;
+    case WM_RENDERFORMAT:
+        RenderDelayedClipboardFormat(static_cast<UINT>(wParam));
+        return 0;
+    case WM_RENDERALLFORMATS:
+        RenderAllDelayedClipboardFormats(hwnd);
+        return 0;
+    case WM_DESTROYCLIPBOARD:
+        ClearDelayedClipboardRenderState();
         return 0;
     case WM_DESTROY:
         RemoveClipboardFormatListener(hwnd);
@@ -483,6 +628,7 @@ static void ClipboardThreadProc(std::promise<bool> initPromise, ClipboardCallbac
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
+    ClearDelayedClipboardRenderState();
 	g_hwnd = nullptr;
 }
 
@@ -613,7 +759,10 @@ bool IsClipboardDataCurrent(const ClipboardPayload& payload) {
     return payload.formatId != 0 && g_clipboardHashGuard.IsCurrent(payload);
 }
 
-void SetClipboardData(ClipboardPayload& payload, bool markAsClippOriginated) {
+void SetClipboardData(
+    ClipboardPayload& payload,
+    bool markAsClippOriginated,
+    std::shared_ptr<const ClipboardPayload> delayedRenderPayloadReference) {
     if (markAsClippOriginated && g_clipboardHashGuard.IsCurrent(payload)) {
         g_logger.log(__FUNCTION__, Logger::Level::Info, L"Clipboard contents already current; not setting clipboard data");
         return;
@@ -630,6 +779,7 @@ void SetClipboardData(ClipboardPayload& payload, bool markAsClippOriginated) {
                 Sleep(10 + (i * 10));
                 continue;
             }
+            ClearDelayedClipboardRenderState();
 
             if (payload.formatId == CF_UNICODETEXT) {
                 char* utf8Data = reinterpret_cast<char*>(payload.rawData.data());
@@ -673,34 +823,29 @@ void SetClipboardData(ClipboardPayload& payload, bool markAsClippOriginated) {
                 }
             }
             else if (payload.formatId == CF_DIB) {
-                std::vector<unsigned char> dibData;
-                if (!PNGToDIB(payload.rawData, dibData)) {
-                    g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to decode PNG clipboard image payload as CF_DIB");
+                if (!IsPngStream(payload.rawData)) {
+                    g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Refusing to advertise delayed CF_DIB for invalid PNG payload (%zu bytes)", payload.rawData.size());
                 }
                 else {
-                    const size_t bytes = dibData.size();
-                    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, bytes);
-                    if (hMem) {
-                        void* dst = GlobalLock(hMem);
-                        if (dst) {
-                            std::memcpy(dst, dibData.data(), bytes);
-                            GlobalUnlock(hMem);
-                            if (!::SetClipboardData(CF_DIB, hMem)) {
-                                LogLastError(__FUNCTION__, L"Failed to set CF_DIB on system clipboard");
-                                GlobalFree(hMem);
-                            }
-                            else {
-                                wroteClipboard = true;
-                                g_logger.log(__FUNCTION__, Logger::Level::Info, L"Wrote CF_DIB to system clipboard from PNG payload (PNG: %zu bytes, DIB: %zu bytes)", payload.rawData.size(), bytes);
-                            }
-                        }
-                        else {
-                            LogLastError(__FUNCTION__, L"Failed to lock CF_DIB output buffer");
-                            GlobalFree(hMem);
-                        }
+                    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Preparing delayed CF_DIB clipboard rendering for PNG payload (%zu bytes).", payload.rawData.size());
+                    auto renderPayload = MakeDelayedClipboardRenderPayload(payload, std::move(delayedRenderPayloadReference));
+                    if (!renderPayload) {
+                        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to retain delayed CF_DIB render payload.");
                     }
                     else {
-                        LogLastError(__FUNCTION__, L"Failed to allocate CF_DIB output buffer");
+                        SetDelayedClipboardRenderState(std::move(renderPayload));
+
+                        SetLastError(ERROR_SUCCESS);
+                        HANDLE delayedHandle = ::SetClipboardData(CF_DIB, nullptr);
+                        const DWORD delayedError = GetLastError();
+                        if (delayedHandle != nullptr || delayedError == ERROR_SUCCESS) {
+                            wroteClipboard = true;
+                            g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Advertised delayed CF_DIB clipboard rendering from PNG payload (PNG: %zu bytes)", payload.rawData.size());
+                        }
+                        else {
+                            ClearDelayedClipboardRenderState();
+                            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to advertise delayed CF_DIB clipboard rendering (GetLastError=%lu)", delayedError);
+                        }
                     }
                 }
             }

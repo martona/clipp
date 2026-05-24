@@ -124,7 +124,12 @@ bool IsClipboardDataCurrent(const ClipboardPayload& payload) {
     return payload.formatId != 0 && g_clipboardHashGuard.IsCurrent(payload);
 }
 
-void SetClipboardData(ClipboardPayload& payload, bool markAsClippOriginated) {
+void SetClipboardData(
+    ClipboardPayload& payload,
+    bool markAsClippOriginated,
+    std::shared_ptr<const ClipboardPayload> delayedRenderPayloadReference) {
+    (void)delayedRenderPayloadReference;
+
     if (markAsClippOriginated && g_clipboardHashGuard.IsCurrent(payload)) {
         g_logger.log(__FUNCTION__, Logger::Level::Info, "Clipboard contents already current; not setting clipboard data");
         return;
