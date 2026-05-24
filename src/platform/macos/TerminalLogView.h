@@ -7,6 +7,7 @@
 
 @class NSScrollView;
 @class NSTextView;
+@class NSString;
 
 class MacOSTerminalLogView {
 public:
@@ -15,6 +16,8 @@ public:
     NSScrollView* View() const;
     void AppendAnsiLogText(const std::wstring& text);
     void SetAnsiLogText(const std::vector<std::wstring>& lines);
+    unsigned int LineCount() const;
+    NSString* PlainText() const;
 
 private:
     void AppendAnsiLogText(const std::wstring& text, bool scrollToBottom);

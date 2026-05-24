@@ -81,6 +81,14 @@ void MacOSTerminalLogView::SetAnsiLogText(const std::vector<std::wstring>& lines
     ScrollToBottom();
 }
 
+unsigned int MacOSTerminalLogView::LineCount() const {
+    return lineCount_;
+}
+
+NSString* MacOSTerminalLogView::PlainText() const {
+    return textView_ != nil ? textView_.textStorage.string : @"";
+}
+
 void MacOSTerminalLogView::AppendAnsiLogText(const std::wstring& text, bool scrollToBottom) {
     std::wstring trimmedText = text;
     while (!trimmedText.empty() && (trimmedText.back() == L'\r' || trimmedText.back() == L'\n')) {

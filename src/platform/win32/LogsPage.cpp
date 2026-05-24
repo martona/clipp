@@ -1,19 +1,36 @@
 #include "LogsPage.h"
 
+#include "Clipboard.h"
 #include "Logger.h"
 #include "platform/uistrings.h"
 
+#include <cwchar>
 #include <limits>
 
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.UI.Text.h>
 #include <winrt/Windows.UI.Xaml.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
+#include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
 
 extern Logger g_logger;
 
 namespace {
 LogsPage* g_logReflectorTarget = nullptr;
+
+ClipboardPayload MakeTextClipboardPayload(const std::wstring& text) {
+    ClipboardPayload payload{};
+    payload.formatId = CF_UNICODETEXT;
+
+    const size_t utf8Bytes = utf16_to_utf8(text.c_str(), text.size(), nullptr, 0);
+    payload.rawData.resize(utf8Bytes + 1);
+    if (utf8Bytes > 0) {
+        utf16_to_utf8(text.c_str(), text.size(), reinterpret_cast<char*>(payload.rawData.data()), utf8Bytes);
+    }
+    payload.rawData[utf8Bytes] = '\0';
+
+    return payload;
+}
 }
 
 LogsPage::LogsPage() {
@@ -55,12 +72,35 @@ void LogsPage::BuildView() {
     heading.TextWrapping(TextWrapping::Wrap);
     header.Children().Append(heading);
 
+    Grid introRow;
+    ColumnDefinition introColumn;
+    introColumn.Width(GridLength{ 1, GridUnitType::Star });
+    ColumnDefinition copyButtonColumn;
+    copyButtonColumn.Width(GridLength{ 1, GridUnitType::Auto });
+    introRow.ColumnDefinitions().Append(introColumn);
+    introRow.ColumnDefinitions().Append(copyButtonColumn);
+
     TextBlock intro;
     intro.Text(CLP_W(CLP_UI_LIVE_DIAGNOSTIC_OUTPUT));
     intro.FontSize(14);
     intro.TextWrapping(TextWrapping::WrapWholeWords);
     intro.Opacity(0.75);
-    header.Children().Append(intro);
+    intro.VerticalAlignment(VerticalAlignment::Center);
+
+    copyLogsButton_ = Button();
+    copyLogsButton_.HorizontalAlignment(HorizontalAlignment::Right);
+    copyLogsButton_.VerticalAlignment(VerticalAlignment::Center);
+    copyLogsButton_.Margin(ThicknessHelper::FromLengths(12, 0, 0, 0));
+    copyLogsButton_.Padding(ThicknessHelper::FromLengths(12, 6, 12, 6));
+    copyLogsButton_.Click([this](auto const&, auto const&) {
+        CopyLogsToClipboard();
+    });
+
+    Grid::SetColumn(intro, 0);
+    Grid::SetColumn(copyLogsButton_, 1);
+    introRow.Children().Append(intro);
+    introRow.Children().Append(copyLogsButton_);
+    header.Children().Append(introRow);
 
     terminalLogView_ = std::make_unique<TerminalLogView>();
     auto logView = terminalLogView_->View();
@@ -76,6 +116,7 @@ void LogsPage::BuildView() {
     root_.Children().Append(logView);
 
     uiDispatcher_ = winrt::Windows::System::DispatcherQueue::GetForCurrentThread();
+    UpdateCopyLogsButtonLabel();
 }
 
 void LogsPage::OnShown() {
@@ -88,6 +129,7 @@ void LogsPage::OnShown() {
                 terminalLogView_->SetAnsiLogText(logHistory);
             }
         }
+        UpdateCopyLogsButtonLabel();
         logReflectorRegistered_ = true;
     }
 }
@@ -116,11 +158,45 @@ void LogsPage::ReflectLogLine(const std::wstring& line) {
     }
 
     uiDispatcher_.TryEnqueue([this, line]() {
+        {
+            std::lock_guard<std::mutex> lock(terminalLogViewMutex_);
+            if (terminalLogView_) {
+                terminalLogView_->AppendAnsiLogText(line);
+            }
+        }
+        UpdateCopyLogsButtonLabel();
+    });
+}
+
+void LogsPage::CopyLogsToClipboard() {
+    std::wstring text;
+    {
         std::lock_guard<std::mutex> lock(terminalLogViewMutex_);
         if (terminalLogView_) {
-            terminalLogView_->AppendAnsiLogText(line);
+            text = terminalLogView_->PlainText();
         }
-    });
+    }
+
+    ClipboardPayload payload = MakeTextClipboardPayload(text);
+    SetClipboardData(payload, false);
+}
+
+void LogsPage::UpdateCopyLogsButtonLabel() {
+    if (!copyLogsButton_) {
+        return;
+    }
+
+    uint32_t lineCount = 0;
+    {
+        std::lock_guard<std::mutex> lock(terminalLogViewMutex_);
+        if (terminalLogView_) {
+            lineCount = terminalLogView_->LineCount();
+        }
+    }
+
+    wchar_t label[64]{};
+    swprintf_s(label, CLP_W(CLP_UI_COPY_LOG_LINES_FORMAT), static_cast<int>(lineCount));
+    copyLogsButton_.Content(winrt::box_value(winrt::hstring{ label }));
 }
 
 void LogsPage::LogReflectorCallback(const std::wstring& line) {

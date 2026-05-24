@@ -120,8 +120,8 @@ ClipboardPayload ReadClipboardData(PlatformWindowHandle hwnd) {
     return payload;
 }
 
-void SetClipboardData(ClipboardPayload& payload) {
-    if (g_clipboardHashGuard.IsCurrent(payload)) {
+void SetClipboardData(ClipboardPayload& payload, bool markAsClippOriginated) {
+    if (markAsClippOriginated && g_clipboardHashGuard.IsCurrent(payload)) {
         g_logger.log(__FUNCTION__, Logger::Level::Info, "Clipboard contents already current; not setting clipboard data");
         return;
     }
@@ -159,7 +159,7 @@ void SetClipboardData(ClipboardPayload& payload) {
             g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Unsupported clipboard payload format ID %u; nothing written", payload.formatId);
         }
 
-        if (wroteClipboard) {
+        if (wroteClipboard && markAsClippOriginated) {
             // Fast-forward our known changeCount so we don't trigger a recursive network broadcast of our own change
             g_lastChangeCount.store([pb changeCount]);
 

@@ -609,8 +609,8 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
     return payload;
 }
 
-void SetClipboardData(ClipboardPayload& payload) {
-    if (g_clipboardHashGuard.IsCurrent(payload)) {
+void SetClipboardData(ClipboardPayload& payload, bool markAsClippOriginated) {
+    if (markAsClippOriginated && g_clipboardHashGuard.IsCurrent(payload)) {
         g_logger.log(__FUNCTION__, Logger::Level::Info, L"Clipboard contents already current; not setting clipboard data");
         return;
     }
@@ -704,11 +704,11 @@ void SetClipboardData(ClipboardPayload& payload) {
                 g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Unsupported clipboard payload format ID %u; nothing written", payload.formatId);
             }
 
-            if (wroteClipboard && !SetClippOriginClipboardMarker()) {
+            if (wroteClipboard && markAsClippOriginated && !SetClippOriginClipboardMarker()) {
                 g_logger.log(__FUNCTION__, Logger::Level::Warning, L"System clipboard was written without Clipp origin marker.");
             }
 
-            if (wroteClipboard) {
+            if (wroteClipboard && markAsClippOriginated) {
                 g_clipboardHashGuard.RememberCurrent(payload);
             }
 

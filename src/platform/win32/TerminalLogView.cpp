@@ -55,6 +55,35 @@ void TerminalLogView::SetAnsiLogText(const std::vector<std::wstring>& lines) {
     ScrollToBottom();
 }
 
+uint32_t TerminalLogView::LineCount() const {
+    return richTextBlock_ ? richTextBlock_.Blocks().Size() : 0;
+}
+
+std::wstring TerminalLogView::PlainText() const {
+    std::wstring text;
+    if (!richTextBlock_) {
+        return text;
+    }
+
+    auto blocks = richTextBlock_.Blocks();
+    for (uint32_t blockIndex = 0; blockIndex < blocks.Size(); ++blockIndex) {
+        auto paragraph = blocks.GetAt(blockIndex).try_as<winrt::Windows::UI::Xaml::Documents::Paragraph>();
+        if (paragraph) {
+            auto inlines = paragraph.Inlines();
+            for (uint32_t inlineIndex = 0; inlineIndex < inlines.Size(); ++inlineIndex) {
+                auto run = inlines.GetAt(inlineIndex).try_as<winrt::Windows::UI::Xaml::Documents::Run>();
+                if (run) {
+                    const winrt::hstring runText = run.Text();
+                    text.append(runText.c_str(), runText.size());
+                }
+            }
+        }
+        text.push_back(L'\n');
+    }
+
+    return text;
+}
+
 void TerminalLogView::AppendAnsiLogText(const std::wstring& text, bool scrollToBottom) {
     std::wstring trimmedText = text;
     while (!trimmedText.empty() && (trimmedText.back() == L'\r' || trimmedText.back() == L'\n')) {

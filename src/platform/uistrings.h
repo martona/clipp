@@ -54,6 +54,7 @@
 #define CLP_UI_HOST_ID_RESET "Host ID reset."
 
 #define CLP_UI_LIVE_DIAGNOSTIC_OUTPUT "Live diagnostic output from Clipp."
+#define CLP_UI_COPY_LOG_LINES_FORMAT "Copy %d lines"
 
 #define CLP_UI_ABOUT_TITLE "Clipp v1.0"
 #define CLP_UI_TAGLINE "Secure cross-platform clipboard sync for trusted devices."

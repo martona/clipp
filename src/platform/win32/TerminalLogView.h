@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,8 @@ public:
     winrt::Windows::UI::Xaml::Controls::ScrollViewer View() const;
     void AppendAnsiLogText(const std::wstring& text);
     void SetAnsiLogText(const std::vector<std::wstring>& lines);
+    uint32_t LineCount() const;
+    std::wstring PlainText() const;
 
 private:
     void AppendAnsiLogText(const std::wstring& text, bool scrollToBottom);

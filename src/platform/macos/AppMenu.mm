@@ -2,6 +2,7 @@
 
 #ifdef __APPLE__
 
+#include "Clipboard.h"
 #include "Logger.h"
 #include "AboutPage.h"
 #include "ClippPage.h"
@@ -36,6 +37,21 @@ void ConnectKeyViewSequence(NSArray<NSView*>* views) {
     for (NSUInteger index = 0; index < count; ++index) {
         views[index].nextKeyView = views[(index + 1) % count];
     }
+}
+
+ClipboardPayload MakeTextClipboardPayload(NSString* text) {
+    ClipboardPayload payload{};
+    payload.formatId = CF_UNICODETEXT;
+
+    NSString* value = text != nil ? text : @"";
+    NSData* data = [value dataUsingEncoding:NSUTF8StringEncoding];
+    if (data != nil && data.length > 0) {
+        const unsigned char* bytes = static_cast<const unsigned char*>(data.bytes);
+        payload.rawData.assign(bytes, bytes + data.length);
+    }
+    payload.rawData.push_back('\0');
+
+    return payload;
 }
 }
 
@@ -140,6 +156,7 @@ bool UnregisterClippAutoStart() {
     std::unique_ptr<MacOSSettingsPage> settingsPage_;
     std::unique_ptr<MacOSTerminalLogView> terminalLogView_;
     std::mutex terminalLogViewMutex_;
+    NSButton* copyLogsButton_;
     bool logReflectorRegistered_;
     NSInteger currentPageIndex_;
 }
@@ -150,6 +167,8 @@ bool UnregisterClippAutoStart() {
 - (void)showAndActivate;
 - (BOOL)isWindowVisibleOrMiniaturized;
 - (void)reflectLogLine:(const std::wstring&)line;
+- (void)copyLogsToClipboard:(id)sender;
+- (void)updateCopyLogsButtonTitle;
 - (void)updateSidebarSelectionAppearance;
 - (void)updateKeyViewLoopForPage:(NSInteger)pageIndex;
 - (void)activateCurrentPage;
@@ -402,12 +421,21 @@ void RequestMacOSShowMainWindow() {
     intro.font = [NSFont systemFontOfSize:14];
     intro.textColor = [NSColor secondaryLabelColor];
 
+    copyLogsButton_ = [NSButton buttonWithTitle:@""
+                                         target:self
+                                         action:@selector(copyLogsToClipboard:)];
+    copyLogsButton_.translatesAutoresizingMaskIntoConstraints = NO;
+    copyLogsButton_.bezelStyle = NSBezelStyleRounded;
+    [copyLogsButton_ setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [copyLogsButton_ setContentCompressionResistancePriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
+
     terminalLogView_ = std::make_unique<MacOSTerminalLogView>();
     NSScrollView* logView = terminalLogView_->View();
     logView.translatesAutoresizingMaskIntoConstraints = NO;
 
     [page addSubview:heading];
     [page addSubview:intro];
+    [page addSubview:copyLogsButton_];
     [page addSubview:logView];
 
     [NSLayoutConstraint activateConstraints:@[
@@ -416,14 +444,19 @@ void RequestMacOSShowMainWindow() {
         [heading.topAnchor constraintEqualToAnchor:page.topAnchor constant:28],
 
         [intro.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
-        [intro.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
+        [intro.trailingAnchor constraintEqualToAnchor:copyLogsButton_.leadingAnchor constant:-12],
         [intro.topAnchor constraintEqualToAnchor:heading.bottomAnchor constant:8],
+
+        [copyLogsButton_.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
+        [copyLogsButton_.centerYAnchor constraintEqualToAnchor:intro.centerYAnchor],
 
         [logView.leadingAnchor constraintEqualToAnchor:page.leadingAnchor constant:28],
         [logView.trailingAnchor constraintEqualToAnchor:page.trailingAnchor constant:-28],
         [logView.topAnchor constraintEqualToAnchor:intro.bottomAnchor constant:16],
         [logView.bottomAnchor constraintEqualToAnchor:page.bottomAnchor constant:-28],
     ]];
+
+    [self updateCopyLogsButtonTitle];
 
     return page;
 }
@@ -441,6 +474,7 @@ void RequestMacOSShowMainWindow() {
             terminalLogView_->SetAnsiLogText(logHistory);
         }
     }
+    [self updateCopyLogsButtonTitle];
     logReflectorRegistered_ = true;
 }
 
@@ -459,11 +493,45 @@ void RequestMacOSShowMainWindow() {
 - (void)reflectLogLine:(const std::wstring&)line {
     auto lineCopy = std::make_shared<std::wstring>(line);
     dispatch_async(dispatch_get_main_queue(), ^{
-        std::lock_guard<std::mutex> lock(terminalLogViewMutex_);
-        if (logReflectorRegistered_ && terminalLogView_) {
-            terminalLogView_->AppendAnsiLogText(*lineCopy);
+        {
+            std::lock_guard<std::mutex> lock(terminalLogViewMutex_);
+            if (logReflectorRegistered_ && terminalLogView_) {
+                terminalLogView_->AppendAnsiLogText(*lineCopy);
+            }
         }
+        [self updateCopyLogsButtonTitle];
     });
+}
+
+- (void)copyLogsToClipboard:(id)sender {
+    (void)sender;
+
+    NSString* text = @"";
+    {
+        std::lock_guard<std::mutex> lock(terminalLogViewMutex_);
+        if (terminalLogView_) {
+            text = [NSString stringWithString:terminalLogView_->PlainText()];
+        }
+    }
+
+    ClipboardPayload payload = MakeTextClipboardPayload(text);
+    SetClipboardData(payload, false);
+}
+
+- (void)updateCopyLogsButtonTitle {
+    if (copyLogsButton_ == nil) {
+        return;
+    }
+
+    unsigned int lineCount = 0;
+    {
+        std::lock_guard<std::mutex> lock(terminalLogViewMutex_);
+        if (terminalLogView_) {
+            lineCount = terminalLogView_->LineCount();
+        }
+    }
+
+    copyLogsButton_.title = [NSString stringWithFormat:CLP_NS(CLP_UI_COPY_LOG_LINES_FORMAT), static_cast<int>(lineCount)];
 }
 
 - (void)selectPageFromButton:(id)sender {

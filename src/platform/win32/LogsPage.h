@@ -26,10 +26,13 @@ public:
 private:
     void BuildView();
     void ReflectLogLine(const std::wstring& line);
+    void CopyLogsToClipboard();
+    void UpdateCopyLogsButtonLabel();
 
     static void LogReflectorCallback(const std::wstring& line);
 
     winrt::Windows::UI::Xaml::Controls::Grid root_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::Button copyLogsButton_{ nullptr };
     winrt::Windows::System::DispatcherQueue uiDispatcher_{ nullptr };
     std::unique_ptr<TerminalLogView> terminalLogView_;
     std::mutex terminalLogViewMutex_;
