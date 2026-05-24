@@ -6,8 +6,40 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		3B7E0A052FD2800000C1A001 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B7E0A032FD2800000C1A001 /* ShareViewController.swift */; };
+		3B7E0A062FD2800000C1A001 /* ClippShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 3B7E0A012FD2800000C1A001 /* ClippShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		3B7E0A0F2FD2800000C1A001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 3B1C0BB42FC1725A00D70FBA /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 3B7E0A0B2FD2800000C1A001;
+			remoteInfo = ClippShareExtension;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		3B7E0A0A2FD2800000C1A001 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				3B7E0A062FD2800000C1A001 /* ClippShareExtension.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		3B1C0BBC2FC1725A00D70FBA /* Clipp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Clipp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		3B7E0A012FD2800000C1A001 /* ClippShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ClippShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		3B7E0A032FD2800000C1A001 /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
+		3B7E0A042FD2800000C1A001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -26,6 +58,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		3B7E0A082FD2800000C1A001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -33,6 +72,7 @@
 			isa = PBXGroup;
 			children = (
 				3B1C0BBE2FC1725A00D70FBA /* Clipp */,
+				3B7E0A022FD2800000C1A001 /* ClippShareExtension */,
 				3B1C0BBD2FC1725A00D70FBA /* Products */,
 			);
 			sourceTree = "<group>";
@@ -41,8 +81,18 @@
 			isa = PBXGroup;
 			children = (
 				3B1C0BBC2FC1725A00D70FBA /* Clipp.app */,
+				3B7E0A012FD2800000C1A001 /* ClippShareExtension.appex */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		3B7E0A022FD2800000C1A001 /* ClippShareExtension */ = {
+			isa = PBXGroup;
+			children = (
+				3B7E0A032FD2800000C1A001 /* ShareViewController.swift */,
+				3B7E0A042FD2800000C1A001 /* Info.plist */,
+			);
+			path = ClippShareExtension;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -55,10 +105,12 @@
 				3B1C0BB82FC1725A00D70FBA /* Sources */,
 				3B1C0BB92FC1725A00D70FBA /* Frameworks */,
 				3B1C0BBA2FC1725A00D70FBA /* Resources */,
+				3B7E0A0A2FD2800000C1A001 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				3B7E0A102FD2800000C1A001 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				3B1C0BBE2FC1725A00D70FBA /* Clipp */,
@@ -69,6 +121,25 @@
 			productName = Clipp;
 			productReference = 3B1C0BBC2FC1725A00D70FBA /* Clipp.app */;
 			productType = "com.apple.product-type.application";
+		};
+		3B7E0A0B2FD2800000C1A001 /* ClippShareExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 3B7E0A0E2FD2800000C1A001 /* Build configuration list for PBXNativeTarget "ClippShareExtension" */;
+			buildPhases = (
+				3B7E0A072FD2800000C1A001 /* Sources */,
+				3B7E0A082FD2800000C1A001 /* Frameworks */,
+				3B7E0A092FD2800000C1A001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ClippShareExtension;
+			packageProductDependencies = (
+			);
+			productName = ClippShareExtension;
+			productReference = 3B7E0A012FD2800000C1A001 /* ClippShareExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -81,6 +152,9 @@
 				LastUpgradeCheck = 2640;
 				TargetAttributes = {
 					3B1C0BBB2FC1725A00D70FBA = {
+						CreatedOnToolsVersion = 26.4.1;
+					};
+					3B7E0A0B2FD2800000C1A001 = {
 						CreatedOnToolsVersion = 26.4.1;
 					};
 				};
@@ -100,12 +174,20 @@
 			projectRoot = "";
 			targets = (
 				3B1C0BBB2FC1725A00D70FBA /* Clipp */,
+				3B7E0A0B2FD2800000C1A001 /* ClippShareExtension */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		3B1C0BBA2FC1725A00D70FBA /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		3B7E0A092FD2800000C1A001 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -122,7 +204,23 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		3B7E0A072FD2800000C1A001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3B7E0A052FD2800000C1A001 /* ShareViewController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		3B7E0A102FD2800000C1A001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 3B7E0A0B2FD2800000C1A001 /* ClippShareExtension */;
+			targetProxy = 3B7E0A0F2FD2800000C1A001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		3B1C0BC52FC1725B00D70FBA /* Debug */ = {
@@ -372,6 +470,68 @@
 			};
 			name = Release;
 		};
+		3B7E0A0C2FD2800000C1A001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2262A4CP8N;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ClippShareExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = net.clipp.ios.ShareExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		3B7E0A0D2FD2800000C1A001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2262A4CP8N;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ClippShareExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = net.clipp.ios.ShareExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -389,6 +549,15 @@
 			buildConfigurations = (
 				3B1C0BC82FC1725B00D70FBA /* Debug */,
 				3B1C0BC92FC1725B00D70FBA /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		3B7E0A0E2FD2800000C1A001 /* Build configuration list for PBXNativeTarget "ClippShareExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3B7E0A0C2FD2800000C1A001 /* Debug */,
+				3B7E0A0D2FD2800000C1A001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
