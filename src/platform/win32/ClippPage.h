@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 #include <winrt/Windows.System.h>
@@ -12,7 +13,9 @@
 
 class ClippPage {
 public:
-    explicit ClippPage(ClipboardActivityStore& activityStore);
+    using NavigateCallback = std::function<void()>;
+
+    ClippPage(ClipboardActivityStore& activityStore, NavigateCallback showNetworkPage);
     ~ClippPage();
 
     ClippPage(const ClippPage&) = delete;
@@ -23,6 +26,7 @@ public:
     void OnShown();
     void OnHidden();
     void OnDestroy();
+    void OnNetworkKeyChanged();
 
 private:
     void BuildView();
@@ -34,6 +38,7 @@ private:
     void RemoveActivityItem(uint64_t itemID);
     void ClearActivityItems();
     void SetActivityEmptyMessageVisible(bool visible);
+    void UpdateActivityEmptyState();
     bool IsActivityNearBottom() const;
     void ScrollActivityToBottom() const;
     void CopyActivityItem(uint64_t itemID);
@@ -43,11 +48,14 @@ private:
     static void ClipboardActivityWatcher(const ClipboardActivityUpdate& update, void* userData);
 
     ClipboardActivityStore& activityStore_;
+    NavigateCallback showNetworkPage_;
 
     winrt::Windows::UI::Xaml::Controls::Grid root_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::ScrollViewer activityScroll_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::StackPanel activityItemsPanel_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::StackPanel activityEmptyState_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBlock activityEmptyMessage_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::Button activityEmptyNetworkButton_{ nullptr };
     winrt::Windows::System::DispatcherQueue uiDispatcher_{ nullptr };
 
     std::size_t activityWatcherID_ = 0;

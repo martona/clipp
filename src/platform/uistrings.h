@@ -29,6 +29,7 @@
 
 #define CLP_UI_CLIPBOARD "Clipboard"
 #define CLP_UI_CLIPBOARD_EMPTY "Clipboard traffic will appear here."
+#define CLP_UI_NO_NETWORK_KEY_CONFIGURED "No network key configured"
 #define CLP_UI_THIS_DEVICE "This device"
 #define CLP_UI_COPY "Copy"
 #define CLP_UI_LINK "Link"

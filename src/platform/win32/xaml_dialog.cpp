@@ -336,6 +336,9 @@ private:
                 if (networkPage_) {
                     networkPage_->OnDerivedKey(result);
                 }
+                if (clippPage_) {
+                    clippPage_->OnNetworkKeyChanged();
+                }
                 return 0;
             }
 
@@ -370,7 +373,9 @@ private:
         using namespace winrt::Windows::UI::Xaml::Controls;
         using namespace winrt::Windows::UI::Xaml::Media;
 
-        clippPage_ = std::make_unique<ClippPage>(g_clipboardActivityStore);
+        clippPage_ = std::make_unique<ClippPage>(g_clipboardActivityStore, [this]() {
+            SelectPage(PageID::Network);
+        });
         networkPage_ = std::make_unique<NetworkPage>(hwnd_, derivedKeyMessage_, peerDisplayUpdateMessage_, g_peerDisplay, g_peerManager);
         settingsPage_ = std::make_unique<SettingsPage>();
         logsPage_ = std::make_unique<LogsPage>();
@@ -390,12 +395,12 @@ private:
         root.ColumnDefinitions().Append(menuColumn);
         root.ColumnDefinitions().Append(contentColumn);
 
-        ListBox menu;
-        menu.HorizontalAlignment(HorizontalAlignment::Stretch);
-        menu.VerticalAlignment(VerticalAlignment::Stretch);
-        menu.Padding(ThicknessHelper::FromLengths(8, 16, 8, 16));
-        menu.SelectionMode(SelectionMode::Single);
-        menu.Background(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(24, 127, 127, 127)));
+        menu_ = ListBox();
+        menu_.HorizontalAlignment(HorizontalAlignment::Stretch);
+        menu_.VerticalAlignment(VerticalAlignment::Stretch);
+        menu_.Padding(ThicknessHelper::FromLengths(8, 16, 8, 16));
+        menu_.SelectionMode(SelectionMode::Single);
+        menu_.Background(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(24, 127, 127, 127)));
 
         const MenuItemDefinition menuItems[] = {
             { L"\xE77F", CLP_W(CLP_UI_APP_NAME) },
@@ -406,7 +411,7 @@ private:
         };
 
         for (const auto& menuItem : menuItems) {
-            menu.Items().Append(CreateMenuItem(menuItem));
+            menu_.Items().Append(CreateMenuItem(menuItem));
         }
 
         contentPresenter_ = ContentControl();
@@ -445,16 +450,16 @@ private:
         sidebar.RowDefinitions().Append(menuRow);
         sidebar.RowDefinitions().Append(actionsRow);
 
-        Grid::SetRow(menu, 0);
+        Grid::SetRow(menu_, 0);
         Grid::SetRow(sidebarActions, 1);
-        sidebar.Children().Append(menu);
+        sidebar.Children().Append(menu_);
         sidebar.Children().Append(sidebarActions);
 
-        menu.SelectionChanged([this](auto const& sender, auto const&) {
+        menu_.SelectionChanged([this](auto const& sender, auto const&) {
             auto menu = sender.as<ListBox>();
             ShowPage(static_cast<PageID>(menu.SelectedIndex()));
         });
-        menu.SelectedIndex(0);
+        menu_.SelectedIndex(0);
 
         Grid::SetColumn(sidebar, 0);
         Grid::SetColumn(contentPresenter_, 1);
@@ -511,9 +516,11 @@ private:
 
         switch (pageID) {
         case PageID::Clipp:
+            clippPage_->OnShown();
             contentPresenter_.Content(clippPage_->View());
             break;
         case PageID::Network:
+            networkPage_->OnShown();
             contentPresenter_.Content(networkPage_->View());
             break;
         case PageID::Settings:
@@ -526,6 +533,14 @@ private:
         case PageID::About:
             contentPresenter_.Content(aboutPage_->View());
             break;
+        }
+    }
+
+    void SelectPage(PageID pageID) {
+        if (menu_) {
+            menu_.SelectedIndex(static_cast<int32_t>(pageID));
+        } else {
+            ShowPage(pageID);
         }
     }
 
@@ -709,6 +724,7 @@ private:
     std::wstring createError_;
     winrt::Windows::UI::Xaml::Hosting::WindowsXamlManager xamlManager_{ nullptr };
     winrt::Windows::UI::Xaml::Hosting::DesktopWindowXamlSource xamlSource_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::ListBox menu_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::ContentControl contentPresenter_{ nullptr };
     std::unique_ptr<ClippPage> clippPage_;
     std::unique_ptr<NetworkPage> networkPage_;

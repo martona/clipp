@@ -1,6 +1,7 @@
 #include "ClippPage.h"
 
 #include "Clipboard.h"
+#include "KeyManager.h"
 #include "platform/uistrings.h"
 #include "utils.h"
 
@@ -8,6 +9,7 @@
 #include <cwchar>
 #include <ctime>
 #include <string>
+#include <utility>
 
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
@@ -20,6 +22,8 @@
 #include <winrt/Windows.UI.Xaml.Media.h>
 #include <winrt/Windows.UI.Xaml.Media.Imaging.h>
 #include <winrt/base.h>
+
+extern KeyManager g_keyManager;
 
 namespace {
 constexpr double kActivityFollowBottomTolerance = 48.0;
@@ -85,8 +89,9 @@ winrt::Windows::UI::Xaml::Media::Imaging::BitmapImage BitmapFromPngBytes(const s
 }
 }
 
-ClippPage::ClippPage(ClipboardActivityStore& activityStore)
-    : activityStore_(activityStore) {
+ClippPage::ClippPage(ClipboardActivityStore& activityStore, NavigateCallback showNetworkPage)
+    : activityStore_(activityStore)
+    , showNetworkPage_(std::move(showNetworkPage)) {
     BuildView();
 }
 
@@ -106,38 +111,9 @@ void ClippPage::BuildView() {
     root_.HorizontalAlignment(HorizontalAlignment::Stretch);
     root_.VerticalAlignment(VerticalAlignment::Stretch);
 
-    RowDefinition headerRow;
-    headerRow.Height(GridLength{ 1, GridUnitType::Auto });
-    RowDefinition bodyRow;
-    bodyRow.Height(GridLength{ 1, GridUnitType::Star });
-    root_.RowDefinitions().Append(headerRow);
-    root_.RowDefinitions().Append(bodyRow);
-
-    StackPanel header;
-    header.Orientation(Orientation::Vertical);
-    header.Padding(ThicknessHelper::FromLengths(24, 24, 24, 12));
-    header.Spacing(6);
-
-    TextBlock heading;
-    heading.Text(CLP_W(CLP_UI_APP_NAME));
-    heading.FontSize(28);
-    heading.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
-    heading.TextWrapping(TextWrapping::Wrap);
-    header.Children().Append(heading);
-
-    TextBlock intro;
-    intro.Text(CLP_W(CLP_UI_TAGLINE));
-    intro.FontSize(14);
-    intro.TextWrapping(TextWrapping::WrapWholeWords);
-    intro.Opacity(0.75);
-    header.Children().Append(intro);
-
     auto activitySection = BuildActivitySection();
-    activitySection.Margin(ThicknessHelper::FromLengths(24, 0, 24, 24));
+    activitySection.Margin(ThicknessHelper::FromLengths(24, 16, 24, 24));
 
-    Grid::SetRow(header, 0);
-    Grid::SetRow(activitySection, 1);
-    root_.Children().Append(header);
     root_.Children().Append(activitySection);
 
     uiDispatcher_ = winrt::Windows::System::DispatcherQueue::GetForCurrentThread();
@@ -151,31 +127,6 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivitySection() {
     Grid section;
     section.HorizontalAlignment(HorizontalAlignment::Stretch);
     section.VerticalAlignment(VerticalAlignment::Stretch);
-    section.CornerRadius(CornerRadius{ 4 });
-    section.BorderThickness(ThicknessHelper::FromLengths(1, 1, 1, 1));
-    section.BorderBrush(MakeBrush(50, 150, 150, 150));
-
-    RowDefinition headerRow;
-    headerRow.Height(GridLength{ 1, GridUnitType::Auto });
-    RowDefinition listRow;
-    listRow.Height(GridLength{ 1, GridUnitType::Star });
-    section.RowDefinitions().Append(headerRow);
-    section.RowDefinitions().Append(listRow);
-
-    StackPanel header;
-    header.Orientation(Orientation::Vertical);
-    header.Padding(ThicknessHelper::FromLengths(16, 14, 16, 10));
-
-    TextBlock title;
-    title.Text(CLP_W(CLP_UI_CLIPBOARD));
-    title.FontSize(16);
-    title.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
-    header.Children().Append(title);
-
-    Border separator;
-    separator.Height(1);
-    separator.Background(MakeBrush(35, 127, 127, 127));
-    separator.VerticalAlignment(VerticalAlignment::Bottom);
 
     Grid listHost;
     listHost.HorizontalAlignment(HorizontalAlignment::Stretch);
@@ -184,7 +135,7 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivitySection() {
     activityItemsPanel_ = StackPanel();
     activityItemsPanel_.Orientation(Orientation::Vertical);
     activityItemsPanel_.Spacing(12);
-    activityItemsPanel_.Padding(ThicknessHelper::FromLengths(16, 16, 16, 16));
+    activityItemsPanel_.Padding(ThicknessHelper::FromLengths(0, 0, 0, 0));
 
     activityScroll_ = ScrollViewer();
     activityScroll_.HorizontalAlignment(HorizontalAlignment::Stretch);
@@ -193,24 +144,37 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivitySection() {
     activityScroll_.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);
     activityScroll_.Content(activityItemsPanel_);
 
+    activityEmptyState_ = StackPanel();
+    activityEmptyState_.Orientation(Orientation::Vertical);
+    activityEmptyState_.Spacing(10);
+    activityEmptyState_.HorizontalAlignment(HorizontalAlignment::Center);
+    activityEmptyState_.VerticalAlignment(VerticalAlignment::Center);
+    activityEmptyState_.Margin(ThicknessHelper::FromLengths(24, 24, 24, 24));
+
     activityEmptyMessage_ = TextBlock();
-    activityEmptyMessage_.Text(CLP_W(CLP_UI_CLIPBOARD_EMPTY));
     activityEmptyMessage_.FontSize(14);
     activityEmptyMessage_.Opacity(0.65);
     activityEmptyMessage_.TextWrapping(TextWrapping::WrapWholeWords);
     activityEmptyMessage_.HorizontalAlignment(HorizontalAlignment::Center);
-    activityEmptyMessage_.VerticalAlignment(VerticalAlignment::Center);
-    activityEmptyMessage_.Margin(ThicknessHelper::FromLengths(24, 24, 24, 24));
+
+    activityEmptyNetworkButton_ = Button();
+    activityEmptyNetworkButton_.Content(winrt::box_value(winrt::hstring{ CLP_W(CLP_UI_NETWORK) }));
+    activityEmptyNetworkButton_.HorizontalAlignment(HorizontalAlignment::Center);
+    activityEmptyNetworkButton_.Padding(ThicknessHelper::FromLengths(16, 6, 16, 6));
+    activityEmptyNetworkButton_.Click([this](auto const&, auto const&) {
+        if (showNetworkPage_) {
+            showNetworkPage_();
+        }
+    });
+
+    activityEmptyState_.Children().Append(activityEmptyMessage_);
+    activityEmptyState_.Children().Append(activityEmptyNetworkButton_);
 
     listHost.Children().Append(activityScroll_);
-    listHost.Children().Append(activityEmptyMessage_);
+    listHost.Children().Append(activityEmptyState_);
 
-    Grid::SetRow(header, 0);
-    Grid::SetRow(separator, 0);
-    Grid::SetRow(listHost, 1);
-    section.Children().Append(header);
-    section.Children().Append(separator);
     section.Children().Append(listHost);
+    UpdateActivityEmptyState();
     return section;
 }
 
@@ -376,13 +340,28 @@ void ClippPage::ClearActivityItems() {
 }
 
 void ClippPage::SetActivityEmptyMessageVisible(bool visible) {
-    if (!activityEmptyMessage_) {
+    if (!activityEmptyState_) {
         return;
     }
 
-    activityEmptyMessage_.Visibility(visible
+    UpdateActivityEmptyState();
+    activityEmptyState_.Visibility(visible
         ? winrt::Windows::UI::Xaml::Visibility::Visible
         : winrt::Windows::UI::Xaml::Visibility::Collapsed);
+}
+
+void ClippPage::UpdateActivityEmptyState() {
+    if (!activityEmptyMessage_ || !activityEmptyNetworkButton_) {
+        return;
+    }
+
+    const bool haveNetworkKey = g_keyManager.HaveNetworkKey();
+    activityEmptyMessage_.Text(haveNetworkKey
+        ? CLP_W(CLP_UI_CLIPBOARD_EMPTY)
+        : CLP_W(CLP_UI_NO_NETWORK_KEY_CONFIGURED));
+    activityEmptyNetworkButton_.Visibility(haveNetworkKey
+        ? winrt::Windows::UI::Xaml::Visibility::Collapsed
+        : winrt::Windows::UI::Xaml::Visibility::Visible);
 }
 
 bool ClippPage::IsActivityNearBottom() const {
@@ -420,6 +399,7 @@ void ClippPage::OnShown() {
     BeginActivityNotifications();
     if (uiDispatcher_) {
         uiDispatcher_.TryEnqueue([this]() {
+            UpdateActivityEmptyState();
             RefreshActivityItems(activityStore_.Snapshot());
         });
     }
@@ -433,7 +413,17 @@ void ClippPage::OnDestroy() {
     OnHidden();
     activityItemsPanel_ = nullptr;
     activityScroll_ = nullptr;
+    activityEmptyState_ = nullptr;
     activityEmptyMessage_ = nullptr;
+    activityEmptyNetworkButton_ = nullptr;
+}
+
+void ClippPage::OnNetworkKeyChanged() {
+    if (uiDispatcher_) {
+        uiDispatcher_.TryEnqueue([this]() {
+            UpdateActivityEmptyState();
+        });
+    }
 }
 
 void ClippPage::BeginActivityNotifications() {
