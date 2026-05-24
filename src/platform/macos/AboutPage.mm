@@ -187,7 +187,6 @@ void MacOSAboutPage::BuildView() {
 
     AddWrappedArrangedSubview(acknowledgements, MakeSectionHeading(CLP_NS(CLP_UI_OPEN_SOURCE_ACKNOWLEDGEMENTS)));
     AddWrappedArrangedSubview(acknowledgements, MakeAboutText(CLP_NS(CLP_UI_ACK_LIBSODIUM), 13.0, [NSColor secondaryLabelColor]));
-    AddWrappedArrangedSubview(acknowledgements, MakeAboutText(CLP_NS(CLP_UI_ACK_LODEPNG), 13.0, [NSColor secondaryLabelColor]));
     AddWrappedArrangedSubview(acknowledgements, MakeAboutText(CLP_NS(CLP_UI_ACK_XXHASH), 13.0, [NSColor secondaryLabelColor]));
     AddWrappedArrangedSubview(acknowledgements, MakeAboutText(CLP_NS(CLP_UI_ACK_ZSTD), 13.0, [NSColor secondaryLabelColor]));
 

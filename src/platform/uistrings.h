@@ -84,7 +84,6 @@
 #define CLP_UI_REPOSITORY_URL "https://github.com/martona/clipp"
 #define CLP_UI_OPEN_SOURCE_ACKNOWLEDGEMENTS "Open Source Acknowledgements"
 #define CLP_UI_ACK_LIBSODIUM "libsodium - ISC-licensed cryptography library"
-#define CLP_UI_ACK_LODEPNG "lodepng - zlib-licensed PNG encoder/decoder"
 #define CLP_UI_ACK_XXHASH "xxHash - BSD-2-Clause non-cryptographic hashing"
 #define CLP_UI_ACK_ZSTD "Zstandard (zstd) - BSD-licensed compression"
 #define CLP_UI_THIRD_PARTY_LICENSE_NOTE "Third-party license terms remain with their respective projects."

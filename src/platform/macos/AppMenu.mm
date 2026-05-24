@@ -849,7 +849,7 @@ static void LogReflectorCallback(const std::wstring& line) {
         CLP_NS(CLP_UI_TAGLINE) @"\n\n"
         CLP_NS(CLP_UI_COPYRIGHT) @"\n"
         CLP_NS(CLP_UI_MIT_LICENSE) @"\n\n"
-        @"Uses open source libraries including libsodium, lodepng, xxHash, and Zstandard.";
+        @"Uses open source libraries including libsodium, xxHash, and Zstandard.";
     alert.alertStyle = NSAlertStyleInformational;
     [alert addButtonWithTitle:@"OK"];
     [alert runModal];

@@ -67,13 +67,11 @@ file(GLOB CLIPP_COMMON_SOURCES CONFIGURE_DEPENDS
 find_package(unofficial-sodium CONFIG REQUIRED)
 find_package(xxHash CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
-find_package(lodepng CONFIG REQUIRED)
 
 set(CLIPP_THIRD_PARTY_LIBS
     unofficial-sodium::sodium
     xxHash::xxhash
     zstd::libzstd
-    lodepng
 )
 
 function(clipp_apply_common_target_settings target_name)
@@ -124,6 +122,7 @@ if (WIN32)
         ws2_32
         Crypt32
         Normaliz
+        windowscodecs
     )
     if (MSVC)
         target_link_options(clipp-win32 PRIVATE

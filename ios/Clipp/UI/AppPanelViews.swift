@@ -962,7 +962,6 @@ private struct AboutPanelView: View {
                         .foregroundStyle(.primary)
 
                     Text(CLP_UI_ACK_LIBSODIUM)
-                    Text(CLP_UI_ACK_LODEPNG)
                     Text(CLP_UI_ACK_XXHASH)
                     Text(CLP_UI_ACK_ZSTD)
                 }

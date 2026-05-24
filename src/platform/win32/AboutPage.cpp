@@ -198,7 +198,6 @@ AboutPage::AboutPage(std::function<void()> diagnosticsCallback)
     acknowledgements.Spacing(6);
     acknowledgements.Children().Append(CreateTextBlock(CLP_W(CLP_UI_OPEN_SOURCE_ACKNOWLEDGEMENTS), 16, 1.0, true));
     AppendAcknowledgement(acknowledgements, CLP_W(CLP_UI_ACK_LIBSODIUM));
-    AppendAcknowledgement(acknowledgements, CLP_W(CLP_UI_ACK_LODEPNG));
     AppendAcknowledgement(acknowledgements, CLP_W(CLP_UI_ACK_XXHASH));
     AppendAcknowledgement(acknowledgements, CLP_W(CLP_UI_ACK_ZSTD));
     AppendAcknowledgement(acknowledgements, L"Microsoft C++/WinRT and Microsoft Toolkit Win32 UI SDK - MIT-licensed Windows UI integration");

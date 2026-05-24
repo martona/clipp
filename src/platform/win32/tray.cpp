@@ -87,7 +87,7 @@ LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                     CLP_W(CLP_UI_TAGLINE) L"\n\n"
                     CLP_W(CLP_UI_COPYRIGHT) L"\n"
                     CLP_W(CLP_UI_MIT_LICENSE) L"\n\n"
-                    L"Uses open source libraries including libsodium, lodepng, xxHash, Zstandard, C++/WinRT, and darkmode32plus.",
+                    L"Uses open source libraries including libsodium, xxHash, Zstandard, C++/WinRT, and darkmode32plus.",
                     CLP_W(CLP_UI_ABOUT_CLIPP),
                     MB_ICONINFORMATION | MB_OK);
                 break;
