@@ -10,6 +10,9 @@ namespace {
     constexpr wchar_t kMdnsPortName[] = L"MdnsPort";
     constexpr wchar_t kTcpPortName[] = L"TcpPort";
     constexpr wchar_t kNetworkNameName[] = L"NetworkName";
+    constexpr wchar_t kClipboardHistoryMemoryLimitBytesName[] = L"ClipboardHistoryMemoryLimitBytes";
+    constexpr wchar_t kClipboardHistoryMaxAgeSecondsName[] = L"ClipboardHistoryMaxAgeSeconds";
+    constexpr wchar_t kClipboardHistoryMaxItemsName[] = L"ClipboardHistoryMaxItems";
     constexpr wchar_t kEncryptedNetworkKeyName[] = L"EncryptedNetworkKey";
     constexpr wchar_t kHostIDName[] = L"HostID";
 
@@ -47,10 +50,13 @@ bool Settings::IsValidMulticastIp(const std::string& value) {
 
 Settings::Settings()
     : multicastIp_(DefaultMulticastIp),
-	  listenerIp_(DefaultListenerIp),
+      listenerIp_(DefaultListenerIp),
       mdnsPort_(DefaultMdnsPort),
       tcpPort_(DefaultTcpPort),
-      networkName_(GetDefaultNetworkName()) {
+      networkName_(GetDefaultNetworkName()),
+      clipboardHistoryMemoryLimitBytes_(DefaultClipboardHistoryMemoryLimitBytes),
+      clipboardHistoryMaxAgeSeconds_(DefaultClipboardHistoryMaxAgeSeconds),
+      clipboardHistoryMaxItems_(DefaultClipboardHistoryMaxItems) {
     LoadCache();
 }
 
@@ -77,6 +83,21 @@ int Settings::tcpPort() const {
 std::string Settings::networkName() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return networkName_;
+}
+
+uint64_t Settings::clipboardHistoryMemoryLimitBytes() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return clipboardHistoryMemoryLimitBytes_;
+}
+
+uint64_t Settings::clipboardHistoryMaxAgeSeconds() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return clipboardHistoryMaxAgeSeconds_;
+}
+
+uint64_t Settings::clipboardHistoryMaxItems() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return clipboardHistoryMaxItems_;
 }
 
 bool Settings::set_multicastIp(const std::string& value) {
@@ -136,6 +157,33 @@ bool Settings::set_networkName(const std::string& value) {
     return true;
 }
 
+bool Settings::set_clipboardHistoryMemoryLimitBytes(uint64_t value) {
+    if (!WriteUint64Value(kClipboardHistoryMemoryLimitBytesName, value)) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    clipboardHistoryMemoryLimitBytes_ = value;
+    return true;
+}
+
+bool Settings::set_clipboardHistoryMaxAgeSeconds(uint64_t value) {
+    if (!WriteUint64Value(kClipboardHistoryMaxAgeSecondsName, value)) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    clipboardHistoryMaxAgeSeconds_ = value;
+    return true;
+}
+
+bool Settings::set_clipboardHistoryMaxItems(uint64_t value) {
+    if (!WriteUint64Value(kClipboardHistoryMaxItemsName, value)) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    clipboardHistoryMaxItems_ = value;
+    return true;
+}
+
 bool Settings::setEncryptedNetworkKey(const std::vector<unsigned char>& value) {
     return WriteBinaryValue(kEncryptedNetworkKeyName, value.data(), value.size());
 }
@@ -174,7 +222,9 @@ bool Settings::LoadCache() {
     std::string ip;
     int mdns = DefaultMdnsPort;
     int tcp = DefaultTcpPort;
-	uint64_t networkNameTimestamp = 0;
+    uint64_t clipboardHistoryMemoryLimitBytes = DefaultClipboardHistoryMemoryLimitBytes;
+    uint64_t clipboardHistoryMaxAgeSeconds = DefaultClipboardHistoryMaxAgeSeconds;
+    uint64_t clipboardHistoryMaxItems = DefaultClipboardHistoryMaxItems;
 
     if (ReadStringValue(kListenerIpName, ip) && IsValidListenerIp(ip)) {
         listenerIp_ = ip;
@@ -190,6 +240,15 @@ bool Settings::LoadCache() {
     }
     if (ReadUint32Value(kTcpPortName, tcp) && IsValidPort(tcp)) {
         tcpPort_ = tcp;
+    }
+    if (ReadUint64Value(kClipboardHistoryMemoryLimitBytesName, clipboardHistoryMemoryLimitBytes)) {
+        clipboardHistoryMemoryLimitBytes_ = clipboardHistoryMemoryLimitBytes;
+    }
+    if (ReadUint64Value(kClipboardHistoryMaxAgeSecondsName, clipboardHistoryMaxAgeSeconds)) {
+        clipboardHistoryMaxAgeSeconds_ = clipboardHistoryMaxAgeSeconds;
+    }
+    if (ReadUint64Value(kClipboardHistoryMaxItemsName, clipboardHistoryMaxItems)) {
+        clipboardHistoryMaxItems_ = clipboardHistoryMaxItems;
     }
 
     return true;

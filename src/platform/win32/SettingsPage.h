@@ -29,6 +29,9 @@ private:
     void RefreshHostIDDisplay();
     void RefreshHostIDWarning();
     void ResetHostID();
+    void RefreshClipboardHistoryControls();
+    void UpdateClipboardHistoryValueLabels();
+    void ApplyClipboardHistorySettingChange();
 
     static winrt::hstring ToHString(const std::string& value);
 
@@ -40,5 +43,12 @@ private:
     winrt::Windows::UI::Xaml::Controls::TextBlock hostIDValue_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::Button resetHostIDButton_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBlock hostIDWarning_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::Slider historyMemorySlider_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::Slider historyAgeSlider_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::Slider historyItemSlider_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::TextBlock historyMemoryValue_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::TextBlock historyAgeValue_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::TextBlock historyItemValue_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBlock statusMessage_{ nullptr };
+    bool loadingSettings_{ false };
 };

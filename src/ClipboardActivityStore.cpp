@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cwctype>
+#include <limits>
 #include <string_view>
 #include <utility>
 
@@ -111,9 +112,36 @@ uint64_t ClipboardActivityStore::AddOutgoing(const std::wstring& deviceName, con
     return AddItem(ClipboardActivityDirection::Outgoing, deviceName, payload);
 }
 
-std::vector<ClipboardActivityItemHeader> ClipboardActivityStore::Snapshot() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return SnapshotLocked(items_);
+void ClipboardActivityStore::SetLimits(uint64_t memoryLimitBytes, uint64_t maxAgeSeconds, uint64_t maxItems) {
+    std::vector<ClipboardActivityUpdate> updates;
+    std::vector<WatcherRegistration> watchers;
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        limits_.memoryLimitBytes = memoryLimitBytes;
+        limits_.maxAgeSeconds = maxAgeSeconds;
+        limits_.maxItems = maxItems;
+        ApplyLimitsLocked(std::chrono::system_clock::now(), updates);
+        watchers = watchers_;
+    }
+
+    NotifyWatchers(watchers, updates);
+}
+
+std::vector<ClipboardActivityItemHeader> ClipboardActivityStore::Snapshot() {
+    std::vector<ClipboardActivityItemHeader> snapshot;
+    std::vector<ClipboardActivityUpdate> updates;
+    std::vector<WatcherRegistration> watchers;
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ApplyLimitsLocked(std::chrono::system_clock::now(), updates);
+        snapshot = SnapshotLocked(items_);
+        watchers = watchers_;
+    }
+
+    NotifyWatchers(watchers, updates);
+    return snapshot;
 }
 
 std::optional<ClipboardActivityDisplayItem> ClipboardActivityStore::DisplayItem(uint64_t itemID) const {
@@ -139,7 +167,7 @@ std::optional<ClipboardPayload> ClipboardActivityStore::PayloadForClipboard(uint
 }
 
 bool ClipboardActivityStore::Remove(uint64_t itemID) {
-    ClipboardActivityUpdate update;
+    std::vector<ClipboardActivityUpdate> updates;
     std::vector<WatcherRegistration> watchers;
 
     {
@@ -152,22 +180,20 @@ bool ClipboardActivityStore::Remove(uint64_t itemID) {
         }
 
         items_.erase(found);
-        update.type = ClipboardActivityUpdate::Type::Removed;
-        update.itemID = itemID;
+        updates.push_back({
+            ClipboardActivityUpdate::Type::Removed,
+            itemID,
+        });
         watchers = watchers_;
     }
 
-    for (const auto& watcher : watchers) {
-        if (watcher.watcher) {
-            watcher.watcher(update, watcher.userData);
-        }
-    }
+    NotifyWatchers(watchers, updates);
 
     return true;
 }
 
 void ClipboardActivityStore::Clear() {
-    ClipboardActivityUpdate update;
+    std::vector<ClipboardActivityUpdate> updates;
     std::vector<WatcherRegistration> watchers;
 
     {
@@ -177,24 +203,32 @@ void ClipboardActivityStore::Clear() {
         }
 
         items_.clear();
-        update.type = ClipboardActivityUpdate::Type::Cleared;
+        updates.push_back({
+            ClipboardActivityUpdate::Type::Cleared,
+            0,
+        });
         watchers = watchers_;
     }
 
-    for (const auto& watcher : watchers) {
-        if (watcher.watcher) {
-            watcher.watcher(update, watcher.userData);
-        }
-    }
+    NotifyWatchers(watchers, updates);
 }
 
 ClipboardActivityRegistration ClipboardActivityStore::QueryAndRegister(Watcher watcher, void* userData) {
-    std::lock_guard<std::mutex> lock(mutex_);
-
     ClipboardActivityRegistration registration;
-    registration.watcherID = nextWatcherID_++;
-    registration.items = SnapshotLocked(items_);
-    watchers_.push_back({ registration.watcherID, std::move(watcher), userData });
+    std::vector<ClipboardActivityUpdate> updates;
+    std::vector<WatcherRegistration> watchers;
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        ApplyLimitsLocked(std::chrono::system_clock::now(), updates);
+        registration.watcherID = nextWatcherID_++;
+        registration.items = SnapshotLocked(items_);
+        watchers = watchers_;
+        watchers_.push_back({ registration.watcherID, std::move(watcher), userData });
+    }
+
+    NotifyWatchers(watchers, updates);
     return registration;
 }
 
@@ -260,12 +294,33 @@ std::vector<ClipboardActivityItemHeader> ClipboardActivityStore::SnapshotLocked(
     return snapshot;
 }
 
+uint64_t ClipboardActivityStore::EstimateItemBytes(const Item& item) {
+    constexpr uint64_t kMetadataEstimateBytes = 256;
+    const uint64_t payloadBytes = static_cast<uint64_t>(item.payload.rawData.size());
+    const uint64_t deviceNameBytes = static_cast<uint64_t>(item.header.deviceName.size() * sizeof(wchar_t));
+    return kMetadataEstimateBytes + payloadBytes + deviceNameBytes;
+}
+
+void ClipboardActivityStore::NotifyWatchers(
+    const std::vector<WatcherRegistration>& watchers,
+    const std::vector<ClipboardActivityUpdate>& updates)
+{
+    for (const auto& update : updates) {
+        for (const auto& watcher : watchers) {
+            if (watcher.watcher) {
+                watcher.watcher(update, watcher.userData);
+            }
+        }
+    }
+}
+
 uint64_t ClipboardActivityStore::AddItem(ClipboardActivityDirection direction, const std::wstring& deviceName, const ClipboardPayload& payload) {
     if (payload.formatId == 0) {
         return 0;
     }
 
-    ClipboardActivityUpdate update;
+    uint64_t itemID = 0;
+    std::vector<ClipboardActivityUpdate> updates;
     std::vector<WatcherRegistration> watchers;
 
     {
@@ -281,20 +336,74 @@ uint64_t ClipboardActivityStore::AddItem(ClipboardActivityDirection direction, c
         item.header.encodedBytes = item.payload.rawData.size();
         item.header.decodedBytes = item.payload.decodedDataSize;
 
-        update.type = ClipboardActivityUpdate::Type::Added;
-        update.itemID = item.header.id;
+        itemID = item.header.id;
+        updates.push_back({
+            ClipboardActivityUpdate::Type::Added,
+            itemID,
+        });
 
         items_.push_back(std::move(item));
+        ApplyLimitsLocked(std::chrono::system_clock::now(), updates);
         watchers = watchers_;
     }
 
-    for (const auto& watcher : watchers) {
-        if (watcher.watcher) {
-            watcher.watcher(update, watcher.userData);
+    NotifyWatchers(watchers, updates);
+
+    return itemID;
+}
+
+void ClipboardActivityStore::ApplyLimitsLocked(
+    std::chrono::system_clock::time_point now,
+    std::vector<ClipboardActivityUpdate>& updates)
+{
+    const auto removeAt = [this, &updates](std::vector<Item>::iterator item) {
+        updates.push_back({
+            ClipboardActivityUpdate::Type::Removed,
+            item->header.id,
+        });
+        return items_.erase(item);
+    };
+
+    if (limits_.maxAgeSeconds != 0) {
+        const uint64_t maxSupportedAgeSeconds =
+            static_cast<uint64_t>((std::chrono::seconds::max)().count());
+        if (limits_.maxAgeSeconds <= maxSupportedAgeSeconds) {
+            const auto cutoff = now - std::chrono::seconds(limits_.maxAgeSeconds);
+            for (auto item = items_.begin(); item != items_.end();) {
+                if (item->header.timestamp < cutoff) {
+                    item = removeAt(item);
+                } else {
+                    ++item;
+                }
+            }
         }
     }
 
-    return update.itemID;
+    if (limits_.maxItems != 0) {
+        while (static_cast<uint64_t>(items_.size()) > limits_.maxItems) {
+            removeAt(items_.begin());
+        }
+    }
+
+    if (limits_.memoryLimitBytes == 0) {
+        return;
+    }
+
+    uint64_t totalBytes = 0;
+    for (const auto& item : items_) {
+        const uint64_t itemBytes = EstimateItemBytes(item);
+        if (totalBytes > (std::numeric_limits<uint64_t>::max)() - itemBytes) {
+            totalBytes = (std::numeric_limits<uint64_t>::max)();
+        } else {
+            totalBytes += itemBytes;
+        }
+    }
+
+    while (items_.size() > 1 && totalBytes > limits_.memoryLimitBytes) {
+        const uint64_t itemBytes = EstimateItemBytes(items_.front());
+        removeAt(items_.begin());
+        totalBytes = itemBytes >= totalBytes ? 0 : totalBytes - itemBytes;
+    }
 }
 
 std::optional<ClipboardActivityStore::Item> ClipboardActivityStore::FindItem(uint64_t itemID) const {

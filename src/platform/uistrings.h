@@ -63,6 +63,12 @@
 #define CLP_UI_UNAVAILABLE "Unavailable"
 #define CLP_UI_UNABLE_TO_RESET_HOST_ID "Unable to reset Host ID."
 #define CLP_UI_HOST_ID_RESET "Host ID reset."
+#define CLP_UI_CLIPBOARD_HISTORY "Clipboard history"
+#define CLP_UI_HISTORY_MEMORY_LIMIT "Memory"
+#define CLP_UI_HISTORY_TIME_LIMIT "Time"
+#define CLP_UI_HISTORY_ITEM_LIMIT "Items"
+#define CLP_UI_UNLIMITED "Unlimited"
+#define CLP_UI_CLIPBOARD_HISTORY_SETTINGS_APPLIED "Clipboard history settings applied."
 
 #define CLP_UI_LIVE_DIAGNOSTIC_OUTPUT "Live diagnostic output from Clipp."
 #define CLP_UI_COPY_LOG_LINES_FORMAT "Copy %d lines"

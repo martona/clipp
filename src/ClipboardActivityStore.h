@@ -67,7 +67,9 @@ public:
     uint64_t AddIncoming(const std::wstring& deviceName, const ClipboardPayload& payload);
     uint64_t AddOutgoing(const std::wstring& deviceName, const ClipboardPayload& payload);
 
-    std::vector<ClipboardActivityItemHeader> Snapshot() const;
+    void SetLimits(uint64_t memoryLimitBytes, uint64_t maxAgeSeconds, uint64_t maxItems);
+
+    std::vector<ClipboardActivityItemHeader> Snapshot();
     std::optional<ClipboardActivityDisplayItem> DisplayItem(uint64_t itemID) const;
     std::optional<ClipboardPayload> PayloadForClipboard(uint64_t itemID) const;
     bool Remove(uint64_t itemID);
@@ -82,6 +84,12 @@ private:
         ClipboardPayload payload;
     };
 
+    struct Limits {
+        uint64_t memoryLimitBytes{ 256ull * 1024ull * 1024ull };
+        uint64_t maxAgeSeconds{ 24ull * 60ull * 60ull };
+        uint64_t maxItems{ 1000 };
+    };
+
     struct WatcherRegistration {
         std::size_t watcherID{};
         Watcher watcher;
@@ -91,13 +99,17 @@ private:
     static ClipboardPayload MakeStoredPayload(const ClipboardPayload& payload);
     static std::optional<ClipboardActivityDisplayItem> BuildDisplayItem(const Item& item);
     static std::vector<ClipboardActivityItemHeader> SnapshotLocked(const std::vector<Item>& items);
+    static uint64_t EstimateItemBytes(const Item& item);
+    static void NotifyWatchers(const std::vector<WatcherRegistration>& watchers, const std::vector<ClipboardActivityUpdate>& updates);
 
     uint64_t AddItem(ClipboardActivityDirection direction, const std::wstring& deviceName, const ClipboardPayload& payload);
+    void ApplyLimitsLocked(std::chrono::system_clock::time_point now, std::vector<ClipboardActivityUpdate>& updates);
     std::optional<Item> FindItem(uint64_t itemID) const;
 
     mutable std::mutex mutex_;
     std::vector<Item> items_;
     std::vector<WatcherRegistration> watchers_;
+    Limits limits_;
     uint64_t nextItemID_{ 1 };
     std::size_t nextWatcherID_{ 1 };
 };

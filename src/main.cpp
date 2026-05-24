@@ -453,6 +453,11 @@ int main(int argc, char* argv[]) {
         return exitAfterStartupFailure(1);
     }
 
+    g_clipboardActivityStore.SetLimits(
+        g_settings.clipboardHistoryMemoryLimitBytes(),
+        g_settings.clipboardHistoryMaxAgeSeconds(),
+        g_settings.clipboardHistoryMaxItems());
+
     std::string keyErrorMessage;
     const std::wstring networkFingerprint = g_keyManager.GetNetworkFingerprintHash(nullptr, &keyErrorMessage);
     const bool haveNetworkKey = !networkFingerprint.empty();

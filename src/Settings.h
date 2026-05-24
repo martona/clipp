@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -13,6 +14,10 @@ public:
     static constexpr int DefaultTcpPort = 15353;
     static constexpr const char* DefaultMulticastIp = "239.255.10.10";
     static constexpr const char* DefaultListenerIp = "0.0.0.0";
+    static constexpr uint64_t UnlimitedClipboardHistoryLimit = 0;
+    static constexpr uint64_t DefaultClipboardHistoryMemoryLimitBytes = 256ull * 1024ull * 1024ull;
+    static constexpr uint64_t DefaultClipboardHistoryMaxAgeSeconds = 24ull * 60ull * 60ull;
+    static constexpr uint64_t DefaultClipboardHistoryMaxItems = 1000;
 
     Settings();
 
@@ -25,12 +30,18 @@ public:
     int mdnsPort() const;
     int tcpPort() const;
     std::string networkName() const;
+    uint64_t clipboardHistoryMemoryLimitBytes() const;
+    uint64_t clipboardHistoryMaxAgeSeconds() const;
+    uint64_t clipboardHistoryMaxItems() const;
 
     bool set_multicastIp(const std::string& value);
 	bool set_listenerIp(const std::string& value);
     bool set_mdnsPort(int value);
     bool set_tcpPort(int value);
     bool set_networkName(const std::string& value);
+    bool set_clipboardHistoryMemoryLimitBytes(uint64_t value);
+    bool set_clipboardHistoryMaxAgeSeconds(uint64_t value);
+    bool set_clipboardHistoryMaxItems(uint64_t value);
 
     bool setEncryptedNetworkKey(const std::vector<unsigned char>& value);
     bool getEncryptedNetworkKey(std::vector<unsigned char>& value) const;
@@ -55,6 +66,9 @@ private:
     int mdnsPort_;
     int tcpPort_;
     std::string networkName_;
+    uint64_t clipboardHistoryMemoryLimitBytes_;
+    uint64_t clipboardHistoryMaxAgeSeconds_;
+    uint64_t clipboardHistoryMaxItems_;
     mutable std::mutex mutex_;
 };
 
