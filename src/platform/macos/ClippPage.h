@@ -2,29 +2,29 @@
 
 #ifdef __APPLE__
 
-#include "KeyManager.h"
-#include "PeerDisplay.h"
+#include "ClipboardActivityStore.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
+#include <vector>
 
-@class MacOSClippPageFieldDelegate;
-@class NSView;
-@class NSSecureTextField;
-@class NSTextField;
-@class NSTimer;
+@class NSMutableArray;
+@class NSButton;
 @class NSScrollView;
+@class NSStackView;
+@class NSTextField;
+@class NSView;
 
 class MacOSClippPageState;
-class MacOSNetworkView;
-namespace uiClippPage {
-class KeyDerivationWorker;
-}
+@class MacOSClippPageTarget;
 
 class MacOSClippPage {
 public:
-    explicit MacOSClippPage(std::function<void()> keyViewChangedHandler = {});
+    using NavigateCallback = std::function<void()>;
+
+    MacOSClippPage(ClipboardActivityStore& activityStore, NavigateCallback showNetworkPage = {});
     ~MacOSClippPage();
 
     MacOSClippPage(const MacOSClippPage&) = delete;
@@ -35,53 +35,46 @@ public:
     void OnShown();
     void OnHidden();
     void OnDestroy();
+    void OnNetworkKeyChanged();
     NSView* FirstKeyView() const;
     void ConnectKeyViewLoop(NSView* nextKeyView);
 
-    void OnFieldEditingBegan(NSTextField* field);
-    void OnFieldEditingChanged(NSTextField* field);
-    void OnFieldEditingEnded(NSTextField* field);
-    void SchedulePeerDisplayUpdate();
+    void CopyActivityItem(uint64_t itemID);
+    void ShowNetworkPage();
 
 private:
     void BuildView();
-    void SetupPasswordFields();
-    void NewPasswordHashReceived();
-    void ApplyNetworkNameChange();
-    void StartPasswordDebounceTimer();
-    void StopPasswordDebounceTimer();
-    void DerivePasswordFromCurrentField();
-    void OnDerivedKey(const KeyManager::NetworkKey& key);
-    void PollNetworkView();
-    void ScrollToTop();
-    void StartNetworkPollTimer();
-    void StopNetworkPollTimer();
-    void BeginPeerNotifications();
-    void EndPeerNotifications();
-    void NotifyKeyViewChanged();
+    NSView* BuildActivityRow(uint64_t itemID);
+    void RefreshActivityItems(const std::vector<ClipboardActivityItemHeader>& items);
+    void AddActivityItem(uint64_t itemID);
+    void RemoveActivityItem(uint64_t itemID);
+    void ClearActivityItems();
+    void SetActivityEmptyMessageVisible(bool visible);
+    void UpdateActivityEmptyState();
+    bool IsActivityNearBottom() const;
+    void ScrollActivityToBottom() const;
+    void BeginActivityNotifications();
+    void EndActivityNotifications();
 
-    static void PeerDisplayWatcher(const PeerDisplayUpdate& update, void* userData);
+    static void ClipboardActivityWatcher(const ClipboardActivityUpdate& update, void* userData);
+
+    ClipboardActivityStore& activityStore_;
+    NavigateCallback showNetworkPage_;
 
     NSView* root_ = nullptr;
-    NSTextField* networkNameField_ = nullptr;
-    NSSecureTextField* passwordField_ = nullptr;
-    NSView* passwordStatusPanel_ = nullptr;
-    NSTextField* passwordHashText_ = nullptr;
-    NSView* passwordInfoPanel_ = nullptr;
-    NSTextField* passwordInfoText_ = nullptr;
-    MacOSClippPageFieldDelegate* fieldDelegate_ = nullptr;
-    NSTimer* networkPollTimer_ = nullptr;
+    NSScrollView* activityScroll_ = nullptr;
+    NSStackView* activityItemsPanel_ = nullptr;
+    NSStackView* activityEmptyState_ = nullptr;
+    NSTextField* activityEmptyMessage_ = nullptr;
+    NSButton* activityEmptyNetworkButton_ = nullptr;
     NSView* nextKeyViewAfterPage_ = nullptr;
+    MacOSClippPageTarget* actionTarget_ = nullptr;
+    NSMutableArray* activityItemTargets_ = nil;
 
-    std::function<void()> keyViewChangedHandler_;
     std::shared_ptr<MacOSClippPageState> pageState_;
-    std::unique_ptr<uiClippPage::KeyDerivationWorker> keyDerivationWorker_;
-    std::unique_ptr<MacOSNetworkView> networkView_;
-    std::size_t peerDisplayWatcherID_ = 0;
-    uint64_t passwordDebounceGeneration_ = 0;
+    std::size_t activityWatcherID_ = 0;
+    std::vector<uint64_t> activityItemIDs_;
     bool destroyed_ = false;
-    bool suppressPasswordChange_ = false;
-    NSScrollView* scrollView_ = nullptr;
 };
 
 #endif

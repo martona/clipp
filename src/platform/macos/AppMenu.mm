@@ -6,6 +6,7 @@
 #include "Logger.h"
 #include "AboutPage.h"
 #include "ClippPage.h"
+#include "NetworkPage.h"
 #include "SettingsPage.h"
 #include "TerminalLogView.h"
 #include "platform/uistrings.h"
@@ -20,6 +21,12 @@
 
 namespace {
 std::atomic_bool g_pendingOpenMainWindow{ false };
+std::atomic_bool g_pendingOpenNetworkPage{ false };
+
+constexpr NSInteger kPageClipp = 0;
+constexpr NSInteger kPageNetwork = 1;
+constexpr NSInteger kPageSettings = 2;
+constexpr NSInteger kPageLogs = 3;
 
 void MakePageFlexible(NSView* view) {
     [view setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
@@ -59,6 +66,7 @@ ClipboardPayload MakeTextClipboardPayload(NSString* text) {
 @class ClippMainWindowController;
 static ClippStatusMenuController* g_statusMenuController = nil;
 static ClippMainWindowController* g_logReflectorTarget = nil;
+extern ClipboardActivityStore g_clipboardActivityStore;
 
 static void LogReflectorCallback(const std::wstring& line);
 
@@ -153,6 +161,7 @@ bool UnregisterClippAutoStart() {
 @private
     std::unique_ptr<MacOSAboutPage> aboutPage_;
     std::unique_ptr<MacOSClippPage> clippPage_;
+    std::unique_ptr<MacOSNetworkPage> networkPage_;
     std::unique_ptr<MacOSSettingsPage> settingsPage_;
     std::unique_ptr<MacOSTerminalLogView> terminalLogView_;
     std::mutex terminalLogViewMutex_;
@@ -165,6 +174,8 @@ bool UnregisterClippAutoStart() {
 @property(nonatomic, strong) NSArray<NSButton*>* actionButtons;
 @property(nonatomic, strong) NSArray<NSView*>* pageViews;
 - (void)showAndActivate;
+- (void)showAndActivatePage:(NSInteger)pageIndex;
+- (void)selectPage:(NSInteger)pageIndex;
 - (BOOL)isWindowVisibleOrMiniaturized;
 - (void)reflectLogLine:(const std::wstring&)line;
 - (void)copyLogsToClipboard:(id)sender;
@@ -173,21 +184,24 @@ bool UnregisterClippAutoStart() {
 - (void)updateKeyViewLoopForPage:(NSInteger)pageIndex;
 - (void)activateCurrentPage;
 - (void)deactivateCurrentPage;
+- (void)networkKeyChanged;
 @end
 
 @interface ClippStatusMenuController : NSObject <NSApplicationDelegate>
 @property(nonatomic, strong) NSStatusItem* statusItem;
 @property(nonatomic, strong) ClippMainWindowController* mainWindowController;
 - (void)openClipp:(id)sender;
+- (void)openClippPage:(NSInteger)pageIndex;
 @end
 
-void RequestMacOSShowMainWindow() {
+void RequestMacOSShowMainWindow(bool showNetworkPage) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (g_statusMenuController != nil) {
-            [g_statusMenuController openClipp:nil];
+            [g_statusMenuController openClippPage:(showNetworkPage ? kPageNetwork : kPageClipp)];
             return;
         }
         g_pendingOpenMainWindow.store(true);
+        g_pendingOpenNetworkPage.store(showNetworkPage);
     });
 }
 
@@ -255,7 +269,13 @@ void RequestMacOSShowMainWindow() {
     menuStack.spacing = 6;
     menuStack.edgeInsets = NSEdgeInsetsMake(16, 12, 0, 12);
 
-    NSArray<NSString*>* titles = @[CLP_NS(CLP_UI_APP_NAME), CLP_NS(CLP_UI_SETTINGS), CLP_NS(CLP_UI_LOGS), CLP_NS(CLP_UI_ABOUT)];
+    NSArray<NSString*>* titles = @[
+        CLP_NS(CLP_UI_APP_NAME),
+        CLP_NS(CLP_UI_NETWORK),
+        CLP_NS(CLP_UI_SETTINGS),
+        CLP_NS(CLP_UI_LOGS),
+        CLP_NS(CLP_UI_ABOUT)
+    ];
     NSMutableArray<NSButton*>* buttons = [NSMutableArray arrayWithCapacity:titles.count];
     for (NSUInteger index = 0; index < titles.count; ++index) {
         NSButton* button = [self makeSidebarButtonWithTitle:titles[index] action:@selector(selectPageFromButton:)];
@@ -296,13 +316,19 @@ void RequestMacOSShowMainWindow() {
     ]];
 
     __unsafe_unretained ClippMainWindowController* controller = self;
-    clippPage_ = std::make_unique<MacOSClippPage>([controller]() {
-        [controller updateKeyViewLoopForPage:0];
+    clippPage_ = std::make_unique<MacOSClippPage>(g_clipboardActivityStore, [controller]() {
+        [controller selectPage:kPageNetwork];
+    });
+    networkPage_ = std::make_unique<MacOSNetworkPage>([controller]() {
+        [controller updateKeyViewLoopForPage:kPageNetwork];
+    }, [controller]() {
+        [controller networkKeyChanged];
     });
     settingsPage_ = std::make_unique<MacOSSettingsPage>();
     aboutPage_ = std::make_unique<MacOSAboutPage>();
     self.pageViews = @[
         clippPage_->View(),
+        networkPage_->View(),
         settingsPage_->View(),
         [self makeLogsPage],
         aboutPage_->View(),
@@ -548,10 +574,13 @@ void RequestMacOSShowMainWindow() {
     const NSRect windowFrame = self.window.frame;
     const NSInteger previousPageIndex = currentPageIndex_;
 
-    if (previousPageIndex == 0 && pageIndex != 0 && clippPage_) {
+    if (previousPageIndex == kPageClipp && pageIndex != kPageClipp && clippPage_) {
         clippPage_->OnHidden();
     }
-    if (previousPageIndex == 2 && pageIndex != 2) {
+    if (previousPageIndex == kPageNetwork && pageIndex != kPageNetwork && networkPage_) {
+        networkPage_->OnHidden();
+    }
+    if (previousPageIndex == kPageLogs && pageIndex != kPageLogs) {
         [self endLogReflection];
     }
 
@@ -574,17 +603,20 @@ void RequestMacOSShowMainWindow() {
         [page.bottomAnchor constraintEqualToAnchor:self.contentContainer.bottomAnchor],
     ]];
 
-    if (pageIndex == 1 && settingsPage_) {
+    if (pageIndex == kPageSettings && settingsPage_) {
         settingsPage_->OnShown();
     }
-    if (pageIndex == 0 && clippPage_) {
+    if (pageIndex == kPageNetwork && networkPage_) {
+        networkPage_->OnShown();
+    }
+    if (pageIndex == kPageClipp && clippPage_) {
         clippPage_->OnShown();
     }
 
     currentPageIndex_ = pageIndex;
     [self updateKeyViewLoopForPage:pageIndex];
 
-    if (pageIndex == 2) {
+    if (pageIndex == kPageLogs) {
         [self beginLogReflection];
     }
 
@@ -602,18 +634,27 @@ void RequestMacOSShowMainWindow() {
     [keyViews addObjectsFromArray:self.actionButtons];
     ConnectKeyViewSequence(keyViews);
 
-    if (pageIndex == 0 && clippPage_ != nullptr && self.pageButtons.count >= 2) {
-        NSView* clippButton = self.pageButtons[0];
-        NSView* nextAfterClipp = self.pageButtons[1];
-        clippButton.nextKeyView = clippPage_->FirstKeyView();
+    if (pageIndex == kPageClipp && clippPage_ != nullptr && self.pageButtons.count >= 2) {
+        NSView* clippButton = self.pageButtons[kPageClipp];
+        NSView* nextAfterClipp = self.pageButtons[kPageNetwork];
+        NSView* firstKeyView = clippPage_->FirstKeyView();
+        clippButton.nextKeyView = firstKeyView != nil ? firstKeyView : nextAfterClipp;
         clippPage_->ConnectKeyViewLoop(nextAfterClipp);
         return;
     }
 
-    if (pageIndex == 1 && settingsPage_ != nullptr && self.pageButtons.count >= 2) {
-        NSView* settingsButton = self.pageButtons[1];
-        NSView* nextAfterSettings = self.pageButtons.count > 2
-            ? self.pageButtons[2]
+    if (pageIndex == kPageNetwork && networkPage_ != nullptr && self.pageButtons.count > kPageSettings) {
+        NSView* networkButton = self.pageButtons[kPageNetwork];
+        NSView* nextAfterNetwork = self.pageButtons[kPageSettings];
+        networkButton.nextKeyView = networkPage_->FirstKeyView();
+        networkPage_->ConnectKeyViewLoop(nextAfterNetwork);
+        return;
+    }
+
+    if (pageIndex == kPageSettings && settingsPage_ != nullptr && self.pageButtons.count > kPageSettings) {
+        NSView* settingsButton = self.pageButtons[kPageSettings];
+        NSView* nextAfterSettings = self.pageButtons.count > kPageLogs
+            ? self.pageButtons[kPageLogs]
             : (self.actionButtons.count > 0 ? self.actionButtons[0] : self.pageButtons[0]);
 
         settingsButton.nextKeyView = settingsPage_->FirstKeyView();
@@ -622,28 +663,43 @@ void RequestMacOSShowMainWindow() {
 }
 
 - (void)activateCurrentPage {
-    if (currentPageIndex_ == 0 && clippPage_) {
+    if (currentPageIndex_ == kPageClipp && clippPage_) {
         clippPage_->OnShown();
-    } else if (currentPageIndex_ == 1 && settingsPage_) {
+    } else if (currentPageIndex_ == kPageNetwork && networkPage_) {
+        networkPage_->OnShown();
+    } else if (currentPageIndex_ == kPageSettings && settingsPage_) {
         settingsPage_->OnShown();
-    } else if (currentPageIndex_ == 2) {
+    } else if (currentPageIndex_ == kPageLogs) {
         [self beginLogReflection];
     }
 }
 
 - (void)deactivateCurrentPage {
-    if (currentPageIndex_ == 0 && clippPage_) {
+    if (currentPageIndex_ == kPageClipp && clippPage_) {
         clippPage_->OnHidden();
-    } else if (currentPageIndex_ == 2) {
+    } else if (currentPageIndex_ == kPageNetwork && networkPage_) {
+        networkPage_->OnHidden();
+    } else if (currentPageIndex_ == kPageLogs) {
         [self endLogReflection];
     }
 }
 
+- (void)networkKeyChanged {
+    if (clippPage_) {
+        clippPage_->OnNetworkKeyChanged();
+    }
+}
+
 - (void)showAndActivate {
+    [self showAndActivatePage:currentPageIndex_ >= 0 ? currentPageIndex_ : kPageClipp];
+}
+
+- (void)showAndActivatePage:(NSInteger)pageIndex {
     SetMacOSDockIconVisible(YES);
     if (self.window.miniaturized) {
         [self.window deminiaturize:nil];
     }
+    [self selectPage:pageIndex];
     [self showWindow:nil];
     [self.window center];
     [self.window makeKeyAndOrderFront:nil];
@@ -684,6 +740,9 @@ void RequestMacOSShowMainWindow() {
     [self deactivateCurrentPage];
     if (clippPage_) {
         clippPage_->OnDestroy();
+    }
+    if (networkPage_) {
+        networkPage_->OnDestroy();
     }
     RequestMacOSAppShutdown(true);
 }
@@ -759,12 +818,15 @@ static void LogReflectorCallback(const std::wstring& line) {
 
 - (void)openClipp:(id)sender {
     (void)sender;
+    [self openClippPage:kPageClipp];
+}
 
+- (void)openClippPage:(NSInteger)pageIndex {
     if (self.mainWindowController == nil) {
         self.mainWindowController = [[ClippMainWindowController alloc] init];
     }
 
-    [self.mainWindowController showAndActivate];
+    [self.mainWindowController showAndActivatePage:pageIndex];
 }
 
 - (void)showAbout:(id)sender {
@@ -839,7 +901,7 @@ void RequestMacOSAppShutdown(bool unregisterAutoStart) {
     });
 }
 
-void RunMacOSStatusMenu() {
+void RunMacOSStatusMenu(bool showNetworkPageOnStartup) {
     @autoreleasepool {
         NSApplication* app = [NSApplication sharedApplication];
         SetMacOSDockIconVisible(NO);
@@ -848,8 +910,13 @@ void RunMacOSStatusMenu() {
         controller = [[ClippStatusMenuController alloc] init];
         g_statusMenuController = controller;
         app.delegate = controller;
-        if (g_pendingOpenMainWindow.exchange(false)) {
-            [controller openClipp:nil];
+        if (showNetworkPageOnStartup) {
+            g_pendingOpenMainWindow.exchange(false);
+            g_pendingOpenNetworkPage.exchange(false);
+            [controller openClippPage:kPageNetwork];
+        } else if (g_pendingOpenMainWindow.exchange(false)) {
+            const bool showNetworkPage = g_pendingOpenNetworkPage.exchange(false);
+            [controller openClippPage:(showNetworkPage ? kPageNetwork : kPageClipp)];
         }
 
         [app run];

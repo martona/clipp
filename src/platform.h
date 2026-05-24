@@ -453,8 +453,8 @@ bool RegisterClippAutoStart();
 bool UnregisterClippAutoStart();
 
 #if defined(__APPLE__)
-void RequestMacOSShowMainWindow();
-void RunMacOSStatusMenu();
+void RequestMacOSShowMainWindow(bool showNetworkPage = false);
+void RunMacOSStatusMenu(bool showNetworkPageOnStartup = false);
 void RequestMacOSAppShutdown(bool unregisterAutoStart = false);
 #endif
 

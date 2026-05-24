@@ -1,0 +1,88 @@
+#pragma once
+
+#ifdef __APPLE__
+
+#include "KeyManager.h"
+#include "PeerDisplay.h"
+
+#include <cstddef>
+#include <functional>
+#include <memory>
+
+@class MacOSNetworkPageFieldDelegate;
+@class NSView;
+@class NSSecureTextField;
+@class NSTextField;
+@class NSTimer;
+@class NSScrollView;
+
+class MacOSNetworkView;
+class MacOSNetworkPageState;
+namespace uiClippPage {
+class KeyDerivationWorker;
+}
+
+class MacOSNetworkPage {
+public:
+    MacOSNetworkPage(std::function<void()> keyViewChangedHandler = {}, std::function<void()> networkKeyChangedHandler = {});
+    ~MacOSNetworkPage();
+
+    MacOSNetworkPage(const MacOSNetworkPage&) = delete;
+    MacOSNetworkPage& operator=(const MacOSNetworkPage&) = delete;
+
+    NSView* View() const;
+
+    void OnShown();
+    void OnHidden();
+    void OnDestroy();
+    NSView* FirstKeyView() const;
+    void ConnectKeyViewLoop(NSView* nextKeyView);
+
+    void OnFieldEditingBegan(NSTextField* field);
+    void OnFieldEditingChanged(NSTextField* field);
+    void OnFieldEditingEnded(NSTextField* field);
+    void SchedulePeerDisplayUpdate();
+
+private:
+    void BuildView();
+    void SetupPasswordFields();
+    void NewPasswordHashReceived();
+    void ApplyNetworkNameChange();
+    void StartPasswordDebounceTimer();
+    void StopPasswordDebounceTimer();
+    void DerivePasswordFromCurrentField();
+    void OnDerivedKey(const KeyManager::NetworkKey& key);
+    void PollNetworkView();
+    void ScrollToTop();
+    void StartNetworkPollTimer();
+    void StopNetworkPollTimer();
+    void BeginPeerNotifications();
+    void EndPeerNotifications();
+    void NotifyKeyViewChanged();
+
+    static void PeerDisplayWatcher(const PeerDisplayUpdate& update, void* userData);
+
+    NSView* root_ = nullptr;
+    NSTextField* networkNameField_ = nullptr;
+    NSSecureTextField* passwordField_ = nullptr;
+    NSView* passwordStatusPanel_ = nullptr;
+    NSTextField* passwordHashText_ = nullptr;
+    NSView* passwordInfoPanel_ = nullptr;
+    NSTextField* passwordInfoText_ = nullptr;
+    MacOSNetworkPageFieldDelegate* fieldDelegate_ = nullptr;
+    NSTimer* networkPollTimer_ = nullptr;
+    NSView* nextKeyViewAfterPage_ = nullptr;
+
+    std::function<void()> keyViewChangedHandler_;
+    std::function<void()> networkKeyChangedHandler_;
+    std::shared_ptr<MacOSNetworkPageState> pageState_;
+    std::unique_ptr<uiClippPage::KeyDerivationWorker> keyDerivationWorker_;
+    std::unique_ptr<MacOSNetworkView> networkView_;
+    std::size_t peerDisplayWatcherID_ = 0;
+    uint64_t passwordDebounceGeneration_ = 0;
+    bool destroyed_ = false;
+    bool suppressPasswordChange_ = false;
+    NSScrollView* scrollView_ = nullptr;
+};
+
+#endif

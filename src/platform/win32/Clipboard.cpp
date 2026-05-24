@@ -609,6 +609,10 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
     return payload;
 }
 
+bool IsClipboardDataCurrent(const ClipboardPayload& payload) {
+    return payload.formatId != 0 && g_clipboardHashGuard.IsCurrent(payload);
+}
+
 void SetClipboardData(ClipboardPayload& payload, bool markAsClippOriginated) {
     if (markAsClippOriginated && g_clipboardHashGuard.IsCurrent(payload)) {
         g_logger.log(__FUNCTION__, Logger::Level::Info, L"Clipboard contents already current; not setting clipboard data");

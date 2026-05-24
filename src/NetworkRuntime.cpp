@@ -115,6 +115,11 @@ void NetworkRuntime::OnClipboardReceived(const std::wstring& hostName, const Hos
 #if CLIPP_IOS_CLIPBOARD_RECEIVE_STUB
     CLPIOSReceiveClipboardPayload(hostName, payload);
 #else
+    if (IsClipboardDataCurrent(payload)) {
+        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Ignoring clipboard data from client %ls because the same contents are already current.", hostName.c_str());
+        return;
+    }
+
     g_clipboardActivityStore.AddIncoming(hostName, payload);
     SetClipboardData(payload);
 #endif

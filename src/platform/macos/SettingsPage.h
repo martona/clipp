@@ -4,6 +4,7 @@
 
 @class NSView;
 @class NSButton;
+@class NSSlider;
 @class NSTextField;
 @class MacOSSettingsPageFieldDelegate;
 
@@ -20,6 +21,7 @@ public:
     NSView* FirstKeyView() const;
     void ConnectKeyViewLoop(NSView* nextKeyView);
     void OnFieldEditingEnded(NSTextField* field);
+    void OnHistorySliderChanged();
     void OnResetHostID();
 
 private:
@@ -35,6 +37,9 @@ private:
     void RefreshHostIDDisplay();
     void ResetHostID();
     void RefreshHostIDWarning();
+    void RefreshClipboardHistoryControls();
+    void UpdateClipboardHistoryValueLabels();
+    void ApplyClipboardHistorySettingChange();
 
     NSView* root_ = nullptr;
     NSView* statusContainer_ = nullptr;
@@ -43,11 +48,18 @@ private:
     NSTextField* udpPortField_ = nullptr;
     NSTextField* listenerIpField_ = nullptr;
     NSTextField* multicastIpField_ = nullptr;
+    NSSlider* historyMemorySlider_ = nullptr;
+    NSSlider* historyAgeSlider_ = nullptr;
+    NSSlider* historyItemSlider_ = nullptr;
+    NSTextField* historyMemoryValue_ = nullptr;
+    NSTextField* historyAgeValue_ = nullptr;
+    NSTextField* historyItemValue_ = nullptr;
     NSTextField* hostIDValue_ = nullptr;
     NSTextField* hostIDWarningText_ = nullptr;
     NSButton* resetHostIDButton_ = nullptr;
     NSTextField* statusMessage_ = nullptr;
     MacOSSettingsPageFieldDelegate* fieldDelegate_ = nullptr;
+    bool loadingSettings_ = false;
 };
 
 #endif

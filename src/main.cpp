@@ -488,7 +488,7 @@ int main(int argc, char* argv[]) {
             }
         });
         signalThread.detach();
-        RunMacOSStatusMenu();
+        RunMacOSStatusMenu(!haveNetworkKey);
     #else
         int caughtSignal;
         sigwait(&waitset, &caughtSignal);
