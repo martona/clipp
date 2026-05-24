@@ -580,10 +580,10 @@ private struct ClipboardStreamItem: Identifiable {
             payload = .link(title: host, host: host, url: url)
 
         case .image:
-            guard let imagePNGData = activityItem.imagePNGData else {
+            guard let imageData = activityItem.imageData else {
                 return nil
             }
-            payload = .image(imagePNGData)
+            payload = .image(imageData)
 
         case .unsupported:
             return nil

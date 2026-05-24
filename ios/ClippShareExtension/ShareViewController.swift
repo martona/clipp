@@ -192,6 +192,12 @@ final class ShareViewController: UIViewController {
             return SharePayload.text(text)
         }
 
+        if provider.hasItemConformingToTypeIdentifier(UTType.jpeg.identifier),
+           let data = try? await loadData(from: provider, type: UTType.jpeg),
+           !data.isEmpty {
+            return SharePayload.jpegData(data)
+        }
+
         if provider.hasItemConformingToTypeIdentifier(UTType.png.identifier),
            let data = try? await loadData(from: provider, type: UTType.png),
            !data.isEmpty {
@@ -199,11 +205,18 @@ final class ShareViewController: UIViewController {
         }
 
         if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier),
-           let fileURL = try? await loadURL(from: provider, type: UTType.fileURL),
-           fileURL.pathExtension.lowercased() == "png",
-           let data = try? Data(contentsOf: fileURL, options: [.mappedIfSafe]),
-           !data.isEmpty {
-            return SharePayload.pngData(data)
+           let fileURL = try? await loadURL(from: provider, type: UTType.fileURL) {
+            let pathExtension = fileURL.pathExtension.lowercased()
+            if (pathExtension == "jpg" || pathExtension == "jpeg"),
+               let data = try? Data(contentsOf: fileURL, options: [.mappedIfSafe]),
+               !data.isEmpty {
+                return SharePayload.jpegData(data)
+            }
+            if pathExtension == "png",
+               let data = try? Data(contentsOf: fileURL, options: [.mappedIfSafe]),
+               !data.isEmpty {
+                return SharePayload.pngData(data)
+            }
         }
 
         return nil

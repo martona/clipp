@@ -42,7 +42,8 @@ struct ClipboardActivityDisplayItem {
     std::wstring previewText;
     std::wstring detailText;
     std::wstring linkHost;
-    std::vector<unsigned char> imagePngData;
+    uint32_t imageFormatId{ CLIPP_FORMAT_NONE };
+    std::vector<unsigned char> imageData;
 };
 
 struct ClipboardActivityUpdate {

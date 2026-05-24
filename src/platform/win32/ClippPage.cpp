@@ -64,7 +64,7 @@ std::wstring PayloadKindLabel(ClipboardActivityPayloadKind kind) {
     }
 }
 
-winrt::Windows::UI::Xaml::Media::Imaging::BitmapImage BitmapFromPngBytes(const std::vector<unsigned char>& bytes) {
+winrt::Windows::UI::Xaml::Media::Imaging::BitmapImage BitmapFromImageBytes(const std::vector<unsigned char>& bytes) {
     using namespace winrt::Windows::Storage::Streams;
     using namespace winrt::Windows::UI::Xaml::Media::Imaging;
 
@@ -215,9 +215,9 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t it
     meta.TextWrapping(TextWrapping::WrapWholeWords);
     content.Children().Append(meta);
 
-    if (display->kind == ClipboardActivityPayloadKind::Image && !display->imagePngData.empty()) {
+    if (display->kind == ClipboardActivityPayloadKind::Image && !display->imageData.empty()) {
         Image image;
-        image.Source(BitmapFromPngBytes(display->imagePngData));
+        image.Source(BitmapFromImageBytes(display->imageData));
         image.Stretch(Stretch::Uniform);
         image.MaxWidth(kActivityBubbleMaxWidth - 24);
         image.MaxHeight(260);

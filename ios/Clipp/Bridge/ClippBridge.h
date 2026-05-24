@@ -32,7 +32,8 @@ NS_SWIFT_NAME(ClipboardActivityItem)
 @property(nonatomic, copy, readonly) NSString* detailText;
 @property(nonatomic, copy, readonly) NSString* linkHost;
 @property(nonatomic, copy, nullable, readonly) NSString* text;
-@property(nonatomic, copy, nullable, readonly) NSData* imagePNGData;
+@property(nonatomic, assign, readonly) unsigned int imageFormatID;
+@property(nonatomic, copy, nullable, readonly) NSData* imageData;
 @property(nonatomic, assign, readonly) BOOL hasTextPayload;
 @property(nonatomic, assign, readonly) BOOL hasImagePayload;
 @property(nonatomic, assign, readonly) BOOL isIncoming;
@@ -48,7 +49,8 @@ NS_SWIFT_NAME(ClipboardActivityItem)
                             detailText:(NSString*)detailText
                               linkHost:(NSString*)linkHost
                                   text:(nullable NSString*)text
-                          imagePNGData:(nullable NSData*)imagePNGData NS_DESIGNATED_INITIALIZER;
+                         imageFormatID:(unsigned int)imageFormatID
+                              imageData:(nullable NSData*)imageData NS_DESIGNATED_INITIALIZER;
 - (instancetype)init NS_UNAVAILABLE;
 
 @end

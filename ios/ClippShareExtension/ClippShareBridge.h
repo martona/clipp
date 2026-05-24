@@ -6,6 +6,7 @@ NS_SWIFT_NAME(SharePayloadKind)
 typedef NS_ENUM(NSInteger, CLPSharePayloadKind) {
     CLPSharePayloadKindText = 1,
     CLPSharePayloadKindPNG = 2,
+    CLPSharePayloadKindJPEG = 3,
 };
 
 NS_SWIFT_NAME(SharePayload)
@@ -14,9 +15,11 @@ NS_SWIFT_NAME(SharePayload)
 @property(nonatomic, assign, readonly) CLPSharePayloadKind kind;
 @property(nonatomic, copy, nullable, readonly) NSString* text;
 @property(nonatomic, copy, nullable, readonly) NSData* pngData;
+@property(nonatomic, copy, nullable, readonly) NSData* jpegData;
 
 + (instancetype)textPayloadWithText:(NSString*)text NS_SWIFT_NAME(text(_:));
 + (instancetype)pngPayloadWithData:(NSData*)pngData NS_SWIFT_NAME(pngData(_:));
++ (instancetype)jpegPayloadWithData:(NSData*)jpegData NS_SWIFT_NAME(jpegData(_:));
 - (instancetype)init NS_UNAVAILABLE;
 
 @end

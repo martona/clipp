@@ -293,9 +293,10 @@ std::optional<ClipboardActivityDisplayItem> ClipboardActivityStore::BuildDisplay
             display.kind = ClipboardActivityPayloadKind::Text;
             display.previewText = PreviewText(*text);
         }
-    } else if (payload.formatId == CLIPP_FORMAT_PNG) {
+    } else if (IsClippImageFormat(payload.formatId)) {
         display.kind = ClipboardActivityPayloadKind::Image;
-        display.imagePngData = std::move(payload.rawData);
+        display.imageFormatId = payload.formatId;
+        display.imageData = std::move(payload.rawData);
     } else {
         display.kind = ClipboardActivityPayloadKind::Unsupported;
     }

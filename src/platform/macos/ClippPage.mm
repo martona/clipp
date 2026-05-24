@@ -248,9 +248,9 @@ NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
     NSTextField* meta = MakeActivityLabel(metaText, 12.0, [NSColor secondaryLabelColor]);
     [content addArrangedSubview:meta];
 
-    if (display->kind == ClipboardActivityPayloadKind::Image && !display->imagePngData.empty()) {
-        NSData* data = [NSData dataWithBytes:display->imagePngData.data()
-                                      length:display->imagePngData.size()];
+    if (display->kind == ClipboardActivityPayloadKind::Image && !display->imageData.empty()) {
+        NSData* data = [NSData dataWithBytes:display->imageData.data()
+                                      length:display->imageData.size()];
         NSImage* image = [[NSImage alloc] initWithData:data];
         if (image != nil) {
             NSImageView* imageView = [[NSImageView alloc] initWithFrame:NSZeroRect];

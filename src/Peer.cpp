@@ -471,7 +471,8 @@ void Peer::ThreadProcRecv() {
 
 			if (std::memcmp(packet, "CLIP", 4) == 0) {
 				std::vector<unsigned char> headerMsg;
-				if (!channel.RecvMessage(io, headerMsg) || headerMsg.size() != sizeof(NetworkDefs::ClipboardMessage)) {
+				if (!channel.RecvMessage(io, headerMsg)) {
+					log(__FUNCTION__, Logger::Level::Warning, L"Failed to receive clipboard message header.");
 					break;
 				}
 				ReportTraffic(0, headerMsg.size());
@@ -486,9 +487,24 @@ void Peer::ThreadProcRecv() {
 				payload.uncompressedDataSize = ntohl(clipMessage->uncompressedDataSize);
 				payload.isCompressed = clipMessage->isCompressed != 0;
 				uint32_t payloadDataSize = ntohl(clipMessage->payloadDataSize);
+				log(__FUNCTION__, Logger::Level::Debug, L"Clipboard message header received: format %ls (%u), compressed=%u, payload size=%u bytes, uncompressed size=%u bytes",
+					ClippClipboardFormatNameW(payload.formatId),
+					payload.formatId,
+					payload.isCompressed ? 1u : 0u,
+					payloadDataSize,
+					payload.uncompressedDataSize);
 
-				if (!channel.RecvMessage(io, payload.rawData)) {
-					break;
+				if (payloadDataSize > 0) {
+					if (!channel.RecvMessage(io, payload.rawData)) {
+						log(__FUNCTION__, Logger::Level::Warning, L"Failed to receive clipboard payload body: format %ls (%u), expected payload size=%u bytes",
+							ClippClipboardFormatNameW(payload.formatId),
+							payload.formatId,
+							payloadDataSize);
+						break;
+					}
+				}
+				else {
+					payload.rawData.clear();
 				}
 				ReportTraffic(0, payload.rawData.size());
 

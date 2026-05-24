@@ -15,7 +15,6 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
-#include <cstring>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -75,12 +74,6 @@ std::string ToStdString(NSString* value) {
     return utf8 != nullptr ? std::string(utf8) : std::string{};
 }
 
-bool IsPngData(NSData* data) {
-    static constexpr unsigned char signature[] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n' };
-    return data.length >= sizeof(signature)
-        && std::memcmp(data.bytes, signature, sizeof(signature)) == 0;
-}
-
 bool PayloadFromSharePayload(CLPSharePayload* sharePayload, ClipboardPayload& payload) {
     payload = {};
 
@@ -96,9 +89,21 @@ bool PayloadFromSharePayload(CLPSharePayload* sharePayload, ClipboardPayload& pa
         return payload.ZstdCompress();
     }
 
+    if (sharePayload.kind == CLPSharePayloadKindJPEG) {
+        NSData* jpegData = sharePayload.jpegData;
+        if (jpegData.length == 0) {
+            return false;
+        }
+
+        payload.formatId = CLIPP_FORMAT_JPEG;
+        const auto* bytes = static_cast<const unsigned char*>(jpegData.bytes);
+        payload.rawData.assign(bytes, bytes + jpegData.length);
+        return payload.ZstdCompress();
+    }
+
     if (sharePayload.kind == CLPSharePayloadKindPNG) {
         NSData* pngData = sharePayload.pngData;
-        if (pngData.length == 0 || !IsPngData(pngData)) {
+        if (pngData.length == 0) {
             return false;
         }
 
@@ -191,7 +196,8 @@ bool SendPayloadsToPeer(const MDNSProtocol::DiscoveredPeer& peer, const std::vec
 
 - (instancetype)initWithKind:(CLPSharePayloadKind)kind
                         text:(nullable NSString*)text
-                     pngData:(nullable NSData*)pngData NS_DESIGNATED_INITIALIZER;
+                     pngData:(nullable NSData*)pngData
+                    jpegData:(nullable NSData*)jpegData NS_DESIGNATED_INITIALIZER;
 
 @end
 
@@ -200,25 +206,37 @@ bool SendPayloadsToPeer(const MDNSProtocol::DiscoveredPeer& peer, const std::vec
 + (instancetype)textPayloadWithText:(NSString*)text {
     CLPSharePayload* payload = [[CLPSharePayload alloc] initWithKind:CLPSharePayloadKindText
                                                                 text:text
-                                                             pngData:nil];
+                                                             pngData:nil
+                                                            jpegData:nil];
     return payload;
 }
 
 + (instancetype)pngPayloadWithData:(NSData*)pngData {
     CLPSharePayload* payload = [[CLPSharePayload alloc] initWithKind:CLPSharePayloadKindPNG
                                                                 text:nil
-                                                             pngData:pngData];
+                                                             pngData:pngData
+                                                            jpegData:nil];
+    return payload;
+}
+
++ (instancetype)jpegPayloadWithData:(NSData*)jpegData {
+    CLPSharePayload* payload = [[CLPSharePayload alloc] initWithKind:CLPSharePayloadKindJPEG
+                                                                text:nil
+                                                             pngData:nil
+                                                            jpegData:jpegData];
     return payload;
 }
 
 - (instancetype)initWithKind:(CLPSharePayloadKind)kind
                         text:(NSString*)text
-                     pngData:(NSData*)pngData {
+                     pngData:(NSData*)pngData
+                    jpegData:(NSData*)jpegData {
     self = [super init];
     if (self) {
         _kind = kind;
         _text = [text copy];
         _pngData = [pngData copy];
+        _jpegData = [jpegData copy];
     }
     return self;
 }

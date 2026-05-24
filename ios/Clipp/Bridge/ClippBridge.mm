@@ -20,7 +20,6 @@
 #include <signal.h>
 
 #include <chrono>
-#include <cstring>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -187,11 +186,6 @@ NSString* ToNSString(const std::wstring& value) {
     return text;
 }
 
-bool IsPngStream(const std::vector<unsigned char>& data) {
-    static constexpr unsigned char signature[] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n' };
-    return data.size() >= sizeof(signature) && std::memcmp(data.data(), signature, sizeof(signature)) == 0;
-}
-
 NSString* ClipboardTextFromPayload(const ClipboardPayload& payload) {
     size_t textLength = payload.rawData.size();
     if (textLength > 0 && payload.rawData.back() == '\0') {
@@ -303,6 +297,16 @@ NSData* DataFromBytes(const std::vector<unsigned char>& bytes) {
     return [NSData dataWithBytes:bytes.data() length:bytes.size()];
 }
 
+NSString* PasteboardTypeForClippImageFormat(uint32_t formatId) {
+    if (formatId == CLIPP_FORMAT_JPEG) {
+        return @"public.jpeg";
+    }
+    if (formatId == CLIPP_FORMAT_PNG) {
+        return @"public.png";
+    }
+    return nil;
+}
+
 CLPClipboardActivityItem* MakeClipboardActivityItem(const ClipboardActivityItemHeader& header) {
     const auto display = g_clipboardActivityStore.DisplayItem(header.id);
     if (!display) {
@@ -316,11 +320,12 @@ CLPClipboardActivityItem* MakeClipboardActivityItem(const ClipboardActivityItemH
                                                          timestamp:ToNSDate(display->header.timestamp)
                                                          direction:ToBridgeDirection(display->header.direction)
                                                               kind:ToBridgePayloadKind(display->kind)
-                                                       previewText:ToNSString(display->previewText)
-                                                        detailText:detailText
+                                                      previewText:ToNSString(display->previewText)
+                                                       detailText:detailText
                                                           linkHost:ToNSString(display->linkHost)
                                                               text:detailText
-                                                      imagePNGData:DataFromBytes(display->imagePngData)];
+                                                     imageFormatID:display->imageFormatId
+                                                         imageData:DataFromBytes(display->imageData)];
 }
 
 bool ClipboardPayloadFromPasteboard(ClipboardPayload& payload, NSError** error) {
@@ -346,6 +351,14 @@ bool ClipboardPayloadFromPasteboard(ClipboardPayload& payload, NSError** error) 
         return true;
     }
 
+    NSData* jpegData = [pasteboard dataForPasteboardType:@"public.jpeg"];
+    if (jpegData.length > 0) {
+        payload.formatId = CLIPP_FORMAT_JPEG;
+        const auto* bytes = static_cast<const unsigned char*>(jpegData.bytes);
+        payload.rawData.assign(bytes, bytes + jpegData.length);
+        return true;
+    }
+
     NSData* pngData = [pasteboard dataForPasteboardType:@"public.png"];
     if (pngData.length == 0 && pasteboard.image != nil) {
         pngData = UIImagePNGRepresentation(pasteboard.image);
@@ -355,10 +368,6 @@ bool ClipboardPayloadFromPasteboard(ClipboardPayload& payload, NSError** error) 
         payload.formatId = CLIPP_FORMAT_PNG;
         const auto* bytes = static_cast<const unsigned char*>(pngData.bytes);
         payload.rawData.assign(bytes, bytes + pngData.length);
-        if (!IsPngStream(payload.rawData)) {
-            AssignError(error, kClippOutgoingClipboardErrorBase + 2, @"Clipboard image is not a valid PNG.");
-            return false;
-        }
         return true;
     }
 
@@ -448,11 +457,7 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const Clipboard
                 g_logger.log("iOS", Logger::Level::Warning, L"Incoming text clipboard payload could not be decoded as UTF-8.");
                 return;
             }
-        } else if (payload.formatId == CLIPP_FORMAT_PNG) {
-            if (!IsPngStream(payload.rawData)) {
-                g_logger.log("iOS", Logger::Level::Warning, L"Incoming image clipboard payload was not a PNG stream (%zu bytes).", payload.rawData.size());
-                return;
-            }
+        } else if (IsClippImageFormat(payload.formatId)) {
         } else {
             g_logger.log("iOS", Logger::Level::Warning, L"Unsupported incoming clipboard format %ls (%u); payload ignored.",
                          ClippClipboardFormatNameW(payload.formatId),
@@ -482,7 +487,8 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const Clipboard
                             detailText:(NSString*)detailText
                               linkHost:(NSString*)linkHost
                                   text:(NSString*)text
-                          imagePNGData:(NSData*)imagePNGData {
+                         imageFormatID:(unsigned int)imageFormatID
+                              imageData:(NSData*)imageData {
     self = [super init];
     if (self) {
         _activityItemID = activityItemID;
@@ -495,7 +501,8 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const Clipboard
         _detailText = [detailText copy];
         _linkHost = [linkHost copy];
         _text = [text copy];
-        _imagePNGData = [imagePNGData copy];
+        _imageFormatID = imageFormatID;
+        _imageData = [imageData copy];
     }
     return self;
 }
@@ -508,7 +515,7 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const Clipboard
 }
 
 - (BOOL)hasImagePayload {
-    return self.kind == CLPClipboardPayloadKindImage && self.imagePNGData.length > 0;
+    return self.kind == CLPClipboardPayloadKindImage && self.imageData.length > 0;
 }
 
 - (BOOL)isIncoming {
@@ -566,14 +573,15 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const Clipboard
     }
 
     if (item.hasImagePayload) {
-        UIImage* image = [UIImage imageWithData:item.imagePNGData];
-        if (image == nil) {
-            AssignError(error, kClippClipboardActivityErrorBase + 4, @"Unable to decode clipboard image.");
+        NSString* pasteboardType = PasteboardTypeForClippImageFormat(payload->formatId);
+        NSData* imageData = DataFromBytes(payload->rawData);
+        if (pasteboardType == nil || imageData.length == 0) {
+            AssignError(error, kClippClipboardActivityErrorBase + 4, @"Unable to copy clipboard image.");
             return NO;
         }
 
-        [UIPasteboard.generalPasteboard setData:item.imagePNGData
-                              forPasteboardType:@"public.png"];
+        [UIPasteboard.generalPasteboard setData:imageData
+                              forPasteboardType:pasteboardType];
         g_clipboardHashGuard.RememberCurrent(*payload);
         return YES;
     }
@@ -612,7 +620,7 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const Clipboard
         return nil;
     }
 
-    if (payload.formatId != CLIPP_FORMAT_UTF8 && payload.formatId != CLIPP_FORMAT_PNG) {
+    if (payload.formatId != CLIPP_FORMAT_UTF8 && !IsClippImageFormat(payload.formatId)) {
         AssignError(error, kClippOutgoingClipboardErrorBase + 6, @"Unsupported clipboard data.");
         return nil;
     }

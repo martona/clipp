@@ -6,7 +6,6 @@
 #include <atomic>
 #include <chrono>
 #include <future>
-#include <cstring>
 #include "ClipboardHashGuard.h"
 
 static std::thread g_clipboardThread;
@@ -15,11 +14,6 @@ static std::atomic<NSInteger> g_lastChangeCount{0};
 static ClipboardHashGuard g_clipboardHashGuard;
 
 static ClipboardCallback g_clipboardCallback = nullptr;
-
-static bool IsPngStream(const std::vector<unsigned char>& data) {
-    static constexpr unsigned char signature[] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n' };
-    return data.size() >= sizeof(signature) && std::memcmp(data.data(), signature, sizeof(signature)) == 0;
-}
 
 PlatformWindowHandle CreateClipboardNotificationWindow(ClipboardCallback cb) {
     g_clipboardCallback = cb;
@@ -88,23 +82,22 @@ ClipboardPayload ReadClipboardData(PlatformWindowHandle hwnd) {
             }
         }
 
-        // Try to read PNG image data. Network image payloads are already PNG,
-        // and macOS exposes PNG pasteboard data as public.png.
-        NSData* pngData = nil;
         if (payload.formatId == CLIPP_FORMAT_NONE) {
-            pngData = [pb dataForType:NSPasteboardTypePNG];
-        }
-        if (pngData) {
-            payload.formatId = CLIPP_FORMAT_PNG;
-            const unsigned char* bytes = static_cast<const unsigned char*>([pngData bytes]);
-            payload.rawData.assign(bytes, bytes + [pngData length]);
-            if (IsPngStream(payload.rawData)) {
-                g_logger.log(__FUNCTION__, Logger::Level::Info, L"Read PNG image from system clipboard (PNG payload: %zu bytes)", payload.rawData.size());
+            NSData* imageData = [pb dataForType:@"public.jpeg"];
+            if (imageData != nil && [imageData length] > 0) {
+                payload.formatId = CLIPP_FORMAT_JPEG;
+                const unsigned char* bytes = static_cast<const unsigned char*>([imageData bytes]);
+                payload.rawData.assign(bytes, bytes + [imageData length]);
+                g_logger.log(__FUNCTION__, Logger::Level::Info, L"Read JPEG image from system clipboard (JPEG payload: %zu bytes)", payload.rawData.size());
             }
             else {
-                g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Ignoring PNG pasteboard data with invalid PNG signature (%zu bytes)", payload.rawData.size());
-                payload.formatId = CLIPP_FORMAT_NONE;
-                payload.rawData.clear();
+                imageData = [pb dataForType:NSPasteboardTypePNG];
+                if (imageData != nil && [imageData length] > 0) {
+                    payload.formatId = CLIPP_FORMAT_PNG;
+                    const unsigned char* bytes = static_cast<const unsigned char*>([imageData bytes]);
+                    payload.rawData.assign(bytes, bytes + [imageData length]);
+                    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Read PNG image from system clipboard (PNG payload: %zu bytes)", payload.rawData.size());
+                }
             }
         }
     }
@@ -152,16 +145,14 @@ void SetClipboardData(
             if (str) {
                 wroteClipboard = [pb setString:str forType:NSPasteboardTypeString];
             }
-        } else if (payload.formatId == CLIPP_FORMAT_PNG) {
-            if (!IsPngStream(payload.rawData)) {
-                g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Refusing to write invalid PNG image payload to system clipboard (%zu bytes)", payload.rawData.size());
-            }
-            else {
-                NSData* pngData = [NSData dataWithBytes:payload.rawData.data() length:payload.rawData.size()];
-                wroteClipboard = [pb setData:pngData forType:NSPasteboardTypePNG];
-                if (wroteClipboard) {
-                    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Wrote PNG image to system clipboard (PNG payload: %zu bytes)", payload.rawData.size());
-                }
+        } else if (IsClippImageFormat(payload.formatId)) {
+            NSString* pasteboardType = payload.formatId == CLIPP_FORMAT_JPEG ? @"public.jpeg" : NSPasteboardTypePNG;
+            NSData* imageData = [NSData dataWithBytes:payload.rawData.data() length:payload.rawData.size()];
+            wroteClipboard = [pb setData:imageData forType:pasteboardType];
+            if (wroteClipboard) {
+                g_logger.log(__FUNCTION__, Logger::Level::Info, L"Wrote %ls image to system clipboard (payload: %zu bytes)",
+                             ClippClipboardFormatNameW(payload.formatId),
+                             payload.rawData.size());
             }
         }
         else {

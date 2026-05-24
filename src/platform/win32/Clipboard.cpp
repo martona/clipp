@@ -382,8 +382,9 @@ static bool WicEncodePngFromRgba(
     return true;
 }
 
-static bool WicDecodePngToBgra(
-    const std::vector<unsigned char>& pngData,
+static bool WicDecodeImageToBgra(
+    const std::vector<unsigned char>& imageData,
+    uint32_t formatId,
     std::vector<unsigned char>& bgra,
     UINT& width,
     UINT& height) {
@@ -391,14 +392,16 @@ static bool WicDecodePngToBgra(
     width = 0;
     height = 0;
 
-    if (pngData.empty() || pngData.size() > (std::numeric_limits<DWORD>::max)()) {
-        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot decode clipboard PNG with WIC: invalid payload size (%zu bytes)", pngData.size());
+    if (imageData.empty() || imageData.size() > (std::numeric_limits<DWORD>::max)()) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot decode clipboard image with WIC: invalid %ls payload size (%zu bytes)",
+            ClippClipboardFormatNameW(formatId),
+            imageData.size());
         return false;
     }
 
     ScopedComInitializer com;
     if (!com.Ok()) {
-        LogHResult(__FUNCTION__, L"Cannot initialize COM for WIC PNG decoding", com.Result());
+        LogHResult(__FUNCTION__, L"Cannot initialize COM for WIC image decoding", com.Result());
         return false;
     }
 
@@ -409,22 +412,22 @@ static bool WicDecodePngToBgra(
         CLSCTX_INPROC_SERVER,
         IID_PPV_ARGS(factory.GetAddressOf()));
     if (FAILED(hr)) {
-        LogHResult(__FUNCTION__, L"Failed to create WIC imaging factory for PNG decoding", hr);
+        LogHResult(__FUNCTION__, L"Failed to create WIC imaging factory for image decoding", hr);
         return false;
     }
 
     Microsoft::WRL::ComPtr<IWICStream> stream;
     hr = factory->CreateStream(stream.GetAddressOf());
     if (FAILED(hr)) {
-        LogHResult(__FUNCTION__, L"Failed to create WIC PNG input stream", hr);
+        LogHResult(__FUNCTION__, L"Failed to create WIC image input stream", hr);
         return false;
     }
 
     hr = stream->InitializeFromMemory(
-        const_cast<BYTE*>(reinterpret_cast<const BYTE*>(pngData.data())),
-        static_cast<DWORD>(pngData.size()));
+        const_cast<BYTE*>(reinterpret_cast<const BYTE*>(imageData.data())),
+        static_cast<DWORD>(imageData.size()));
     if (FAILED(hr)) {
-        LogHResult(__FUNCTION__, L"Failed to initialize WIC PNG input stream", hr);
+        LogHResult(__FUNCTION__, L"Failed to initialize WIC image input stream", hr);
         return false;
     }
 
@@ -435,24 +438,27 @@ static bool WicDecodePngToBgra(
         WICDecodeMetadataCacheOnLoad,
         decoder.GetAddressOf());
     if (FAILED(hr)) {
-        LogHResult(__FUNCTION__, L"Failed to create WIC PNG decoder", hr);
+        LogHResult(__FUNCTION__, L"Failed to create WIC image decoder", hr);
         return false;
     }
 
     Microsoft::WRL::ComPtr<IWICBitmapFrameDecode> frame;
     hr = decoder->GetFrame(0, frame.GetAddressOf());
     if (FAILED(hr)) {
-        LogHResult(__FUNCTION__, L"Failed to read WIC PNG frame", hr);
+        LogHResult(__FUNCTION__, L"Failed to read WIC image frame", hr);
         return false;
     }
 
     hr = frame->GetSize(&width, &height);
     if (FAILED(hr)) {
-        LogHResult(__FUNCTION__, L"Failed to read WIC PNG dimensions", hr);
+        LogHResult(__FUNCTION__, L"Failed to read WIC image dimensions", hr);
         return false;
     }
     if (width == 0 || height == 0) {
-        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot decode clipboard PNG with WIC: decoded image has invalid dimensions (%u x %u)", width, height);
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot decode clipboard image with WIC: decoded %ls has invalid dimensions (%u x %u)",
+            ClippClipboardFormatNameW(formatId),
+            width,
+            height);
         return false;
     }
 
@@ -462,14 +468,14 @@ static bool WicDecodePngToBgra(
         !CheckedMulSize(rowStride, height, pixelBytes) ||
         rowStride > (std::numeric_limits<UINT>::max)() ||
         pixelBytes > (std::numeric_limits<UINT>::max)()) {
-        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot decode clipboard PNG with WIC: BGRA buffer size is too large (%u x %u)", width, height);
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot decode clipboard image with WIC: BGRA buffer size is too large (%u x %u)", width, height);
         return false;
     }
 
     Microsoft::WRL::ComPtr<IWICFormatConverter> converter;
     hr = factory->CreateFormatConverter(converter.GetAddressOf());
     if (FAILED(hr)) {
-        LogHResult(__FUNCTION__, L"Failed to create WIC PNG decode format converter", hr);
+        LogHResult(__FUNCTION__, L"Failed to create WIC image decode format converter", hr);
         return false;
     }
 
@@ -481,7 +487,7 @@ static bool WicDecodePngToBgra(
         0.0,
         WICBitmapPaletteTypeCustom);
     if (FAILED(hr)) {
-        LogHResult(__FUNCTION__, L"Failed to initialize WIC PNG decode format converter", hr);
+        LogHResult(__FUNCTION__, L"Failed to initialize WIC image decode format converter", hr);
         return false;
     }
 
@@ -492,12 +498,17 @@ static bool WicDecodePngToBgra(
         static_cast<UINT>(pixelBytes),
         bgra.data());
     if (FAILED(hr)) {
-        LogHResult(__FUNCTION__, L"Failed to copy WIC PNG pixels as BGRA", hr);
+        LogHResult(__FUNCTION__, L"Failed to copy WIC image pixels as BGRA", hr);
         bgra.clear();
         return false;
     }
 
-    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"WIC decoded clipboard PNG as BGRA (%u x %u, PNG: %zu bytes, pixels: %zu bytes)", width, height, pngData.size(), bgra.size());
+    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"WIC decoded clipboard %ls as BGRA (%u x %u, encoded: %zu bytes, pixels: %zu bytes)",
+        ClippClipboardFormatNameW(formatId),
+        width,
+        height,
+        imageData.size(),
+        bgra.size());
     return true;
 }
 
@@ -697,20 +708,16 @@ static bool DIBToPNG(const unsigned char* dibData, size_t dibSize, std::vector<u
     return true;
 }
 
-static bool PNGToDIB(const std::vector<unsigned char>& pngData, std::vector<unsigned char>& dibData) {
+static bool EncodedImageToDIB(const std::vector<unsigned char>& imageData, uint32_t formatId, std::vector<unsigned char>& dibData) {
     dibData.clear();
-    if (!IsPngStream(pngData)) {
-        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot decode clipboard image payload: payload is not a PNG stream (%zu bytes)", pngData.size());
-        return false;
-    }
 
     std::vector<unsigned char> bgra;
     UINT width = 0;
     UINT height = 0;
     {
-        ScopedTimer timer(L"Clipboard PNG to BGRA decode (WIC)");
-        if (!WicDecodePngToBgra(pngData, bgra, width, height)) {
-            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to decode PNG clipboard image with WIC");
+        ScopedTimer timer(L"Clipboard encoded image to BGRA decode (WIC)");
+        if (!WicDecodeImageToBgra(imageData, formatId, bgra, width, height)) {
+            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to decode %ls clipboard image with WIC", ClippClipboardFormatNameW(formatId));
             return false;
         }
     }
@@ -718,29 +725,29 @@ static bool PNGToDIB(const std::vector<unsigned char>& pngData, std::vector<unsi
     size_t rowBytes = 0;
     size_t pixelBytes = 0;
     if (!CheckedMulSize(width, 4u, rowBytes) || !CheckedMulSize(rowBytes, height, pixelBytes)) {
-        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot decode PNG clipboard image: BGRA buffer size overflow (%u x %u)", width, height);
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot decode clipboard image: BGRA buffer size overflow (%u x %u)", width, height);
         return false;
     }
 
     if (width == 0 || height == 0) {
-        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot decode PNG clipboard image: decoded image has invalid dimensions (%u x %u)", width, height);
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot decode clipboard image: decoded image has invalid dimensions (%u x %u)", width, height);
         return false;
     }
     if (width > static_cast<unsigned>((std::numeric_limits<LONG>::max)()) ||
         height > static_cast<unsigned>((std::numeric_limits<LONG>::max)())) {
-        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot decode PNG clipboard image: dimensions are too large for DIB (%u x %u)", width, height);
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot decode clipboard image: dimensions are too large for DIB (%u x %u)", width, height);
         return false;
     }
 
     if (bgra.size() != pixelBytes) {
-        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot decode PNG clipboard image: decoded BGRA size mismatch (expected=%zu, actual=%zu)", pixelBytes, bgra.size());
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot decode clipboard image: decoded BGRA size mismatch (expected=%zu, actual=%zu)", pixelBytes, bgra.size());
         return false;
     }
 
     const size_t headerBytes = sizeof(BITMAPV5HEADER);
     size_t dibBytes = 0;
     if (pixelBytes > (std::numeric_limits<size_t>::max)() - headerBytes) {
-        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot decode PNG clipboard image: DIB buffer size overflow (%u x %u)", width, height);
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot decode clipboard image: DIB buffer size overflow (%u x %u)", width, height);
         return false;
     }
     dibBytes = headerBytes + pixelBytes;
@@ -841,7 +848,7 @@ static bool RenderDelayedClipboardFormat(UINT format) {
     }
 
     ClipboardPayload payload = *renderPayload;
-    if (payload.formatId != CLIPP_FORMAT_PNG) {
+    if (!IsClippImageFormat(payload.formatId)) {
         g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Ignoring delayed CF_DIB render request because retained payload format is %ls (%u).",
             ClippClipboardFormatNameW(payload.formatId),
             payload.formatId);
@@ -849,16 +856,18 @@ static bool RenderDelayedClipboardFormat(UINT format) {
     }
 
     if (!payload.ZstdDecompress()) {
-        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Delayed clipboard PNG payload could not be decompressed.");
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Delayed clipboard image payload could not be decompressed.");
         return false;
     }
 
     std::vector<unsigned char> dibData;
     {
-        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Rendering delayed CF_DIB from PNG payload (%zu bytes).", payload.rawData.size());
-        ScopedTimer timer(L"Delayed clipboard PNG to CF_DIB rendering");
-        if (!PNGToDIB(payload.rawData, dibData)) {
-            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to render delayed PNG clipboard payload as CF_DIB.");
+        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Rendering delayed CF_DIB from %ls payload (%zu bytes).",
+            ClippClipboardFormatNameW(payload.formatId),
+            payload.rawData.size());
+        ScopedTimer timer(L"Delayed clipboard image to CF_DIB rendering");
+        if (!EncodedImageToDIB(payload.rawData, payload.formatId, dibData)) {
+            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to render delayed %ls clipboard payload as CF_DIB.", ClippClipboardFormatNameW(payload.formatId));
             return false;
         }
     }
@@ -874,7 +883,10 @@ static bool RenderDelayedClipboardFormat(UINT format) {
         return false;
     }
 
-    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Rendered delayed CF_DIB clipboard data from PNG payload (PNG: %zu bytes, DIB: %zu bytes)", payload.rawData.size(), dibData.size());
+    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Rendered delayed CF_DIB clipboard data from %ls payload (encoded: %zu bytes, DIB: %zu bytes)",
+        ClippClipboardFormatNameW(payload.formatId),
+        payload.rawData.size(),
+        dibData.size());
     return true;
 }
 
@@ -1152,30 +1164,29 @@ void SetClipboardData(
                     LogLastError(__FUNCTION__, L"Failed to measure UTF-8 payload as CF_UNICODETEXT");
                 }
             }
-            else if (payload.formatId == CLIPP_FORMAT_PNG) {
-                if (!IsPngStream(payload.rawData)) {
-                    g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Refusing to advertise delayed CF_DIB for invalid PNG payload (%zu bytes)", payload.rawData.size());
+            else if (IsClippImageFormat(payload.formatId)) {
+                g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Preparing delayed CF_DIB clipboard rendering for %ls payload (%zu bytes).",
+                    ClippClipboardFormatNameW(payload.formatId),
+                    payload.rawData.size());
+                auto renderPayload = MakeDelayedClipboardRenderPayload(payload, std::move(delayedRenderPayloadReference));
+                if (!renderPayload) {
+                    g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to retain delayed CF_DIB render payload.");
                 }
                 else {
-                    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Preparing delayed CF_DIB clipboard rendering for PNG payload (%zu bytes).", payload.rawData.size());
-                    auto renderPayload = MakeDelayedClipboardRenderPayload(payload, std::move(delayedRenderPayloadReference));
-                    if (!renderPayload) {
-                        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to retain delayed CF_DIB render payload.");
+                    SetDelayedClipboardRenderState(std::move(renderPayload));
+
+                    SetLastError(ERROR_SUCCESS);
+                    HANDLE delayedHandle = ::SetClipboardData(CF_DIB, nullptr);
+                    const DWORD delayedError = GetLastError();
+                    if (delayedHandle != nullptr || delayedError == ERROR_SUCCESS) {
+                        wroteClipboard = true;
+                        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Advertised delayed CF_DIB clipboard rendering from %ls payload (encoded: %zu bytes)",
+                            ClippClipboardFormatNameW(payload.formatId),
+                            payload.rawData.size());
                     }
                     else {
-                        SetDelayedClipboardRenderState(std::move(renderPayload));
-
-                        SetLastError(ERROR_SUCCESS);
-                        HANDLE delayedHandle = ::SetClipboardData(CF_DIB, nullptr);
-                        const DWORD delayedError = GetLastError();
-                        if (delayedHandle != nullptr || delayedError == ERROR_SUCCESS) {
-                            wroteClipboard = true;
-                            g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Advertised delayed CF_DIB clipboard rendering from PNG payload (PNG: %zu bytes)", payload.rawData.size());
-                        }
-                        else {
-                            ClearDelayedClipboardRenderState();
-                            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to advertise delayed CF_DIB clipboard rendering (GetLastError=%lu)", delayedError);
-                        }
+                        ClearDelayedClipboardRenderState();
+                        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to advertise delayed CF_DIB clipboard rendering (GetLastError=%lu)", delayedError);
                     }
                 }
             }
