@@ -42,7 +42,7 @@ struct ContentView: View {
                                 )
                             }
                         } else {
-                            EmptyIncomingClipboardView()
+                            EmptyClipboardActivityView()
                                 .padding(.top, 64)
                         }
                     }
@@ -119,7 +119,7 @@ struct ContentView: View {
                 await pollNetworkTraffic()
             }
             .task {
-                await observeIncomingClipboard()
+                await observeClipboardActivity()
             }
         }
     }
@@ -194,12 +194,12 @@ struct ContentView: View {
         )
     }
 
-    private func observeIncomingClipboard() async {
-        clipboardStream.refreshIncoming()
+    private func observeClipboardActivity() async {
+        clipboardStream.refreshActivity()
 
-        let name = Notification.Name(IncomingClipboardBridge.didChangeNotificationName())
+        let name = Notification.Name(ClipboardActivityBridge.didChangeNotificationName())
         for await _ in NotificationCenter.default.notifications(named: name) {
-            clipboardStream.refreshIncoming()
+            clipboardStream.refreshActivity()
         }
     }
 }
@@ -212,18 +212,11 @@ private enum OutgoingSendState: Sendable {
 
 @MainActor
 private final class ClipboardStreamViewModel: ObservableObject {
-    @Published var incomingItems: [ClipboardStreamItem] = []
-    @Published var outgoingItems: [ClipboardStreamItem] = []
+    @Published var items: [ClipboardStreamItem] = []
     @Published var copiedItemID: String?
     @Published var copyErrorMessage: String?
     @Published var sendState: OutgoingSendState = .idle
     @Published var sendErrorMessage: String?
-
-    var items: [ClipboardStreamItem] {
-        (incomingItems + outgoingItems).sorted { lhs, rhs in
-            lhs.timestamp > rhs.timestamp
-        }
-    }
 
     var copyErrorIsPresented: Binding<Bool> {
         Binding(
@@ -247,18 +240,21 @@ private final class ClipboardStreamViewModel: ObservableObject {
         )
     }
 
-    func refreshIncoming() {
-        incomingItems = IncomingClipboardBridge.recentItems()
-            .compactMap(ClipboardStreamItem.init(incomingItem:))
+    func refreshActivity() {
+        items = ClipboardActivityBridge.recentItems()
+            .compactMap(ClipboardStreamItem.init(activityItem:))
+            .sorted { lhs, rhs in
+                lhs.timestamp > rhs.timestamp
+            }
     }
 
     func copy(_ item: ClipboardStreamItem) {
-        guard let sourceItem = item.incomingSourceItem else {
+        guard let sourceItem = item.activitySourceItem else {
             return
         }
 
         do {
-            try IncomingClipboardBridge.copy(sourceItem)
+            try ClipboardActivityBridge.copy(sourceItem)
             copiedItemID = item.id
 
             Task {
@@ -281,8 +277,8 @@ private final class ClipboardStreamViewModel: ObservableObject {
 
         sendState = .sending
         do {
-            let sentItem = try OutgoingClipboardBridge.sendCurrentPasteboard()
-            outgoingItems.insert(ClipboardStreamItem(outgoingItem: sentItem), at: 0)
+            _ = try OutgoingClipboardBridge.sendCurrentPasteboard()
+            refreshActivity()
             sendState = .sent
 
             Task {
@@ -533,7 +529,7 @@ private enum ClipboardPayload {
     case image(Data)
 }
 
-private enum ClipboardDirection {
+private enum StreamDirection {
     case incoming
     case outgoing
 }
@@ -542,9 +538,9 @@ private struct ClipboardStreamItem: Identifiable {
     let id: String
     let deviceName: String
     let timestamp: Date
-    let direction: ClipboardDirection
+    let direction: StreamDirection
     let payload: ClipboardPayload
-    let incomingSourceItem: IncomingClipboardItem?
+    let activitySourceItem: ClipboardActivityItem?
 
     var time: String {
         timestamp.formatted(date: .omitted, time: .shortened)
@@ -566,68 +562,49 @@ private struct ClipboardStreamItem: Identifiable {
         direction == .outgoing ? .trailing : .leading
     }
 
-    init?(incomingItem: IncomingClipboardItem) {
-        if incomingItem.hasImagePayload, let imagePNGData = incomingItem.imagePNGData {
+    init?(activityItem: ClipboardActivityItem) {
+        switch activityItem.kind {
+        case .text:
+            let text = activityItem.detailText.isEmpty ? activityItem.previewText : activityItem.detailText
+            payload = .text(text)
+
+        case .privateText:
+            let text = activityItem.detailText.isEmpty ? activityItem.previewText : activityItem.detailText
+            payload = .privateText(text)
+
+        case .link:
+            let url = activityItem.detailText.isEmpty ? activityItem.previewText : activityItem.detailText
+            let host = activityItem.linkHost.isEmpty ? activityItem.previewText : activityItem.linkHost
+            payload = .link(title: host, host: host, url: url)
+
+        case .image:
+            guard let imagePNGData = activityItem.imagePNGData else {
+                return nil
+            }
             payload = .image(imagePNGData)
-        } else if incomingItem.hasTextPayload, let text = incomingItem.text {
-            payload = Self.classify(text: text)
-        } else {
+
+        case .unsupported:
+            return nil
+
+        @unknown default:
             return nil
         }
 
-        id = incomingItem.identifier
-        deviceName = incomingItem.deviceName
-        timestamp = incomingItem.receivedAt
-        direction = .incoming
-        incomingSourceItem = incomingItem
-    }
-
-    init(outgoingItem: OutgoingClipboardItem) {
-        if outgoingItem.hasImagePayload, let imagePNGData = outgoingItem.imagePNGData {
-            payload = .image(imagePNGData)
-        } else if outgoingItem.hasTextPayload, let text = outgoingItem.text {
-            payload = Self.classify(text: text)
+        id = activityItem.identifier
+        if !activityItem.deviceName.isEmpty {
+            deviceName = activityItem.deviceName
+        } else if activityItem.isOutgoing {
+            deviceName = "This iPhone"
         } else {
-            payload = .text("")
+            deviceName = "Unknown device"
         }
-
-        id = outgoingItem.identifier
-        deviceName = "This iPhone"
-        timestamp = outgoingItem.sentAt
-        direction = .outgoing
-        incomingSourceItem = nil
-    }
-
-    private static func classify(text: String) -> ClipboardPayload {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let url = URL(string: trimmed),
-           let scheme = url.scheme?.lowercased(),
-           (scheme == "http" || scheme == "https"),
-           let host = url.host(percentEncoded: false) {
-            return .link(title: host, host: host, url: trimmed)
-        }
-
-        if text.contains("\n") || text.contains("\r") {
-            return .text(text)
-        }
-
-        if looksPrivate(text: trimmed) {
-            return .privateText(text)
-        }
-
-        return .text(text)
-    }
-
-    private static func looksPrivate(text: String) -> Bool {
-        guard text.count >= 8 && text.count <= 256 else {
-            return false
-        }
-
-        return text.rangeOfCharacter(from: .whitespacesAndNewlines) == nil
+        timestamp = activityItem.timestamp
+        direction = activityItem.isOutgoing ? .outgoing : .incoming
+        activitySourceItem = activityItem
     }
 }
 
-private struct EmptyIncomingClipboardView: View {
+private struct EmptyClipboardActivityView: View {
     var body: some View {
         VStack(spacing: 12) {
             Image(systemName: "tray")
@@ -635,10 +612,10 @@ private struct EmptyIncomingClipboardView: View {
                 .foregroundStyle(.secondary)
 
             VStack(spacing: 4) {
-                Text("No incoming clipboard yet")
+                Text("No clipboard activity yet")
                     .font(.headline)
 
-                Text("New clipboard items from trusted devices will appear here.")
+                Text("Recent clipboard items will appear here for reference.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

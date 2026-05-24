@@ -6,67 +6,67 @@ NS_ASSUME_NONNULL_BEGIN
 
 NS_SWIFT_NAME(ClipboardPayloadKind)
 typedef NS_ENUM(NSInteger, CLPClipboardPayloadKind) {
+    CLPClipboardPayloadKindUnsupported = 0,
     CLPClipboardPayloadKindText = 1,
-    CLPClipboardPayloadKindImage = 2,
+    CLPClipboardPayloadKindPrivateText = 2,
+    CLPClipboardPayloadKindLink = 3,
+    CLPClipboardPayloadKindImage = 4,
 };
 
-NS_SWIFT_NAME(IncomingClipboardItem)
-@interface CLPIncomingClipboardItem : NSObject
+NS_SWIFT_NAME(ClipboardDirection)
+typedef NS_ENUM(NSInteger, CLPClipboardDirection) {
+    CLPClipboardDirectionIncoming = 1,
+    CLPClipboardDirectionOutgoing = 2,
+};
+
+NS_SWIFT_NAME(ClipboardActivityItem)
+@interface CLPClipboardActivityItem : NSObject
 
 @property(nonatomic, copy, readonly) NSString* identifier;
+@property(nonatomic, assign, readonly) unsigned long long activityItemID;
 @property(nonatomic, copy, readonly) NSString* deviceName;
-@property(nonatomic, copy, readonly) NSDate* receivedAt;
+@property(nonatomic, copy, readonly) NSDate* timestamp;
+@property(nonatomic, assign, readonly) CLPClipboardDirection direction;
 @property(nonatomic, assign, readonly) CLPClipboardPayloadKind kind;
+@property(nonatomic, copy, readonly) NSString* previewText;
+@property(nonatomic, copy, readonly) NSString* detailText;
+@property(nonatomic, copy, readonly) NSString* linkHost;
 @property(nonatomic, copy, nullable, readonly) NSString* text;
 @property(nonatomic, copy, nullable, readonly) NSData* imagePNGData;
 @property(nonatomic, assign, readonly) BOOL hasTextPayload;
 @property(nonatomic, assign, readonly) BOOL hasImagePayload;
+@property(nonatomic, assign, readonly) BOOL isIncoming;
+@property(nonatomic, assign, readonly) BOOL isOutgoing;
 
-- (instancetype)initWithIdentifier:(NSString*)identifier
-                        deviceName:(NSString*)deviceName
-                        receivedAt:(NSDate*)receivedAt
-                              kind:(CLPClipboardPayloadKind)kind
-                              text:(nullable NSString*)text
-                      imagePNGData:(nullable NSData*)imagePNGData NS_DESIGNATED_INITIALIZER;
+- (instancetype)initWithActivityItemID:(unsigned long long)activityItemID
+                            identifier:(NSString*)identifier
+                            deviceName:(NSString*)deviceName
+                             timestamp:(NSDate*)timestamp
+                             direction:(CLPClipboardDirection)direction
+                                  kind:(CLPClipboardPayloadKind)kind
+                           previewText:(NSString*)previewText
+                            detailText:(NSString*)detailText
+                              linkHost:(NSString*)linkHost
+                                  text:(nullable NSString*)text
+                          imagePNGData:(nullable NSData*)imagePNGData NS_DESIGNATED_INITIALIZER;
 - (instancetype)init NS_UNAVAILABLE;
 
 @end
 
-NS_SWIFT_NAME(IncomingClipboardBridge)
-@interface CLPIncomingClipboardBridge : NSObject
+NS_SWIFT_NAME(ClipboardActivityBridge)
+@interface CLPClipboardActivityBridge : NSObject
 
 + (NSString*)didChangeNotificationName;
-+ (nullable CLPIncomingClipboardItem*)latestItem;
-+ (NSArray<CLPIncomingClipboardItem*>*)recentItems NS_SWIFT_NAME(recentItems());
-+ (BOOL)copyItem:(CLPIncomingClipboardItem*)item
++ (NSArray<CLPClipboardActivityItem*>*)recentItems NS_SWIFT_NAME(recentItems());
++ (BOOL)copyItem:(CLPClipboardActivityItem*)item
            error:(NSError**)error NS_SWIFT_NAME(copy(_:));
-
-@end
-
-NS_SWIFT_NAME(OutgoingClipboardItem)
-@interface CLPOutgoingClipboardItem : NSObject
-
-@property(nonatomic, copy, readonly) NSString* identifier;
-@property(nonatomic, copy, readonly) NSDate* sentAt;
-@property(nonatomic, assign, readonly) CLPClipboardPayloadKind kind;
-@property(nonatomic, copy, nullable, readonly) NSString* text;
-@property(nonatomic, copy, nullable, readonly) NSData* imagePNGData;
-@property(nonatomic, assign, readonly) BOOL hasTextPayload;
-@property(nonatomic, assign, readonly) BOOL hasImagePayload;
-
-- (instancetype)initWithIdentifier:(NSString*)identifier
-                            sentAt:(NSDate*)sentAt
-                              kind:(CLPClipboardPayloadKind)kind
-                              text:(nullable NSString*)text
-                      imagePNGData:(nullable NSData*)imagePNGData NS_DESIGNATED_INITIALIZER;
-- (instancetype)init NS_UNAVAILABLE;
 
 @end
 
 NS_SWIFT_NAME(OutgoingClipboardBridge)
 @interface CLPOutgoingClipboardBridge : NSObject
 
-+ (nullable CLPOutgoingClipboardItem*)sendCurrentPasteboardWithError:(NSError**)error NS_SWIFT_NAME(sendCurrentPasteboard());
++ (nullable CLPClipboardActivityItem*)sendCurrentPasteboardWithError:(NSError**)error NS_SWIFT_NAME(sendCurrentPasteboard());
 
 @end
 

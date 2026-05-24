@@ -2,6 +2,7 @@
 
 #import <UIKit/UIKit.h>
 
+#include "../../../src/ClipboardActivityStore.h"
 #include "../../../src/ClipboardData.h"
 #include "../../../src/ClipboardHashGuard.h"
 #include "../../../src/KeyManager.h"
@@ -16,10 +17,13 @@
 #include <sodium.h>
 #include <signal.h>
 
+#include <chrono>
 #include <cstring>
 #include <memory>
 #include <mutex>
 #include <string>
+
+#include "../../../src/ClipboardActivityStore.cpp"
 
 extern Settings g_settings;
 extern KeyManager g_keyManager;
@@ -30,15 +34,14 @@ extern NetworkRuntime g_networkRuntime;
 namespace {
 constexpr NSInteger kClippNetworkKeyErrorBase = 4100;
 constexpr NSInteger kClippNetworkRuntimeErrorBase = 4200;
-constexpr NSInteger kClippIncomingClipboardErrorBase = 4300;
+constexpr NSInteger kClippClipboardActivityErrorBase = 4300;
 constexpr NSInteger kClippOutgoingClipboardErrorBase = 4400;
-constexpr NSUInteger kMaxIncomingClipboardItems = 50;
-NSString* const kIncomingClipboardDidChangeNotification = @"net.clipp.ios.incoming-clipboard-did-change";
+NSString* const kClipboardActivityDidChangeNotification = @"net.clipp.ios.clipboard-activity-did-change";
 std::mutex g_runtimeBridgeMutex;
 bool g_runtimeBridgeStarted = false;
-std::mutex g_incomingClipboardMutex;
-__strong CLPIncomingClipboardItem* g_latestIncomingClipboardItem = nil;
-__strong NSMutableArray<CLPIncomingClipboardItem*>* g_incomingClipboardItems = nil;
+std::once_flag g_clipboardActivityWatcherOnce;
+std::size_t g_clipboardActivityWatcherID = 0;
+ClipboardActivityStore g_clipboardActivityStore;
 ClipboardHashGuard g_clipboardHashGuard;
 
 NSError* MakeError(NSInteger code, NSString* message) {
@@ -156,52 +159,81 @@ NSString* ClipboardTextFromPayload(const ClipboardPayload& payload) {
                                   encoding:NSUTF8StringEncoding];
 }
 
-void PublishIncomingClipboardItem(CLPIncomingClipboardItem* item) {
-    {
-        std::lock_guard<std::mutex> lock(g_incomingClipboardMutex);
-        g_latestIncomingClipboardItem = item;
-        if (g_incomingClipboardItems == nil) {
-            g_incomingClipboardItems = [[NSMutableArray alloc] init];
-        }
-
-        [g_incomingClipboardItems insertObject:item atIndex:0];
-        while (g_incomingClipboardItems.count > kMaxIncomingClipboardItems) {
-            [g_incomingClipboardItems removeLastObject];
-        }
-    }
-
+void PostClipboardActivityChanged() {
     dispatch_async(dispatch_get_main_queue(), ^{
-        [[NSNotificationCenter defaultCenter] postNotificationName:kIncomingClipboardDidChangeNotification
+        [[NSNotificationCenter defaultCenter] postNotificationName:kClipboardActivityDidChangeNotification
                                                             object:nil];
     });
 }
 
-bool ClipboardPayloadFromIncomingItem(CLPIncomingClipboardItem* item, ClipboardPayload& payload, NSError** error) {
-    payload = {};
+void ClipboardActivityWatcher(const ClipboardActivityUpdate&, void*) {
+    PostClipboardActivityChanged();
+}
 
-    if (item.hasTextPayload) {
-        NSData* textData = [item.text dataUsingEncoding:NSUTF8StringEncoding];
-        if (textData == nil) {
-            AssignError(error, kClippIncomingClipboardErrorBase + 4, @"Unable to encode clipboard text.");
-            return false;
-        }
+void EnsureClipboardActivityWatcher() {
+    std::call_once(g_clipboardActivityWatcherOnce, [] {
+        const ClipboardActivityRegistration registration =
+            g_clipboardActivityStore.QueryAndRegister(ClipboardActivityWatcher, nullptr);
+        g_clipboardActivityWatcherID = registration.watcherID;
+    });
+}
 
-        payload.formatId = CF_UNICODETEXT;
-        const auto* bytes = static_cast<const unsigned char*>(textData.bytes);
-        payload.rawData.assign(bytes, bytes + textData.length);
-        payload.rawData.push_back('\0');
-        return true;
+CLPClipboardPayloadKind ToBridgePayloadKind(ClipboardActivityPayloadKind kind) {
+    switch (kind) {
+    case ClipboardActivityPayloadKind::Text:
+        return CLPClipboardPayloadKindText;
+    case ClipboardActivityPayloadKind::PrivateText:
+        return CLPClipboardPayloadKindPrivateText;
+    case ClipboardActivityPayloadKind::Link:
+        return CLPClipboardPayloadKindLink;
+    case ClipboardActivityPayloadKind::Image:
+        return CLPClipboardPayloadKindImage;
+    case ClipboardActivityPayloadKind::Unsupported:
+    default:
+        return CLPClipboardPayloadKindUnsupported;
+    }
+}
+
+CLPClipboardDirection ToBridgeDirection(ClipboardActivityDirection direction) {
+    return direction == ClipboardActivityDirection::Outgoing
+        ? CLPClipboardDirectionOutgoing
+        : CLPClipboardDirectionIncoming;
+}
+
+NSDate* ToNSDate(std::chrono::system_clock::time_point timestamp) {
+    const auto seconds = std::chrono::duration<double>(timestamp.time_since_epoch()).count();
+    return [NSDate dateWithTimeIntervalSince1970:seconds];
+}
+
+NSString* ActivityIdentifier(uint64_t itemID) {
+    return [NSString stringWithFormat:@"%llu", static_cast<unsigned long long>(itemID)];
+}
+
+NSData* DataFromBytes(const std::vector<unsigned char>& bytes) {
+    if (bytes.empty()) {
+        return nil;
+    }
+    return [NSData dataWithBytes:bytes.data() length:bytes.size()];
+}
+
+CLPClipboardActivityItem* MakeClipboardActivityItem(const ClipboardActivityItemHeader& header) {
+    const auto display = g_clipboardActivityStore.DisplayItem(header.id);
+    if (!display) {
+        return nil;
     }
 
-    if (item.hasImagePayload) {
-        payload.formatId = CF_DIB;
-        const auto* bytes = static_cast<const unsigned char*>(item.imagePNGData.bytes);
-        payload.rawData.assign(bytes, bytes + item.imagePNGData.length);
-        return true;
-    }
-
-    AssignError(error, kClippIncomingClipboardErrorBase + 3, @"Unsupported clipboard item.");
-    return false;
+    NSString* detailText = ToNSString(display->detailText);
+    return [[CLPClipboardActivityItem alloc] initWithActivityItemID:header.id
+                                                        identifier:ActivityIdentifier(header.id)
+                                                        deviceName:ToNSString(display->header.deviceName)
+                                                         timestamp:ToNSDate(display->header.timestamp)
+                                                         direction:ToBridgeDirection(display->header.direction)
+                                                              kind:ToBridgePayloadKind(display->kind)
+                                                       previewText:ToNSString(display->previewText)
+                                                        detailText:detailText
+                                                          linkHost:ToNSString(display->linkHost)
+                                                              text:detailText
+                                                      imagePNGData:DataFromBytes(display->imagePngData)];
 }
 
 bool ClipboardPayloadFromPasteboard(ClipboardPayload& payload, NSError** error) {
@@ -276,39 +308,17 @@ CLPNetworkKeyStatus* LoadNetworkKeyStatus(NSError** error) {
 
 void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const ClipboardPayload& payload) {
     @autoreleasepool {
-        NSString* deviceName = ToNSString(hostName);
-        if (deviceName.length == 0) {
-            deviceName = @"Unknown device";
-        }
-
-        CLPIncomingClipboardItem* item = nil;
         if (payload.formatId == CF_UNICODETEXT) {
             NSString* text = ClipboardTextFromPayload(payload);
             if (text.length == 0 && payload.rawData.size() != 0) {
                 g_logger.log("iOS", Logger::Level::Warning, L"Incoming text clipboard payload could not be decoded as UTF-8.");
                 return;
             }
-
-            item = [[CLPIncomingClipboardItem alloc] initWithIdentifier:NSUUID.UUID.UUIDString
-                                                             deviceName:deviceName
-                                                             receivedAt:NSDate.date
-                                                                   kind:CLPClipboardPayloadKindText
-                                                                   text:text ?: @""
-                                                           imagePNGData:nil];
         } else if (payload.formatId == CF_DIB) {
             if (!IsPngStream(payload.rawData)) {
                 g_logger.log("iOS", Logger::Level::Warning, L"Incoming image clipboard payload was not a PNG stream (%zu bytes).", payload.rawData.size());
                 return;
             }
-
-            NSData* imageData = [NSData dataWithBytes:payload.rawData.data()
-                                               length:payload.rawData.size()];
-            item = [[CLPIncomingClipboardItem alloc] initWithIdentifier:NSUUID.UUID.UUIDString
-                                                             deviceName:deviceName
-                                                             receivedAt:NSDate.date
-                                                                   kind:CLPClipboardPayloadKindImage
-                                                                   text:nil
-                                                           imagePNGData:imageData];
         } else {
             g_logger.log("iOS", Logger::Level::Warning, L"Unsupported incoming clipboard format ID %u; payload ignored.", payload.formatId);
             return;
@@ -319,24 +329,35 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const Clipboard
             return;
         }
 
-        PublishIncomingClipboardItem(item);
+        EnsureClipboardActivityWatcher();
+        g_clipboardActivityStore.AddIncoming(hostName, payload);
     }
 }
 
-@implementation CLPIncomingClipboardItem
+@implementation CLPClipboardActivityItem
 
-- (instancetype)initWithIdentifier:(NSString*)identifier
-                        deviceName:(NSString*)deviceName
-                        receivedAt:(NSDate*)receivedAt
-                              kind:(CLPClipboardPayloadKind)kind
-                              text:(NSString*)text
-                      imagePNGData:(NSData*)imagePNGData {
+- (instancetype)initWithActivityItemID:(unsigned long long)activityItemID
+                            identifier:(NSString*)identifier
+                            deviceName:(NSString*)deviceName
+                             timestamp:(NSDate*)timestamp
+                             direction:(CLPClipboardDirection)direction
+                                  kind:(CLPClipboardPayloadKind)kind
+                           previewText:(NSString*)previewText
+                            detailText:(NSString*)detailText
+                              linkHost:(NSString*)linkHost
+                                  text:(NSString*)text
+                          imagePNGData:(NSData*)imagePNGData {
     self = [super init];
     if (self) {
+        _activityItemID = activityItemID;
         _identifier = [identifier copy];
         _deviceName = [deviceName copy];
-        _receivedAt = [receivedAt copy];
+        _timestamp = [timestamp copy];
+        _direction = direction;
         _kind = kind;
+        _previewText = [previewText copy];
+        _detailText = [detailText copy];
+        _linkHost = [linkHost copy];
         _text = [text copy];
         _imagePNGData = [imagePNGData copy];
     }
@@ -344,104 +365,92 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const Clipboard
 }
 
 - (BOOL)hasTextPayload {
-    return self.kind == CLPClipboardPayloadKindText && self.text.length > 0;
+    return (self.kind == CLPClipboardPayloadKindText ||
+            self.kind == CLPClipboardPayloadKindPrivateText ||
+            self.kind == CLPClipboardPayloadKindLink) &&
+        self.text.length > 0;
 }
 
 - (BOOL)hasImagePayload {
     return self.kind == CLPClipboardPayloadKindImage && self.imagePNGData.length > 0;
 }
 
+- (BOOL)isIncoming {
+    return self.direction == CLPClipboardDirectionIncoming;
+}
+
+- (BOOL)isOutgoing {
+    return self.direction == CLPClipboardDirectionOutgoing;
+}
+
 @end
 
-@implementation CLPIncomingClipboardBridge
+@implementation CLPClipboardActivityBridge
 
 + (NSString*)didChangeNotificationName {
-    return kIncomingClipboardDidChangeNotification;
+    return kClipboardActivityDidChangeNotification;
 }
 
-+ (CLPIncomingClipboardItem*)latestItem {
-    std::lock_guard<std::mutex> lock(g_incomingClipboardMutex);
-    __strong CLPIncomingClipboardItem* item = g_latestIncomingClipboardItem;
-    return item;
-}
-
-+ (NSArray<CLPIncomingClipboardItem*>*)recentItems {
-    std::lock_guard<std::mutex> lock(g_incomingClipboardMutex);
-    if (g_incomingClipboardItems == nil) {
-        return @[];
++ (NSArray<CLPClipboardActivityItem*>*)recentItems {
+    EnsureClipboardActivityWatcher();
+    std::vector<ClipboardActivityItemHeader> snapshot = g_clipboardActivityStore.Snapshot();
+    NSMutableArray<CLPClipboardActivityItem*>* items = [NSMutableArray arrayWithCapacity:snapshot.size()];
+    for (const ClipboardActivityItemHeader& header : snapshot) {
+        CLPClipboardActivityItem* item = MakeClipboardActivityItem(header);
+        if (item != nil) {
+            [items addObject:item];
+        }
     }
-
-    return [g_incomingClipboardItems copy];
+    return items;
 }
 
-+ (BOOL)copyItem:(CLPIncomingClipboardItem*)item
++ (BOOL)copyItem:(CLPClipboardActivityItem*)item
            error:(NSError**)error {
     if (item == nil) {
-        AssignError(error, kClippIncomingClipboardErrorBase + 1, @"No clipboard item is available to copy.");
+        AssignError(error, kClippClipboardActivityErrorBase + 1, @"No clipboard item is available to copy.");
         return NO;
     }
 
-    ClipboardPayload payload{};
-    if (!ClipboardPayloadFromIncomingItem(item, payload, error)) {
+    std::optional<ClipboardPayload> payload = g_clipboardActivityStore.PayloadForClipboard(item.activityItemID);
+    if (!payload) {
+        AssignError(error, kClippClipboardActivityErrorBase + 2, @"The clipboard item is no longer available.");
         return NO;
     }
 
     if (item.hasTextPayload) {
-        UIPasteboard.generalPasteboard.string = item.text;
-        g_clipboardHashGuard.RememberCurrent(payload);
+        NSString* text = ClipboardTextFromPayload(*payload);
+        if (text == nil) {
+            AssignError(error, kClippClipboardActivityErrorBase + 3, @"Unable to decode clipboard text.");
+            return NO;
+        }
+
+        UIPasteboard.generalPasteboard.string = text;
+        g_clipboardHashGuard.RememberCurrent(*payload);
         return YES;
     }
 
     if (item.hasImagePayload) {
         UIImage* image = [UIImage imageWithData:item.imagePNGData];
         if (image == nil) {
-            AssignError(error, kClippIncomingClipboardErrorBase + 2, @"Unable to decode clipboard image.");
+            AssignError(error, kClippClipboardActivityErrorBase + 4, @"Unable to decode clipboard image.");
             return NO;
         }
 
         [UIPasteboard.generalPasteboard setData:item.imagePNGData
                               forPasteboardType:@"public.png"];
-        g_clipboardHashGuard.RememberCurrent(payload);
+        g_clipboardHashGuard.RememberCurrent(*payload);
         return YES;
     }
 
-    AssignError(error, kClippIncomingClipboardErrorBase + 3, @"Unsupported clipboard item.");
+    AssignError(error, kClippClipboardActivityErrorBase + 5, @"Unsupported clipboard item.");
     return NO;
-}
-
-@end
-
-@implementation CLPOutgoingClipboardItem
-
-- (instancetype)initWithIdentifier:(NSString*)identifier
-                            sentAt:(NSDate*)sentAt
-                              kind:(CLPClipboardPayloadKind)kind
-                              text:(NSString*)text
-                      imagePNGData:(NSData*)imagePNGData {
-    self = [super init];
-    if (self) {
-        _identifier = [identifier copy];
-        _sentAt = [sentAt copy];
-        _kind = kind;
-        _text = [text copy];
-        _imagePNGData = [imagePNGData copy];
-    }
-    return self;
-}
-
-- (BOOL)hasTextPayload {
-    return self.kind == CLPClipboardPayloadKindText && self.text.length > 0;
-}
-
-- (BOOL)hasImagePayload {
-    return self.kind == CLPClipboardPayloadKindImage && self.imagePNGData.length > 0;
 }
 
 @end
 
 @implementation CLPOutgoingClipboardBridge
 
-+ (CLPOutgoingClipboardItem*)sendCurrentPasteboardWithError:(NSError**)error {
++ (CLPClipboardActivityItem*)sendCurrentPasteboardWithError:(NSError**)error {
     if (!EnsureSodium(error) || !EnsureHostID(error)) {
         return nil;
     }
@@ -467,23 +476,15 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const Clipboard
         return nil;
     }
 
-    NSString* text = nil;
-    NSData* imagePNGData = nil;
-    CLPClipboardPayloadKind kind = CLPClipboardPayloadKindText;
-    if (payload.formatId == CF_UNICODETEXT) {
-        text = ClipboardTextFromPayload(payload) ?: @"";
-        kind = CLPClipboardPayloadKindText;
-    } else if (payload.formatId == CF_DIB) {
-        imagePNGData = [NSData dataWithBytes:payload.rawData.data()
-                                      length:payload.rawData.size()];
-        kind = CLPClipboardPayloadKindImage;
-    } else {
+    if (payload.formatId != CF_UNICODETEXT && payload.formatId != CF_DIB) {
         AssignError(error, kClippOutgoingClipboardErrorBase + 6, @"Unsupported clipboard data.");
         return nil;
     }
 
+    EnsureClipboardActivityWatcher();
     g_clipboardHashGuard.RememberCurrent(payload);
     auto sharedPayload = std::make_shared<const ClipboardPayload>(std::move(payloadToSend));
+    const uint64_t activityItemID = g_clipboardActivityStore.AddOutgoing(L"This iPhone", *sharedPayload);
     g_peerManager.BroadcastClipboard(sharedPayload);
     g_logger.log("iOS",
                  Logger::Level::Info,
@@ -491,11 +492,15 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const Clipboard
                  sharedPayload->formatId,
                  sharedPayload->rawData.size(),
                  decodedDataSize);
-    return [[CLPOutgoingClipboardItem alloc] initWithIdentifier:NSUUID.UUID.UUIDString
-                                                        sentAt:NSDate.date
-                                                          kind:kind
-                                                          text:text
-                                                  imagePNGData:imagePNGData];
+
+    ClipboardActivityItemHeader header{};
+    header.id = activityItemID;
+    CLPClipboardActivityItem* item = MakeClipboardActivityItem(header);
+    if (item == nil) {
+        AssignError(error, kClippOutgoingClipboardErrorBase + 7, @"Unable to record sent clipboard item.");
+        return nil;
+    }
+    return item;
 }
 
 @end
