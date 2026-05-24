@@ -84,6 +84,18 @@ NS_SWIFT_NAME(NetworkKeyStatus)
 
 @end
 
+NS_SWIFT_NAME(NetworkTrafficSnapshot)
+@interface CLPNetworkTrafficSnapshot : NSObject
+
+@property(nonatomic, assign, readonly) unsigned long long bytesSent;
+@property(nonatomic, assign, readonly) unsigned long long bytesReceived;
+
+- (instancetype)initWithBytesSent:(unsigned long long)bytesSent
+                    bytesReceived:(unsigned long long)bytesReceived NS_DESIGNATED_INITIALIZER;
+- (instancetype)init NS_UNAVAILABLE;
+
+@end
+
 NS_SWIFT_NAME(NetworkKeyBridge)
 @interface CLPNetworkKeyBridge : NSObject
 
@@ -105,6 +117,7 @@ NS_SWIFT_NAME(NetworkRuntimeBridge)
 + (void)notifyNetworkKeyChanged;
 + (BOOL)isRunning;
 + (BOOL)hasPeerConnections;
++ (CLPNetworkTrafficSnapshot*)trafficSnapshot;
 
 @end
 

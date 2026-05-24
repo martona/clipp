@@ -500,6 +500,20 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const Clipboard
 
 @end
 
+@implementation CLPNetworkTrafficSnapshot
+
+- (instancetype)initWithBytesSent:(unsigned long long)bytesSent
+                    bytesReceived:(unsigned long long)bytesReceived {
+    self = [super init];
+    if (self) {
+        _bytesSent = bytesSent;
+        _bytesReceived = bytesReceived;
+    }
+    return self;
+}
+
+@end
+
 @implementation CLPNetworkKeyStatus
 
 - (instancetype)initWithNetworkName:(NSString*)networkName
@@ -657,6 +671,19 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const Clipboard
         }
     }
     return NO;
+}
+
++ (CLPNetworkTrafficSnapshot*)trafficSnapshot {
+    const auto peers = g_peerDisplay.Query();
+    uint64_t bytesSent = 0;
+    uint64_t bytesReceived = 0;
+    for (const auto& peer : peers) {
+        bytesSent += peer.bytesSent;
+        bytesReceived += peer.bytesReceived;
+    }
+
+    return [[CLPNetworkTrafficSnapshot alloc] initWithBytesSent:bytesSent
+                                                  bytesReceived:bytesReceived];
 }
 
 @end

@@ -16,6 +16,7 @@ struct ContentView: View {
     @State private var inspectedItem: ClipboardStreamItem?
     @State private var didCheckInitialNetworkKey = false
     @State private var networkIndicatorMode: NetworkIndicatorMode = .ok
+    @State private var networkTrafficState = NetworkTrafficState()
 
     var body: some View {
         NavigationStack {
@@ -65,7 +66,10 @@ struct ContentView: View {
                     Button {
                         activePanel = .network
                     } label: {
-                        NetworkToolbarIndicator(mode: networkIndicatorMode)
+                        NetworkToolbarIndicator(
+                            mode: networkIndicatorMode,
+                            traffic: networkTrafficState.activity
+                        )
                     }
                     .foregroundStyle(.secondary)
                     .accessibilityLabel(CLP_UI_NETWORK)
@@ -110,6 +114,9 @@ struct ContentView: View {
             }
             .task {
                 await pollNetworkIndicator()
+            }
+            .task {
+                await pollNetworkTraffic()
             }
             .task {
                 await observeIncomingClipboard()
@@ -169,6 +176,22 @@ struct ContentView: View {
         }.value
 
         networkIndicatorMode = mode
+    }
+
+    private func pollNetworkTraffic() async {
+        while !Task.isCancelled {
+            refreshNetworkTraffic()
+            try? await Task.sleep(nanoseconds: 450_000_000)
+        }
+    }
+
+    private func refreshNetworkTraffic() {
+        let snapshot = NetworkRuntimeBridge.trafficSnapshot()
+        networkTrafficState.observe(
+            bytesSent: snapshot.bytesSent,
+            bytesReceived: snapshot.bytesReceived,
+            now: Date()
+        )
     }
 
     private func observeIncomingClipboard() async {
@@ -283,11 +306,61 @@ private enum NetworkIndicatorMode: Sendable {
     case needsSetup
 }
 
+private struct NetworkTrafficActivity: Equatable, Sendable {
+    var isSending = false
+    var isReceiving = false
+}
+
+private struct NetworkTrafficState {
+    private static let significantByteDelta: UInt64 = 16 * 1024
+    private static let activeHoldTime: TimeInterval = 1.2
+
+    private var previousBytesSent: UInt64?
+    private var previousBytesReceived: UInt64?
+    private var sendingUntil = Date.distantPast
+    private var receivingUntil = Date.distantPast
+
+    var activity: NetworkTrafficActivity {
+        activity(at: Date())
+    }
+
+    mutating func observe(bytesSent: UInt64, bytesReceived: UInt64, now: Date) {
+        defer {
+            previousBytesSent = bytesSent
+            previousBytesReceived = bytesReceived
+        }
+
+        guard let previousBytesSent, let previousBytesReceived else {
+            return
+        }
+
+        if bytesSent >= previousBytesSent,
+           bytesSent - previousBytesSent >= Self.significantByteDelta {
+            sendingUntil = now.addingTimeInterval(Self.activeHoldTime)
+        }
+
+        if bytesReceived >= previousBytesReceived,
+           bytesReceived - previousBytesReceived >= Self.significantByteDelta {
+            receivingUntil = now.addingTimeInterval(Self.activeHoldTime)
+        }
+    }
+
+    private func activity(at date: Date) -> NetworkTrafficActivity {
+        NetworkTrafficActivity(
+            isSending: sendingUntil > date,
+            isReceiving: receivingUntil > date
+        )
+    }
+}
+
 private struct NetworkToolbarIndicator: View {
     let mode: NetworkIndicatorMode
+    let traffic: NetworkTrafficActivity
 
     @State private var sweepRotation = 0.0
     @State private var setupBadgeScale = 1.0
+    @State private var sendLift = false
+    @State private var receiveDrop = false
 
     var body: some View {
         ZStack {
@@ -320,10 +393,35 @@ private struct NetworkToolbarIndicator: View {
                     .offset(x: 9, y: -9)
                     .transition(.scale.combined(with: .opacity))
             }
+
+            if mode != .needsSetup {
+                if traffic.isSending {
+                    NetworkTrafficGlyph(
+                        symbolName: "arrow.up.circle.fill",
+                        color: .blue,
+                        yOffset: sendLift ? -14 : -8,
+                        opacity: sendLift ? 0.56 : 1
+                    )
+                    .transition(.scale.combined(with: .opacity))
+                }
+
+                if traffic.isReceiving {
+                    NetworkTrafficGlyph(
+                        symbolName: "arrow.down.circle.fill",
+                        color: .green,
+                        yOffset: receiveDrop ? 14 : 8,
+                        opacity: receiveDrop ? 0.56 : 1
+                    )
+                    .transition(.scale.combined(with: .opacity))
+                }
+            }
         }
         .frame(width: 28, height: 28)
         .onAppear(perform: updateAnimation)
         .onChange(of: mode) {
+            updateAnimation()
+        }
+        .onChange(of: traffic) {
             updateAnimation()
         }
     }
@@ -348,6 +446,49 @@ private struct NetworkToolbarIndicator: View {
                 setupBadgeScale = 1
             }
         }
+
+        if mode == .needsSetup || !traffic.isSending {
+            withAnimation(.easeOut(duration: 0.16)) {
+                sendLift = false
+            }
+        } else {
+            sendLift = false
+            withAnimation(.easeInOut(duration: 0.56).repeatForever(autoreverses: true)) {
+                sendLift = true
+            }
+        }
+
+        if mode == .needsSetup || !traffic.isReceiving {
+            withAnimation(.easeOut(duration: 0.16)) {
+                receiveDrop = false
+            }
+        } else {
+            receiveDrop = false
+            withAnimation(.easeInOut(duration: 0.56).repeatForever(autoreverses: true)) {
+                receiveDrop = true
+            }
+        }
+    }
+}
+
+private struct NetworkTrafficGlyph: View {
+    let symbolName: String
+    let color: Color
+    let yOffset: CGFloat
+    let opacity: Double
+
+    var body: some View {
+        Image(systemName: symbolName)
+            .symbolRenderingMode(.palette)
+            .foregroundStyle(.white, color)
+            .font(.system(size: 11, weight: .bold))
+            .background(
+                Circle()
+                    .fill(.background)
+                    .frame(width: 11, height: 11)
+            )
+            .offset(x: 10, y: yOffset)
+            .opacity(opacity)
     }
 }
 
