@@ -29,7 +29,7 @@ static std::atomic<bool> g_mdnsSendImmediately{ false };
 static std::atomic<bool> g_mdnsReloadHostID{ false };
 static std::atomic<bool> g_hostIDCollisionWarning{ false };
 static constexpr std::size_t kRecentOriginatedQueryIDCount = 8;
-static std::array<std::array<unsigned char, 32>, kRecentOriginatedQueryIDCount> g_recentOriginatedQueryIDs{};
+static std::array<std::array<unsigned char, MDNSProtocol::QueryIDSize>, kRecentOriginatedQueryIDCount> g_recentOriginatedQueryIDs{};
 static std::size_t g_recentOriginatedQueryIDNext = 0;
 static std::size_t g_recentOriginatedQueryIDUsed = 0;
 static HostId g_hostId;
@@ -43,7 +43,7 @@ static void RecordOriginatedQueryID(const unsigned char* queryID) {
         return;
     }
 
-    std::memcpy(g_recentOriginatedQueryIDs[g_recentOriginatedQueryIDNext].data(), queryID, 32);
+    std::memcpy(g_recentOriginatedQueryIDs[g_recentOriginatedQueryIDNext].data(), queryID, MDNSProtocol::QueryIDSize);
     g_recentOriginatedQueryIDNext = (g_recentOriginatedQueryIDNext + 1) % g_recentOriginatedQueryIDs.size();
     if (g_recentOriginatedQueryIDUsed < g_recentOriginatedQueryIDs.size()) {
         ++g_recentOriginatedQueryIDUsed;
@@ -56,7 +56,7 @@ static bool IsRecentOriginatedQueryID(const unsigned char* queryID) {
     }
 
     for (std::size_t i = 0; i < g_recentOriginatedQueryIDUsed; ++i) {
-        if (std::memcmp(g_recentOriginatedQueryIDs[i].data(), queryID, 32) == 0) {
+        if (std::memcmp(g_recentOriginatedQueryIDs[i].data(), queryID, MDNSProtocol::QueryIDSize) == 0) {
             return true;
         }
     }

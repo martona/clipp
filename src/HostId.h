@@ -1,19 +1,21 @@
 #pragma once
 #include <array>
+#include <cstddef>
 #include <cstring>
 #include <string>
 #include <vector>
 
 class HostId {
 public:
+    static constexpr size_t kSize = 16;
+    using Bytes = std::array<unsigned char, kSize>;
+
     HostId(const unsigned char* data) {
         std::memcpy(m_id.data(), data, m_id.size());
     }
-    HostId(const std::array<unsigned char, 32>& data) : m_id(data) {}
+    HostId(const Bytes& data) : m_id(data) {}
 	HostId() = default;
     ~HostId() = default;
-
-    static constexpr size_t kSize = 32;
 
     bool AssignFromVector(std::vector<unsigned char>& data) {
         if (data.size() != kSize) {
@@ -40,8 +42,8 @@ public:
         return ToHexStringImpl<wchar_t>(L"0123456789abcdef", bytesPerGroup);
     }
 
-    const std::array<unsigned char, kSize>& data() const { return m_id; }
-    std::array<unsigned char, kSize>& data() { return m_id; }
+    const Bytes& data() const { return m_id; }
+    Bytes& data() { return m_id; }
 
 private:
     template<typename CharT>
@@ -63,5 +65,5 @@ private:
         return hexString;
     }
 
-    std::array<unsigned char, kSize> m_id{};
+    Bytes m_id{};
 };

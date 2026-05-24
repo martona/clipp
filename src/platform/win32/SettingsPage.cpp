@@ -351,7 +351,7 @@ void SettingsPage::RefreshHostIDDisplay() {
         return;
     }
 
-    hostIDValue_.Text(winrt::hstring(hostID.ToHexWString(8)));
+    hostIDValue_.Text(winrt::hstring(hostID.ToHexWString()));
 }
 
 void SettingsPage::RefreshHostIDWarning() {

@@ -377,7 +377,7 @@ void MacOSSettingsPage::RefreshHostIDDisplay() {
         return;
     }
 
-    NSString* text = MacOSToNSString(hostID.ToHexWString(8));
+    NSString* text = MacOSToNSString(hostID.ToHexWString());
     MacOSSetFieldText(hostIDValue_, text);
     hostIDValue_.toolTip = text;
 }

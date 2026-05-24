@@ -30,7 +30,7 @@ public:
 
 private:
     static std::wstring DisplayHostName(const std::wstring& hostName);
-    static std::wstring FormatHostID(const std::array<unsigned char, 32>& hostID);
+    static std::wstring FormatHostID(const HostId::Bytes& hostID);
     static std::wstring FormatByteCounter(uint64_t bytes);
     static std::wstring FormatConnectionState(bool connected);
     static std::wstring FormatConnectedFor(std::chrono::steady_clock::time_point connectedSince, std::chrono::steady_clock::time_point now);

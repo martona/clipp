@@ -14,7 +14,7 @@ extern KeyManager g_keyManager;
 
 namespace {
 constexpr const char* kProtocolSelector = "clipp";
-constexpr int kProtocolVersion = 1;
+constexpr int kProtocolVersion = 2;
 
 bool GetMDNSKey(KeyManager::NetworkKey& key) {
     std::string errorMessage;

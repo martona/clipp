@@ -224,7 +224,7 @@ std::wstring NetworkItemView::DisplayHostName(const std::wstring& hostName) {
     return uiClippPage::DisplayHostNameOrUnknown(hostName);
 }
 
-std::wstring NetworkItemView::FormatHostID(const std::array<unsigned char, 32>& hostID) {
+std::wstring NetworkItemView::FormatHostID(const HostId::Bytes& hostID) {
     constexpr wchar_t digits[] = L"0123456789abcdef";
     std::wstring text;
     text.reserve((hostID.size() * 2) + 7);
