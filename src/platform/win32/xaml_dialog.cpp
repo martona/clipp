@@ -163,6 +163,14 @@ int DipsToPixels(double dips, UINT dpi) {
 
 class MainXamlDialog {
 public:
+    enum class PageID {
+        Clipp = 0,
+        Network = 1,
+        Settings = 2,
+        Logs = 3,
+        About = 4,
+    };
+
     MainXamlDialog() = default;
     ~MainXamlDialog() {
         Destroy();
@@ -175,7 +183,7 @@ public:
     MainXamlDialog(const MainXamlDialog&) = delete;
     MainXamlDialog& operator=(const MainXamlDialog&) = delete;
 
-    void Show(HWND owner) {
+    void Show(HWND owner, PageID page = PageID::Clipp) {
         try {
             owner_ = owner;
             RegisterDialogClass(GetModuleHandleW(nullptr));
@@ -185,6 +193,7 @@ public:
             }
 
             if (hwnd_) {
+                SelectPage(page);
                 SizeAndCenter(owner);
                 ShowWindow(hwnd_, SW_SHOWNORMAL);
                 SetForegroundWindow(hwnd_);
@@ -215,14 +224,6 @@ public:
     }
 
 private:
-    enum class PageID {
-        Clipp = 0,
-        Network = 1,
-        Settings = 2,
-        Logs = 3,
-        About = 4,
-    };
-
     struct MenuItemDefinition {
         const wchar_t* glyph;
         const wchar_t* label;
@@ -737,13 +738,27 @@ private:
 
 std::unique_ptr<MainXamlDialog> g_dialog;
 
+MainXamlDialog::PageID DialogPageFromPublicPage(ClippMainDialogPage page) {
+    switch (page) {
+    case ClippMainDialogPage::Network:
+        return MainXamlDialog::PageID::Network;
+    case ClippMainDialogPage::Clipp:
+    default:
+        return MainXamlDialog::PageID::Clipp;
+    }
+}
+
 } // namespace
 
 void ShowClippMainDialog(HWND owner) {
+    ShowClippMainDialog(owner, ClippMainDialogPage::Clipp);
+}
+
+void ShowClippMainDialog(HWND owner, ClippMainDialogPage page) {
     if (!g_dialog) {
         g_dialog = std::make_unique<MainXamlDialog>();
     }
-    g_dialog->Show(owner);
+    g_dialog->Show(owner, DialogPageFromPublicPage(page));
 }
 
 bool ClippMainDialogPreTranslateMessage(MSG* msg) {

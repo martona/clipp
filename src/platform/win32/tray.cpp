@@ -115,7 +115,7 @@ LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
     return 0;
 }
 
-void TrayIconMessageLoop() {
+void TrayIconMessageLoop(bool showNetworkPageOnStartup) {
     DarkMode::initDarkMode();
     HINSTANCE hInstance = GetModuleHandleW(NULL);
 
@@ -146,6 +146,10 @@ void TrayIconMessageLoop() {
     wcscpy_s(g_nid.szTip, CLP_W(CLP_UI_STATUS_TOOLTIP));
 
     Shell_NotifyIconW(NIM_ADD, &g_nid);
+
+    if (showNetworkPageOnStartup) {
+        ShowClippMainDialog(g_trayWindow, ClippMainDialogPage::Network);
+    }
 
     g_logger.log(__FUNCTION__, Logger::Level::Info, L"Unicode Tray Icon initialized. Entering message loop.");
 

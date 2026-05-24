@@ -82,7 +82,7 @@ ClipboardActivityStore g_clipboardActivityStore;
     void StopSingleInstanceServer() {
     }
 
-    void TrayIconMessageLoop();
+    void TrayIconMessageLoop(bool showNetworkPageOnStartup);
     void TrayIconShutdown();
     BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType) {
         if (dwCtrlType == CTRL_C_EVENT || dwCtrlType == CTRL_BREAK_EVENT || dwCtrlType == CTRL_CLOSE_EVENT) {
@@ -455,7 +455,8 @@ int main(int argc, char* argv[]) {
 
     std::string keyErrorMessage;
     const std::wstring networkFingerprint = g_keyManager.GetNetworkFingerprintHash(nullptr, &keyErrorMessage);
-    if (!networkFingerprint.empty()) {
+    const bool haveNetworkKey = !networkFingerprint.empty();
+    if (haveNetworkKey) {
         g_logger.log(__FUNCTION__, Logger::Level::Info, L"Network fingerprint: %ls", networkFingerprint.c_str());
     } else {
         g_logger.log(__FUNCTION__, Logger::Level::Warning, "No network key configured yet: %s", keyErrorMessage.c_str());
@@ -473,7 +474,7 @@ int main(int argc, char* argv[]) {
 
     #ifdef _WIN32
         SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
-        TrayIconMessageLoop();
+        TrayIconMessageLoop(!haveNetworkKey);
     #elif defined(__APPLE__)
         std::thread signalThread([waitset]() mutable {
             int caughtSignal = 0;
