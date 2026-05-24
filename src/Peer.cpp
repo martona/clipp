@@ -29,9 +29,7 @@ extern PeerManager g_peerManager;
 
 static void CullStoppedPeersAsync() {
 	std::thread([]() {
-			g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Lambda culling...");
 			g_peerManager.CullPeers();
-			g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Lambda culled");
 		}).detach();
 }
 

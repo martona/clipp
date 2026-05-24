@@ -101,7 +101,7 @@ if (WIN32)
 
     add_library(darkmode32 STATIC ${CLIPP_DARKMODE_SOURCES})
     target_include_directories(darkmode32 PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-    target_compile_definitions(darkmode32 PUBLIC WIN32 WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+    target_compile_definitions(darkmode32 PUBLIC WIN32 UNICODE _UNICODE)
     target_compile_definitions(darkmode32 PRIVATE _LIB)
     target_link_libraries(darkmode32 PUBLIC dwmapi uxtheme Comctl32 Gdi32)
     if (MSVC)
@@ -114,7 +114,7 @@ if (WIN32)
         "src/clipp-win32.rc"
     )
     clipp_apply_common_target_settings(clipp-win32)
-    target_compile_definitions(clipp-win32 PRIVATE WIN32 WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE _CONSOLE)
+    target_compile_definitions(clipp-win32 PRIVATE WIN32 UNICODE _UNICODE _CONSOLE)
     target_link_libraries(clipp-win32 PRIVATE
         darkmode32
         windowsapp
@@ -136,7 +136,7 @@ if (WIN32)
         "src/clipp-win32-shim/clipp-win32-shim.cpp"
         "src/clipp-win32.rc"
     )
-    target_compile_definitions(clipp-win32-shim PRIVATE WIN32 WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE _CONSOLE CLIPP_RESOURCE_SHIM)
+    target_compile_definitions(clipp-win32-shim PRIVATE WIN32 UNICODE _UNICODE _CONSOLE CLIPP_RESOURCE_SHIM)
     if (MSVC)
         target_compile_options(clipp-win32-shim PRIVATE /utf-8)
     endif()

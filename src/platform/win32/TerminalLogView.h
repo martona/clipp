@@ -20,6 +20,7 @@ private:
     winrt::Windows::UI::Xaml::Documents::Paragraph CreateParagraphForAnsiLine(const std::wstring& line) const;
     winrt::Windows::UI::Xaml::Media::Brush BrushForAnsiCode(const std::wstring& code) const;
     void TrimOldLines();
+    bool IsNearBottom() const;
     void ScrollToBottom();
 
     winrt::Windows::UI::Xaml::Controls::ScrollViewer scrollViewer_{ nullptr };

@@ -20,6 +20,7 @@ private:
     void AppendAnsiLogText(const std::wstring& text, bool scrollToBottom);
     void AppendAnsiLine(const std::wstring& line);
     void TrimOldLines();
+    bool IsNearBottom() const;
     void ScrollToBottom();
 
     NSScrollView* scrollView_ = nullptr;

@@ -8,6 +8,7 @@
 
 namespace {
 constexpr unsigned int kMaxTerminalLogLines = 1000;
+constexpr CGFloat kFollowScrollTolerance = 48.0;
 
 NSColor* DefaultTextColor() {
     return [NSColor colorWithCalibratedWhite:0.82 alpha:1.0];
@@ -90,6 +91,8 @@ void MacOSTerminalLogView::AppendAnsiLogText(const std::wstring& text, bool scro
         return;
     }
 
+    const bool shouldScrollToBottom = scrollToBottom && IsNearBottom();
+
     std::size_t lineStart = 0;
     while (lineStart <= trimmedText.size()) {
         const std::size_t lineEnd = trimmedText.find_first_of(L"\r\n", lineStart);
@@ -110,7 +113,7 @@ void MacOSTerminalLogView::AppendAnsiLogText(const std::wstring& text, bool scro
     }
 
     TrimOldLines();
-    if (scrollToBottom) {
+    if (shouldScrollToBottom) {
         ScrollToBottom();
     }
 }
@@ -187,6 +190,23 @@ void MacOSTerminalLogView::TrimOldLines() {
         [textView_.textStorage deleteCharactersInRange:NSMakeRange(0, removeEnd)];
         lineCount_ -= removed;
     }
+}
+
+bool MacOSTerminalLogView::IsNearBottom() const {
+    if (scrollView_ == nil || textView_ == nil) {
+        return true;
+    }
+
+    [scrollView_ layoutSubtreeIfNeeded];
+    [textView_ layoutSubtreeIfNeeded];
+
+    const NSRect visibleRect = [textView_ visibleRect];
+    const NSRect bounds = [textView_ bounds];
+    const CGFloat distanceFromBottom = [textView_ isFlipped]
+        ? NSMaxY(bounds) - NSMaxY(visibleRect)
+        : NSMinY(visibleRect) - NSMinY(bounds);
+
+    return distanceFromBottom <= kFollowScrollTolerance;
 }
 
 void MacOSTerminalLogView::ScrollToBottom() {

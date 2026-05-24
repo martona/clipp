@@ -9,6 +9,7 @@
 #include <winrt/Windows.UI.Xaml.Media.h>
 
 static constexpr uint32_t kMaxTerminalLogLines = 1000;
+static constexpr double kFollowScrollToleranceDips = 48.0;
 
 TerminalLogView::TerminalLogView() {
     using namespace winrt::Windows::UI::Xaml;
@@ -64,6 +65,8 @@ void TerminalLogView::AppendAnsiLogText(const std::wstring& text, bool scrollToB
         return;
     }
 
+    const bool shouldScrollToBottom = scrollToBottom && IsNearBottom();
+
     std::size_t lineStart = 0;
     while (lineStart <= trimmedText.size()) {
         const std::size_t lineEnd = trimmedText.find_first_of(L"\r\n", lineStart);
@@ -84,7 +87,7 @@ void TerminalLogView::AppendAnsiLogText(const std::wstring& text, bool scrollToB
     }
 
     TrimOldLines();
-    if (scrollToBottom) {
+    if (shouldScrollToBottom) {
         ScrollToBottom();
     }
 }
@@ -148,6 +151,15 @@ void TerminalLogView::TrimOldLines() {
     while (blocks.Size() > kMaxTerminalLogLines) {
         blocks.RemoveAt(0);
     }
+}
+
+bool TerminalLogView::IsNearBottom() const {
+    if (!scrollViewer_) {
+        return true;
+    }
+
+    scrollViewer_.UpdateLayout();
+    return scrollViewer_.ScrollableHeight() - scrollViewer_.VerticalOffset() <= kFollowScrollToleranceDips;
 }
 
 void TerminalLogView::ScrollToBottom() {
