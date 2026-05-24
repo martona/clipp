@@ -19,47 +19,49 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                LazyVStack(spacing: 18) {
-                    if !clipboardStream.items.isEmpty {
-                        Text(clipboardStream.items.first?.dayTitle ?? "Recent")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(.top, 10)
+            ZStack(alignment: .bottom) {
+                ScrollView {
+                    LazyVStack(spacing: 18) {
+                        if !clipboardStream.items.isEmpty {
+                            Text(clipboardStream.items.first?.dayTitle ?? "Recent")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.top, 10)
 
-                        ForEach(clipboardStream.items) { item in
-                            ClipboardGroupView(
-                                item: item,
-                                isCopied: clipboardStream.copiedItemID == item.id,
-                                onInspect: {
-                                    inspectedItem = item
-                                },
-                                onCopy: {
-                                    clipboardStream.copy(item)
-                                }
-                            )
+                            ForEach(clipboardStream.items) { item in
+                                ClipboardGroupView(
+                                    item: item,
+                                    isCopied: clipboardStream.copiedItemID == item.id,
+                                    onInspect: {
+                                        inspectedItem = item
+                                    },
+                                    onCopy: {
+                                        clipboardStream.copy(item)
+                                    }
+                                )
+                            }
+                        } else {
+                            EmptyIncomingClipboardView()
+                                .padding(.top, 64)
                         }
-                    } else {
-                        EmptyIncomingClipboardView()
-                            .padding(.top, 64)
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 96)
                 }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 24)
+
+                Button {
+                    clipboardStream.send()
+                } label: {
+                    SendBottomButton(state: clipboardStream.sendState)
+                }
+                .disabled(clipboardStream.sendState == .sending)
+                .padding(.bottom, 18)
+                .accessibilityLabel("Send Clipboard")
             }
             .background(Color(.systemGroupedBackground))
             .navigationTitle(CLP_UI_APP_NAME)
             .toolbar {
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button {
-                        clipboardStream.send()
-                    } label: {
-                        SendToolbarIndicator(state: clipboardStream.sendState)
-                    }
-                    .disabled(clipboardStream.sendState == .sending)
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("Send Clipboard")
-
+                ToolbarItem(placement: .topBarLeading) {
                     Button {
                         activePanel = .network
                     } label: {
@@ -67,7 +69,9 @@ struct ContentView: View {
                     }
                     .foregroundStyle(.secondary)
                     .accessibilityLabel(CLP_UI_NETWORK)
+                }
 
+                ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         ForEach(AppPanel.allCases) { panel in
                             Button {
@@ -77,7 +81,8 @@ struct ContentView: View {
                             }
                         }
                     } label: {
-                        Image(systemName: "line.3.horizontal")
+                        Image(systemName: "ellipsis")
+                            .frame(width: 28, height: 28)
                     }
                     .accessibilityLabel("Menu")
                 }
@@ -346,23 +351,37 @@ private struct NetworkToolbarIndicator: View {
     }
 }
 
-private struct SendToolbarIndicator: View {
+private struct SendBottomButton: View {
     let state: OutgoingSendState
 
     var body: some View {
-        ZStack {
+        HStack(spacing: 8) {
             switch state {
             case .idle:
                 Image(systemName: "paperplane")
+                Text("Send")
             case .sending:
                 ProgressView()
-                    .controlSize(.mini)
+                    .tint(.white)
+                Text("Sending")
             case .sent:
                 Image(systemName: "checkmark")
-                    .font(.body.weight(.semibold))
+                Text("Sent")
             }
         }
-        .frame(width: 28, height: 28)
+        .font(.callout.weight(.semibold))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 18)
+        .frame(height: 46)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.clippInk)
+        )
+        .overlay {
+            Capsule(style: .continuous)
+                .strokeBorder(.white.opacity(0.14))
+        }
+        .shadow(color: .black.opacity(0.18), radius: 14, y: 8)
     }
 }
 
