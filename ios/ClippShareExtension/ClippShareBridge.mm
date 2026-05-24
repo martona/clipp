@@ -90,7 +90,7 @@ bool PayloadFromSharePayload(CLPSharePayload* sharePayload, ClipboardPayload& pa
             return false;
         }
 
-        payload.formatId = CF_UNICODETEXT;
+        payload.formatId = CLIPP_FORMAT_UTF8;
         payload.rawData.assign(text.begin(), text.end());
         payload.rawData.push_back('\0');
         return payload.ZstdCompress();
@@ -102,7 +102,7 @@ bool PayloadFromSharePayload(CLPSharePayload* sharePayload, ClipboardPayload& pa
             return false;
         }
 
-        payload.formatId = CF_DIB;
+        payload.formatId = CLIPP_FORMAT_PNG;
         const auto* bytes = static_cast<const unsigned char*>(pngData.bytes);
         payload.rawData.assign(bytes, bytes + pngData.length);
         return payload.ZstdCompress();

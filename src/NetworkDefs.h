@@ -14,10 +14,15 @@ struct ClientHello {
 };
 
 struct ClipboardMessage {
+	// CLIPP_FORMAT_* value. Older peers use the same numeric IDs for UTF-8
+	// and PNG, so these values must remain stable.
 	uint32_t formatId;
+	// zstd compression flag for the payload bytes that follow this header.
 	uint8_t isCompressed;
-	uint32_t encodedDataSize;
-	uint32_t decodedDataSize;
+	uint32_t payloadDataSize;
+	// Historical packet slot formerly called decodedDataSize. It is the
+	// post-zstd payload size, not a decoded media/image size.
+	uint32_t uncompressedDataSize;
 };
 #pragma pack(pop)
 

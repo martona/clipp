@@ -4,20 +4,20 @@
 #include <limits>
 #include <vector>
 #include <zstd.h>
+#include "ClipboardFormat.h"
 #include "ClipboardLimits.h"
 #include "Logger.h"
 
-#ifndef CF_UNICODETEXT
-	#define CF_UNICODETEXT 13
-#endif
-#ifndef CF_DIB
-	#define CF_DIB 8
-#endif
-
 struct ClipboardPayload {
-	uint32_t formatId;
+	// Clipp wire format (CLIPP_FORMAT_*). Platform code translates native
+	// clipboard formats at the OS boundary.
+	uint32_t formatId{ CLIPP_FORMAT_NONE };
+	// When true, rawData contains a zstd frame. Image payloads are already
+	// compressed by their media format, so this is normally text-only.
 	bool isCompressed{ false };
-	uint32_t decodedDataSize{ 0 };
+	// Size of rawData after zstd decompression. Despite the older packet
+	// wording, this is not decoded image bitmap size.
+	uint32_t uncompressedDataSize{ 0 };
 	std::vector<unsigned char> rawData;
 
 	bool ZstdCompress() {
@@ -26,8 +26,8 @@ struct ClipboardPayload {
 			return false;
 		}
 
-		decodedDataSize = static_cast<uint32_t>(rawData.size());
-		if (rawData.size() < 512 || formatId != CF_UNICODETEXT) {
+		uncompressedDataSize = static_cast<uint32_t>(rawData.size());
+		if (rawData.size() < 512 || formatId != CLIPP_FORMAT_UTF8) {
 			isCompressed = false;
 			return true;
 		}
@@ -53,15 +53,15 @@ struct ClipboardPayload {
 	}
 
 	bool ZstdDecompress() {
-		const uint32_t expectedDecodedSize = decodedDataSize;
-		if (expectedDecodedSize > ClipboardLimits::kMaxDecompressedClipboardBytes) {
-			g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard payload: decoded size %u bytes exceeds limit %llu bytes", expectedDecodedSize, ClipboardLimits::kMaxDecompressedClipboardBytes);
+		const uint32_t expectedUncompressedSize = uncompressedDataSize;
+		if (expectedUncompressedSize > ClipboardLimits::kMaxDecompressedClipboardBytes) {
+			g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard payload: uncompressed size %u bytes exceeds limit %llu bytes", expectedUncompressedSize, ClipboardLimits::kMaxDecompressedClipboardBytes);
 			return false;
 		}
 
 		if (!isCompressed) {
-			if (rawData.size() != expectedDecodedSize) {
-				g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting uncompressed clipboard payload: decoded size mismatch (expected %u bytes, actual %zu bytes)", expectedDecodedSize, rawData.size());
+			if (rawData.size() != expectedUncompressedSize) {
+				g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting uncompressed clipboard payload: size mismatch (expected %u bytes, actual %zu bytes)", expectedUncompressedSize, rawData.size());
 				return false;
 			}
 			return true;
@@ -78,12 +78,12 @@ struct ClipboardPayload {
 			return false;
 		}
 
-		if (decompressedSize != expectedDecodedSize) {
-			g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting compressed clipboard payload: frame decoded size mismatch (expected %u bytes, frame reports %llu bytes)", expectedDecodedSize, decompressedSize);
+		if (decompressedSize != expectedUncompressedSize) {
+			g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting compressed clipboard payload: frame uncompressed size mismatch (expected %u bytes, frame reports %llu bytes)", expectedUncompressedSize, decompressedSize);
 			return false;
 		}
 
-		std::vector<unsigned char> decompressedData(static_cast<size_t>(expectedDecodedSize));
+		std::vector<unsigned char> decompressedData(static_cast<size_t>(expectedUncompressedSize));
 		const size_t actualSize = ZSTD_decompress(
 			decompressedData.data(),
 			decompressedData.size(),
@@ -95,8 +95,8 @@ struct ClipboardPayload {
 			return false;
 		}
 
-		if (actualSize != expectedDecodedSize) {
-			g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting compressed clipboard payload: decompressed size mismatch (expected %u bytes, actual %zu bytes)", expectedDecodedSize, actualSize);
+		if (actualSize != expectedUncompressedSize) {
+			g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting compressed clipboard payload: decompressed size mismatch (expected %u bytes, actual %zu bytes)", expectedUncompressedSize, actualSize);
 			return false;
 		}
 

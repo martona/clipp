@@ -339,7 +339,7 @@ bool ClipboardPayloadFromPasteboard(ClipboardPayload& payload, NSError** error) 
             return false;
         }
 
-        payload.formatId = CF_UNICODETEXT;
+        payload.formatId = CLIPP_FORMAT_UTF8;
         const auto* bytes = static_cast<const unsigned char*>(textData.bytes);
         payload.rawData.assign(bytes, bytes + textData.length);
         payload.rawData.push_back('\0');
@@ -352,7 +352,7 @@ bool ClipboardPayloadFromPasteboard(ClipboardPayload& payload, NSError** error) 
     }
 
     if (pngData.length > 0) {
-        payload.formatId = CF_DIB;
+        payload.formatId = CLIPP_FORMAT_PNG;
         const auto* bytes = static_cast<const unsigned char*>(pngData.bytes);
         payload.rawData.assign(bytes, bytes + pngData.length);
         if (!IsPngStream(payload.rawData)) {
@@ -442,19 +442,21 @@ CLPDiagnosticLogLine* MakeDiagnosticLogLine(const TerminalLogBuffer::Line& line)
 
 void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const ClipboardPayload& payload) {
     @autoreleasepool {
-        if (payload.formatId == CF_UNICODETEXT) {
+        if (payload.formatId == CLIPP_FORMAT_UTF8) {
             NSString* text = ClipboardTextFromPayload(payload);
             if (text.length == 0 && payload.rawData.size() != 0) {
                 g_logger.log("iOS", Logger::Level::Warning, L"Incoming text clipboard payload could not be decoded as UTF-8.");
                 return;
             }
-        } else if (payload.formatId == CF_DIB) {
+        } else if (payload.formatId == CLIPP_FORMAT_PNG) {
             if (!IsPngStream(payload.rawData)) {
                 g_logger.log("iOS", Logger::Level::Warning, L"Incoming image clipboard payload was not a PNG stream (%zu bytes).", payload.rawData.size());
                 return;
             }
         } else {
-            g_logger.log("iOS", Logger::Level::Warning, L"Unsupported incoming clipboard format ID %u; payload ignored.", payload.formatId);
+            g_logger.log("iOS", Logger::Level::Warning, L"Unsupported incoming clipboard format %ls (%u); payload ignored.",
+                         ClippClipboardFormatNameW(payload.formatId),
+                         payload.formatId);
             return;
         }
 
@@ -604,13 +606,13 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const Clipboard
     }
 
     ClipboardPayload payloadToSend = payload;
-    const size_t decodedDataSize = payloadToSend.rawData.size();
+    const size_t uncompressedDataSize = payloadToSend.rawData.size();
     if (!payloadToSend.ZstdCompress()) {
         AssignError(error, kClippOutgoingClipboardErrorBase + 5, @"Unable to prepare clipboard data for sending.");
         return nil;
     }
 
-    if (payload.formatId != CF_UNICODETEXT && payload.formatId != CF_DIB) {
+    if (payload.formatId != CLIPP_FORMAT_UTF8 && payload.formatId != CLIPP_FORMAT_PNG) {
         AssignError(error, kClippOutgoingClipboardErrorBase + 6, @"Unsupported clipboard data.");
         return nil;
     }
@@ -622,10 +624,11 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const Clipboard
     g_peerManager.BroadcastClipboard(sharedPayload);
     g_logger.log("iOS",
                  Logger::Level::Info,
-                 L"Broadcast current iOS pasteboard (format ID: %u, encoded size: %zu bytes, decoded size: %zu bytes)",
+                 L"Broadcast current iOS pasteboard (format: %ls, ID: %u, payload size: %zu bytes, uncompressed size: %zu bytes)",
+                 ClippClipboardFormatNameW(sharedPayload->formatId),
                  sharedPayload->formatId,
                  sharedPayload->rawData.size(),
-                 decodedDataSize);
+                 uncompressedDataSize);
 
     ClipboardActivityItemHeader header{};
     header.id = activityItemID;

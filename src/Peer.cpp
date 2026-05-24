@@ -296,7 +296,11 @@ bool Peer::DrainOutboundMessages(CryptoChannel& channel, const SocketIoContext& 
 		}
 
 		const std::shared_ptr<const ClipboardPayload>& payload = msg.value();
-		log(__FUNCTION__, Logger::Level::Debug, L"Clipboard payload to be sent: format ID %u, encoded size %zu bytes, decoded size %u bytes", payload->formatId, payload->rawData.size(), payload->decodedDataSize);
+		log(__FUNCTION__, Logger::Level::Debug, L"Clipboard payload to be sent: format %ls (%u), payload size %zu bytes, uncompressed size %u bytes",
+			ClippClipboardFormatNameW(payload->formatId),
+			payload->formatId,
+			payload->rawData.size(),
+			payload->uncompressedDataSize);
 		if (!SendClipboardData(channel, io, *payload)) {
 			log(__FUNCTION__, Logger::Level::Debug, L"Peer failed to send clipboard payload.");
 			return false;
@@ -479,27 +483,27 @@ void Peer::ThreadProcRecv() {
 				auto* clipMessage = reinterpret_cast<NetworkDefs::ClipboardMessage*>(headerMsg.data());
 				ClipboardPayload payload{};
 				payload.formatId = ntohl(clipMessage->formatId);
-				payload.decodedDataSize = ntohl(clipMessage->decodedDataSize);
+				payload.uncompressedDataSize = ntohl(clipMessage->uncompressedDataSize);
 				payload.isCompressed = clipMessage->isCompressed != 0;
-				uint32_t encodedDataSize = ntohl(clipMessage->encodedDataSize);
+				uint32_t payloadDataSize = ntohl(clipMessage->payloadDataSize);
 
 				if (!channel.RecvMessage(io, payload.rawData)) {
 					break;
 				}
 				ReportTraffic(0, payload.rawData.size());
 
-				if (payload.rawData.size() != static_cast<size_t>(encodedDataSize)) {
-					log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard message: encoded size mismatch (header: %u bytes, body: %zu bytes)", encodedDataSize, payload.rawData.size());
+				if (payload.rawData.size() != static_cast<size_t>(payloadDataSize)) {
+					log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard message: payload size mismatch (header: %u bytes, body: %zu bytes)", payloadDataSize, payload.rawData.size());
 					break;
 				}
 
-				if (payload.decodedDataSize > ClipboardLimits::kMaxDecompressedClipboardBytes) {
-					log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard message: decoded size %u bytes exceeds limit %llu bytes", payload.decodedDataSize, ClipboardLimits::kMaxDecompressedClipboardBytes);
+				if (payload.uncompressedDataSize > ClipboardLimits::kMaxDecompressedClipboardBytes) {
+					log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard message: uncompressed size %u bytes exceeds limit %llu bytes", payload.uncompressedDataSize, ClipboardLimits::kMaxDecompressedClipboardBytes);
 					break;
 				}
 
-				if (!payload.isCompressed && encodedDataSize != payload.decodedDataSize) {
-					log(__FUNCTION__, Logger::Level::Warning, L"Rejecting uncompressed clipboard message: encoded size %u bytes does not equal decoded size %u bytes", encodedDataSize, payload.decodedDataSize);
+				if (!payload.isCompressed && payloadDataSize != payload.uncompressedDataSize) {
+					log(__FUNCTION__, Logger::Level::Warning, L"Rejecting uncompressed clipboard message: payload size %u bytes does not equal uncompressed size %u bytes", payloadDataSize, payload.uncompressedDataSize);
 					break;
 				}
 

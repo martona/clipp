@@ -33,7 +33,7 @@ struct ClipboardActivityItemHeader {
     std::chrono::system_clock::time_point timestamp{};
     uint32_t formatId{};
     size_t encodedBytes{};
-    uint32_t decodedBytes{};
+    uint32_t uncompressedBytes{};
 };
 
 struct ClipboardActivityDisplayItem {

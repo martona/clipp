@@ -71,7 +71,7 @@ void StopClipboardNotification() {
 
 ClipboardPayload ReadClipboardData(PlatformWindowHandle hwnd) {
     ClipboardPayload payload{};
-    payload.formatId = 0;
+    payload.formatId = CLIPP_FORMAT_NONE;
 
     @autoreleasepool {
         NSPasteboard* pb = [NSPasteboard generalPasteboard];
@@ -81,7 +81,7 @@ ClipboardPayload ReadClipboardData(PlatformWindowHandle hwnd) {
         if (text) {
             NSData* data = [text dataUsingEncoding:NSUTF8StringEncoding];
             if (data) {
-                payload.formatId = CF_UNICODETEXT;
+                payload.formatId = CLIPP_FORMAT_UTF8;
                 const unsigned char* bytes = static_cast<const unsigned char*>([data bytes]);
                 payload.rawData.assign(bytes, bytes + [data length]);
                 payload.rawData.push_back('\0');
@@ -91,11 +91,11 @@ ClipboardPayload ReadClipboardData(PlatformWindowHandle hwnd) {
         // Try to read PNG image data. Network image payloads are already PNG,
         // and macOS exposes PNG pasteboard data as public.png.
         NSData* pngData = nil;
-        if (payload.formatId == 0) {
+        if (payload.formatId == CLIPP_FORMAT_NONE) {
             pngData = [pb dataForType:NSPasteboardTypePNG];
         }
         if (pngData) {
-            payload.formatId = CF_DIB;
+            payload.formatId = CLIPP_FORMAT_PNG;
             const unsigned char* bytes = static_cast<const unsigned char*>([pngData bytes]);
             payload.rawData.assign(bytes, bytes + [pngData length]);
             if (IsPngStream(payload.rawData)) {
@@ -103,16 +103,16 @@ ClipboardPayload ReadClipboardData(PlatformWindowHandle hwnd) {
             }
             else {
                 g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Ignoring PNG pasteboard data with invalid PNG signature (%zu bytes)", payload.rawData.size());
-                payload.formatId = 0;
+                payload.formatId = CLIPP_FORMAT_NONE;
                 payload.rawData.clear();
             }
         }
     }
 
-    if (payload.formatId != 0) {
+    if (payload.formatId != CLIPP_FORMAT_NONE) {
         if (!g_clipboardHashGuard.AcceptCurrent(payload)) {
             g_logger.log(__FUNCTION__, Logger::Level::Debug, "Ignoring clipboard notification for already-current clipboard contents.");
-            payload.formatId = 0;
+            payload.formatId = CLIPP_FORMAT_NONE;
             payload.rawData.clear();
         }
     }
@@ -121,7 +121,7 @@ ClipboardPayload ReadClipboardData(PlatformWindowHandle hwnd) {
 }
 
 bool IsClipboardDataCurrent(const ClipboardPayload& payload) {
-    return payload.formatId != 0 && g_clipboardHashGuard.IsCurrent(payload);
+    return payload.formatId != CLIPP_FORMAT_NONE && g_clipboardHashGuard.IsCurrent(payload);
 }
 
 void SetClipboardData(
@@ -141,7 +141,7 @@ void SetClipboardData(
 
         bool wroteClipboard = false;
 
-        if (payload.formatId == CF_UNICODETEXT) {
+        if (payload.formatId == CLIPP_FORMAT_UTF8) {
             size_t textLen = payload.rawData.size();
             if (textLen > 0 && payload.rawData.back() == '\0') {
                 textLen--;
@@ -152,7 +152,7 @@ void SetClipboardData(
             if (str) {
                 wroteClipboard = [pb setString:str forType:NSPasteboardTypeString];
             }
-        } else if (payload.formatId == CF_DIB) {
+        } else if (payload.formatId == CLIPP_FORMAT_PNG) {
             if (!IsPngStream(payload.rawData)) {
                 g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Refusing to write invalid PNG image payload to system clipboard (%zu bytes)", payload.rawData.size());
             }
@@ -165,7 +165,9 @@ void SetClipboardData(
             }
         }
         else {
-            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Unsupported clipboard payload format ID %u; nothing written", payload.formatId);
+            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Unsupported clipboard payload format %ls (%u); nothing written",
+                         ClippClipboardFormatNameW(payload.formatId),
+                         payload.formatId);
         }
 
         if (wroteClipboard && markAsClippOriginated) {
@@ -175,7 +177,10 @@ void SetClipboardData(
             g_clipboardHashGuard.RememberCurrent(payload);
         }
         else {
-            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"System clipboard write did not complete (format ID: %u, payload size: %zu bytes)", payload.formatId, payload.rawData.size());
+            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"System clipboard write did not complete (format: %ls, ID: %u, payload size: %zu bytes)",
+                         ClippClipboardFormatNameW(payload.formatId),
+                         payload.formatId,
+                         payload.rawData.size());
         }
     }
 }

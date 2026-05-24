@@ -19,17 +19,17 @@ bool SendClipboardPayload(CryptoChannel& channel,
         return false;
     }
 
-    const uint32_t encodedDataSize = static_cast<uint32_t>(payload.rawData.size());
-    uint32_t decodedDataSize = payload.decodedDataSize;
-    if (decodedDataSize == 0 && !payload.isCompressed) {
-        decodedDataSize = encodedDataSize;
+    const uint32_t payloadDataSize = static_cast<uint32_t>(payload.rawData.size());
+    uint32_t uncompressedDataSize = payload.uncompressedDataSize;
+    if (uncompressedDataSize == 0 && !payload.isCompressed) {
+        uncompressedDataSize = payloadDataSize;
     }
 
     NetworkDefs::ClipboardMessage message{};
     message.formatId = htonl(payload.formatId);
     message.isCompressed = payload.isCompressed ? 1 : 0;
-    message.encodedDataSize = htonl(encodedDataSize);
-    message.decodedDataSize = htonl(decodedDataSize);
+    message.payloadDataSize = htonl(payloadDataSize);
+    message.uncompressedDataSize = htonl(uncompressedDataSize);
 
     if (io.socket == INVALID_SOCKET || !channel.SendTaggedMessage(io, "CLIP")) {
         return false;
@@ -38,7 +38,7 @@ bool SendClipboardPayload(CryptoChannel& channel,
         return false;
     }
     if (!payload.rawData.empty()
-        && !channel.SendMessage(io, payload.rawData.data(), encodedDataSize)) {
+        && !channel.SendMessage(io, payload.rawData.data(), payloadDataSize)) {
         return false;
     }
 

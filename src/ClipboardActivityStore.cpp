@@ -92,7 +92,7 @@ std::wstring PreviewText(const std::wstring& text) {
 }
 
 std::optional<std::wstring> TextFromPayload(const ClipboardPayload& payload) {
-    if (payload.formatId != CF_UNICODETEXT) {
+    if (payload.formatId != CLIPP_FORMAT_UTF8) {
         return std::nullopt;
     }
 
@@ -274,7 +274,7 @@ std::optional<ClipboardActivityDisplayItem> ClipboardActivityStore::BuildDisplay
     ClipboardActivityDisplayItem display;
     display.header = item.header;
 
-    if (payload.formatId == CF_UNICODETEXT) {
+    if (payload.formatId == CLIPP_FORMAT_UTF8) {
         auto text = TextFromPayload(payload);
         if (!text) {
             return std::nullopt;
@@ -293,7 +293,7 @@ std::optional<ClipboardActivityDisplayItem> ClipboardActivityStore::BuildDisplay
             display.kind = ClipboardActivityPayloadKind::Text;
             display.previewText = PreviewText(*text);
         }
-    } else if (payload.formatId == CF_DIB) {
+    } else if (payload.formatId == CLIPP_FORMAT_PNG) {
         display.kind = ClipboardActivityPayloadKind::Image;
         display.imagePngData = std::move(payload.rawData);
     } else {
@@ -335,7 +335,7 @@ void ClipboardActivityStore::NotifyWatchers(
 }
 
 uint64_t ClipboardActivityStore::AddItem(ClipboardActivityDirection direction, const std::wstring& deviceName, const ClipboardPayload& payload) {
-    if (payload.formatId == 0) {
+    if (payload.formatId == CLIPP_FORMAT_NONE) {
         return 0;
     }
 
@@ -354,7 +354,7 @@ uint64_t ClipboardActivityStore::AddItem(ClipboardActivityDirection direction, c
         item.payload = MakeStoredPayload(payload);
         item.header.formatId = item.payload->formatId;
         item.header.encodedBytes = item.payload->rawData.size();
-        item.header.decodedBytes = item.payload->decodedDataSize;
+        item.header.uncompressedBytes = item.payload->uncompressedDataSize;
 
         itemID = item.header.id;
         updates.push_back({

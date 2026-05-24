@@ -111,7 +111,11 @@ void NetworkRuntime::ThreadProc() {
 }
 
 void NetworkRuntime::OnClipboardReceived(const std::wstring& hostName, const HostId&, ClipboardPayload& payload) {
-    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Received clipboard data from client %ls (format ID: %u, size: %zu bytes)", hostName.c_str(), payload.formatId, payload.rawData.size());
+    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Received clipboard data from client %ls (format: %ls, ID: %u, size: %zu bytes)",
+        hostName.c_str(),
+        ClippClipboardFormatNameW(payload.formatId),
+        payload.formatId,
+        payload.rawData.size());
 #if CLIPP_IOS_CLIPBOARD_RECEIVE_STUB
     CLPIOSReceiveClipboardPayload(hostName, payload);
 #else
