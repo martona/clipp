@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "Settings.h"
+#include "ClipboardWire.h"
 #include "CryptoChannel.h"
 #include "NetworkDefs.h"
 #include "utils.h"
@@ -32,40 +33,6 @@ static void CullStoppedPeersAsync() {
 			g_peerManager.CullPeers();
 			g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Lambda culled");
 		}).detach();
-}
-
-static bool SetSocketBlockingMode(SOCKET socket, bool blocking) {
-#ifdef _WIN32
-	u_long mode = blocking ? 0 : 1;
-	return ioctlsocket(socket, FIONBIO, &mode) == 0;
-#else
-	int flags = fcntl(socket, F_GETFL, 0);
-	if (flags == -1) return false;
-	flags = blocking ? (flags & ~O_NONBLOCK) : (flags | O_NONBLOCK);
-	return fcntl(socket, F_SETFL, flags) == 0;
-#endif
-}
-
-static int GetLastSocketError() {
-#ifdef _WIN32
-	return WSAGetLastError();
-#else
-	return errno;
-#endif
-}
-
-static bool IsConnectPendingError(int error) {
-#ifdef _WIN32
-	return error == WSAEWOULDBLOCK || error == WSAEINPROGRESS || error == WSAEALREADY;
-#else
-	return error == EINPROGRESS || error == EWOULDBLOCK || error == EALREADY;
-#endif
-}
-
-static bool GetPendingConnectError(SOCKET socket, int& connectError) {
-	socklen_t optionLength = sizeof(connectError);
-	connectError = 0;
-	return getsockopt(socket, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&connectError), &optionLength) == 0;
 }
 
 static std::chrono::milliseconds NextPingInterval() {
@@ -264,7 +231,7 @@ bool Peer::ConnectSocket() {
 	}
 
 	if (connect(socket, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == SOCKET_ERROR) {
-		const int connectStartError = GetLastSocketError();
+		const int connectStartError = LastSocketError();
 		if (!IsConnectPendingError(connectStartError)) {
 			log(__FUNCTION__, Logger::Level::Debug, L"Peer: TCP connect failed; retrying.");
 			CloseSocket();
@@ -317,27 +284,9 @@ bool Peer::ConnectSocket() {
 }
 
 bool Peer::SendClipboardData(CryptoChannel& channel, const SocketIoContext& io, const ClipboardPayload& payload) {
-	ClipboardPayload payloadToSend = payload;
-	const size_t maxEncodedPayloadBytes = (64u * 1024u * 1024u) - sizeof(NetworkDefs::ClipboardMessage) - crypto_secretstream_xchacha20poly1305_ABYTES;
-	if (payloadToSend.rawData.size() > maxEncodedPayloadBytes) return false;
-
-	const uint32_t encodedDataSize = static_cast<uint32_t>(payloadToSend.rawData.size());
-	uint32_t decodedDataSize = payloadToSend.decodedDataSize;
-	if (decodedDataSize == 0 && !payloadToSend.isCompressed) {
-		decodedDataSize = encodedDataSize;
-	}
-
-	NetworkDefs::ClipboardMessage msg{};
-	msg.formatId = htonl(payloadToSend.formatId);
-	msg.isCompressed = payloadToSend.isCompressed ? 1 : 0;
-	msg.decodedDataSize = htonl(payloadToSend.decodedDataSize);
-	msg.encodedDataSize = htonl(encodedDataSize);
-	if (io.socket == INVALID_SOCKET || !channel.SendTaggedMessage(io, "CLIP")) return false;
-	if (!channel.SendMessage(io, reinterpret_cast<unsigned char*>(& msg), sizeof(msg))) return false;
-	if (!payloadToSend.rawData.empty())
-		if (!channel.SendMessage(io, payloadToSend.rawData.data(), static_cast<uint32_t>(payloadToSend.rawData.size())))
-			return false;
-	ReportTraffic(4 + sizeof(NetworkDefs::ClipboardMessage) + payloadToSend.rawData.size(), 0);
+	size_t bytesSent = 0;
+	if (!ClipboardWire::SendClipboardPayload(channel, io, payload, &bytesSent)) return false;
+	ReportTraffic(bytesSent, 0);
 	return true;
 }
 

@@ -3,7 +3,7 @@
 #include "Settings.h"
 #include "KeyManager.h"
 #include "Logger.h"
-#include <sodium.h>
+#include "MDNSProtocol.h"
 #include <thread>
 #include <future>
 #include <chrono>
@@ -11,10 +11,7 @@
 #include <string>
 #include <array>
 #include <atomic>
-#include <sstream>
-#include <iomanip>
 #include <mutex>
-#include <cstddef>
 
 #include "utils_socket.h"
 #include "HostId.h"
@@ -37,28 +34,7 @@ static std::size_t g_recentOriginatedQueryIDNext = 0;
 static std::size_t g_recentOriginatedQueryIDUsed = 0;
 static HostId g_hostId;
 
-struct mdns_packet {
-    mdns_packet() {
-		memset(this, 0, sizeof(*this));
-    }
-	char selector[16];
-	u_short version;
-	char hostName[256];
-	unsigned char hostID[32];
-	u_short port;
-	char verb[16];
-	unsigned char queryID[32];
-	unsigned char nonce[32];
-};
-
-struct encrypted_mdns_packet {
-    unsigned char nonce[crypto_secretbox_NONCEBYTES];
-    unsigned char ciphertext[sizeof(mdns_packet) + crypto_secretbox_MACBYTES];
-};
-
 namespace {
-    constexpr const char* kProtocolSelector = "clipp";
-    constexpr int kProtocolVersion = 1;
     constexpr auto kBroadcastInterval = std::chrono::minutes(1);
 }
 
@@ -101,112 +77,22 @@ static bool HasNetworkKey() {
     return g_keyManager.GetKey(KeyManager::KeyRole::MDNS, mdnsKey, &errorMessage);
 }
 
-static bool EncryptPacket(const mdns_packet& packet, encrypted_mdns_packet& encryptedPacket) {
-    std::array<unsigned char, KeyManager::NetworkKeySize> mdnsKey{};
-    std::string errorMessage;
-    if (!g_keyManager.GetKey(KeyManager::KeyRole::MDNS, mdnsKey, &errorMessage))
-        return false;
-
-    randombytes_buf(encryptedPacket.nonce, sizeof(encryptedPacket.nonce));
-    return crypto_secretbox_easy(
-        encryptedPacket.ciphertext,
-        reinterpret_cast<const unsigned char*>(&packet),
-        sizeof(packet),
-        encryptedPacket.nonce,
-        mdnsKey.data()) == 0;
-}
-
-static bool DecryptPacket(const char* packet, size_t packetLen, mdns_packet& decryptedPacket) {
-    if (!packet || packetLen != sizeof(encrypted_mdns_packet))
-        return false;
-
-    const encrypted_mdns_packet* encryptedPacket = reinterpret_cast<const encrypted_mdns_packet*>(packet);
-    std::array<unsigned char, KeyManager::NetworkKeySize> mdnsKey{};
-    std::string errorMessage;
-    if (!g_keyManager.GetKey(KeyManager::KeyRole::MDNS, mdnsKey, &errorMessage))
-        return false;
-
-    return crypto_secretbox_open_easy(
-        reinterpret_cast<unsigned char*>(&decryptedPacket),
-        encryptedPacket->ciphertext,
-        sizeof(encryptedPacket->ciphertext),
-        encryptedPacket->nonce,
-        mdnsKey.data()) == 0;
-}
-
-static std::string GetLocalHostName() {
-    char hostName[256] = {};
-	if (gethostname(hostName, sizeof(hostName)) == 0) {
-        return hostName;
-    }
-    return "unknown";
-}
-
-static mdns_packet BuildMDNSPacket(const std::string& hostName, const std::string& verb, const unsigned char* queryID = nullptr) {
-    mdns_packet packet;
-    packet.version = htons(kProtocolVersion);
-    randombytes_buf(packet.nonce, sizeof(packet.nonce));
-    strncpys(packet.selector, kProtocolSelector);
-    strncpys(packet.hostName, hostName.c_str());
-    strncpys(packet.verb, verb.c_str());
-    packet.port = htons(static_cast<u_short>(g_settings.tcpPort()));
-    std::memcpy(packet.hostID, g_hostId.data().data(), sizeof(packet.hostID));
-    if (queryID) {
-        std::memcpy(packet.queryID, queryID, sizeof(packet.queryID));
-    } else {
-        randombytes_buf(packet.queryID, sizeof(packet.queryID));
+static MDNSProtocol::Packet BuildMDNSPacket(const std::string& hostName, const char* verb, const unsigned char* queryID = nullptr) {
+    MDNSProtocol::Packet packet = MDNSProtocol::BuildPacket(hostName,
+        g_hostId,
+        static_cast<unsigned short>(g_settings.tcpPort()),
+        verb,
+        queryID);
+    if (queryID == nullptr) {
         RecordOriginatedQueryID(packet.queryID);
     }
     return packet;
 }
 
-static bool ParseDiscoveryPacket(mdns_packet& pkt, 
-                                std::string& hostName, 
-                                std::string& verb, 
-                                std::string& queryID, 
-                                std::string& nonce, 
-                                unsigned short& hostPort, 
-                                const unsigned char** rawQueryID, 
-                                HostId& remoteHostID) 
-{
-    // Validate selector
-    if (strncmp(pkt.selector, kProtocolSelector, cntof(pkt.selector)) != 0)
-        return false;
-    // Validate version
-    if (pkt.version != htons(kProtocolVersion))
-        return false;
-    // Validate hostName and verb are not empty
-    if (pkt.hostName[0] == 0 || pkt.verb[0] == 0)
-        return false;
-	// Force null-termination of string fields
-	pkt.hostName[cntof(pkt.hostName) - 1] = 0;
-	pkt.verb[cntof(pkt.verb) - 1] = 0;
-    hostName = pkt.hostName;
-    verb = pkt.verb;
-    if (rawQueryID)
-        *rawQueryID = pkt.queryID;
-	remoteHostID = pkt.hostID;
-
-    if (verb == "response" && !IsRecentOriginatedQueryID(pkt.queryID))
-        return false;
-
-	hostPort = ntohs(pkt.port);
-
-    // Convert queryID and nonce to hex wstring
-    std::ostringstream ossQueryID, ossNonce;
-    for (int i = 0; i < 32; ++i) {
-        ossQueryID << std::hex << std::setw(2) << std::setfill('0') << (int)pkt.queryID[i];
-        ossNonce   << std::hex << std::setw(2) << std::setfill('0') << (int)pkt.nonce[i];
-    }
-    queryID = ossQueryID.str();
-    nonce = ossNonce.str();
-    return true;
-}
-
 static bool SendDiscoveryPacket(SOCKET sock, const sockaddr_in& targetAddr, const std::string& hostName) {
-    mdns_packet pkt = BuildMDNSPacket(hostName, "query");
-    encrypted_mdns_packet encryptedPacket{};
-    if (!EncryptPacket(pkt, encryptedPacket)) {
+    MDNSProtocol::Packet pkt = BuildMDNSPacket(hostName, "query");
+    MDNSProtocol::EncryptedPacket encryptedPacket{};
+    if (!MDNSProtocol::EncryptPacket(pkt, encryptedPacket)) {
         g_logger.log(__FUNCTION__, Logger::Level::Debug, "mDNS: unable to encrypt discovery packet.");
         return false;
     }
@@ -253,7 +139,7 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
         return;
     }
 
-    const std::string localHostName = GetLocalHostName();
+    const std::string localHostName = MDNSProtocol::GetLocalHostName();
     g_logger.log(__FUNCTION__,
         Logger::Level::Info,
         "mDNS: starting for host '%s' on %s:%hu, multicast %s:%hu.",
@@ -326,7 +212,7 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
     g_logger.log(__FUNCTION__, Logger::Level::Info, "mDNS: thread initialized.");
 
     auto nextSendTime = std::chrono::steady_clock::now();
-    std::array<char, 1024> recvBuffer{};
+    std::array<char, sizeof(MDNSProtocol::EncryptedPacket)> recvBuffer{};
 
     while (g_mdnsRunning.load()) {
         if (g_mdnsReloadHostID.exchange(false)) {
@@ -390,43 +276,36 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
                 continue;
             }
 
-            mdns_packet decryptedPacket;
-            if (!DecryptPacket(recvBuffer.data(), static_cast<size_t>(bytesRead), decryptedPacket)) {
+            MDNSProtocol::Packet decryptedPacket;
+            if (!MDNSProtocol::DecryptPacket(recvBuffer.data(), static_cast<size_t>(bytesRead), decryptedPacket)) {
                 g_logger.log(__FUNCTION__, Logger::Level::DDebug, "mDNS: unable to decrypt packet.");
                 continue;
             }
 
-            std::string discoveredHost, verb, discoveredQueryID, discoveredNonce;
-			unsigned short discoveredPort = 0;
-            const unsigned char* rawQueryID = nullptr;
-            HostId remoteHostId;
-            if (!ParseDiscoveryPacket(decryptedPacket,
-                discoveredHost,
-                verb,
-                discoveredQueryID,
-                discoveredNonce,
-                discoveredPort,
-                &rawQueryID,
-                remoteHostId))
-            {
+            MDNSProtocol::ParsedPacket parsedPacket;
+            if (!MDNSProtocol::ParsePacket(decryptedPacket, parsedPacket)) {
                 g_logger.log(__FUNCTION__, Logger::Level::DDebug, "mDNS: ignored decrypted packet that did not match the Clipp discovery schema.");
                 continue;
             }
+            if (parsedPacket.verb == "response" && !IsRecentOriginatedQueryID(parsedPacket.queryID.data())) {
+                g_logger.log(__FUNCTION__, Logger::Level::DDebug, "mDNS: ignored response for an unknown query.");
+                continue;
+            }
 
-            if (remoteHostId == g_hostId) {
-                if (verb == "query" && rawQueryID != nullptr && IsRecentOriginatedQueryID(rawQueryID)) {
+            if (parsedPacket.remoteHostID == g_hostId) {
+                if (parsedPacket.verb == "query" && IsRecentOriginatedQueryID(parsedPacket.queryID.data())) {
                     g_logger.log(__FUNCTION__, Logger::Level::DDebug, "mDNS: ignored self query.");
                     continue;
                 }
 
-                ReportPossibleHostIDCollision(verb, senderIpForLog);
+                ReportPossibleHostIDCollision(parsedPacket.verb, senderIpForLog);
                 continue;
             }
 
-            if (verb == "query" && rawQueryID != nullptr) {
-                mdns_packet responsePacket = BuildMDNSPacket(localHostName, "response", rawQueryID);
-                encrypted_mdns_packet encryptedResponse{};
-                if (EncryptPacket(responsePacket, encryptedResponse)) {
+            if (parsedPacket.verb == "query") {
+                MDNSProtocol::Packet responsePacket = BuildMDNSPacket(localHostName, "response", parsedPacket.queryID.data());
+                MDNSProtocol::EncryptedPacket encryptedResponse{};
+                if (MDNSProtocol::EncryptPacket(responsePacket, encryptedResponse)) {
                     sendto(sock, reinterpret_cast<const char*>(&encryptedResponse), sizeof(encryptedResponse), 0,
                         reinterpret_cast<const sockaddr*>(&fromAddr), sizeof(fromAddr));
                     g_logger.log(__FUNCTION__, Logger::Level::DDebug, "mDNS: sent discovery response to %s.", senderIpForLog);
@@ -436,13 +315,13 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
             if (g_mdnsCallback) {
                 char senderIp[INET_ADDRSTRLEN] = {0};
                 inet_ntop(AF_INET, &fromAddr.sin_addr, senderIp, sizeof(senderIp));
-				g_mdnsCallback(discoveredHost.c_str(), 
-                    senderIp, 
-                    discoveredQueryID.c_str(), 
-                    discoveredNonce.c_str(), 
-                    verb.c_str(), 
-                    discoveredPort, 
-                    remoteHostId);
+				g_mdnsCallback(parsedPacket.hostName.c_str(),
+                    senderIp,
+                    parsedPacket.queryIDHex.c_str(),
+                    parsedPacket.nonceHex.c_str(),
+                    parsedPacket.verb.c_str(),
+                    parsedPacket.port,
+                    parsedPacket.remoteHostID);
             }
         }
     }

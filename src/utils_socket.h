@@ -4,9 +4,14 @@
 #include <array>
 #include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <string>
 
 #include "platform.h"
+
+#ifndef _WIN32
+#include <fcntl.h>
+#endif
 
 class SocketWakeEvent {
 public:
@@ -138,6 +143,86 @@ static bool SocketInterrupted(int error) {
 #else
 	return error == EINTR;
 #endif
+}
+
+static bool SetSocketBlockingMode(SOCKET socket, bool blocking) {
+#ifdef _WIN32
+	u_long mode = blocking ? 0 : 1;
+	return ioctlsocket(socket, FIONBIO, &mode) == 0;
+#else
+	int flags = fcntl(socket, F_GETFL, 0);
+	if (flags == -1) return false;
+	flags = blocking ? (flags & ~O_NONBLOCK) : (flags | O_NONBLOCK);
+	return fcntl(socket, F_SETFL, flags) == 0;
+#endif
+}
+
+static bool IsConnectPendingError(int error) {
+#ifdef _WIN32
+	return error == WSAEWOULDBLOCK || error == WSAEINPROGRESS || error == WSAEALREADY;
+#else
+	return error == EINPROGRESS || error == EWOULDBLOCK || error == EALREADY;
+#endif
+}
+
+static bool GetPendingConnectError(SOCKET socket, int& connectError) {
+	socklen_t optionLength = sizeof(connectError);
+	connectError = 0;
+	return getsockopt(socket, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&connectError), &optionLength) == 0;
+}
+
+static SOCKET ConnectTcpSocket(const std::string& ip, unsigned short port, std::chrono::milliseconds timeout) {
+	SOCKET socket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (socket == INVALID_SOCKET) {
+		return INVALID_SOCKET;
+	}
+
+	if (!SetSocketBlockingMode(socket, false)) {
+		closesocket(socket);
+		return INVALID_SOCKET;
+	}
+
+	sockaddr_in address{};
+	address.sin_family = AF_INET;
+	address.sin_port = htons(port);
+	if (inet_pton(AF_INET, ip.c_str(), &address.sin_addr) != 1) {
+		closesocket(socket);
+		return INVALID_SOCKET;
+	}
+
+	if (connect(socket, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0) {
+		return socket;
+	}
+
+	if (!IsConnectPendingError(LastSocketError())) {
+		closesocket(socket);
+		return INVALID_SOCKET;
+	}
+
+	fd_set writeSet;
+	fd_set errorSet;
+	FD_ZERO(&writeSet);
+	FD_ZERO(&errorSet);
+	FD_SET(socket, &writeSet);
+	FD_SET(socket, &errorSet);
+
+	timeval wait{};
+	wait.tv_sec = static_cast<long>(timeout.count() / 1000);
+	wait.tv_usec = static_cast<decltype(wait.tv_usec)>((timeout.count() % 1000) * 1000);
+
+	const int ready = select(static_cast<int>(socket) + 1, nullptr, &writeSet, &errorSet, &wait);
+	if (ready <= 0) {
+		closesocket(socket);
+		return INVALID_SOCKET;
+	}
+
+	int connectError = 0;
+	if (!GetPendingConnectError(socket, connectError) || connectError != 0) {
+		closesocket(socket);
+		return INVALID_SOCKET;
+	}
+
+	return socket;
 }
 
 static SocketWaitResult WaitForSocket(SOCKET sock, const SocketWakeEvent* wakeEvent, bool readable, bool writable) {

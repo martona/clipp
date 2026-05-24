@@ -21,7 +21,13 @@
     <ClCompile Include="ClipboardHashGuard.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="ClipboardWire.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="Settings.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="MDNSProtocol.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="MDNSThread.cpp">
@@ -98,6 +104,9 @@
     <ClInclude Include="MDNSThread.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="MDNSProtocol.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="KeyManager.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -114,6 +123,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="ClipboardData.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ClipboardWire.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="CryptoChannel.h">

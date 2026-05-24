@@ -1,3 +1,5 @@
 #include "../Clipp/Bridge/ClippLoggerCore.mm"
 #include "../Clipp/Bridge/ClippSharedCore.mm"
 #include "../Clipp/Bridge/ClippCryptoChannelCore.mm"
+#include "../../src/ClipboardWire.cpp"
+#include "../../src/MDNSProtocol.cpp"

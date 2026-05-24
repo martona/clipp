@@ -172,8 +172,10 @@
   <ItemGroup>
     <ClCompile Include="Listener.cpp" />
     <ClCompile Include="ClipboardHashGuard.cpp" />
+    <ClCompile Include="ClipboardWire.cpp" />
     <ClCompile Include="CryptoChannel.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="MDNSProtocol.cpp" />
     <ClCompile Include="NetworkRuntime.cpp" />
     <ClCompile Include="platform\win32\Clipboard.cpp" />
     <ClCompile Include="platform\win32\AutoStart.cpp" />
@@ -199,6 +201,7 @@
     <ClInclude Include="BlockingQueue.h" />
     <ClInclude Include="ClipboardHashGuard.h" />
     <ClInclude Include="ClipboardData.h" />
+    <ClInclude Include="ClipboardWire.h" />
     <ClInclude Include="HostId.h" />
     <ClInclude Include="Listener.h" />
     <ClInclude Include="CryptoChannel.h" />
@@ -215,6 +218,7 @@
     <ClInclude Include="platform\win32\AboutPage.h" />
     <ClInclude Include="platform\win32\xaml_dialog.h" />
     <ClInclude Include="MDNSThread.h" />
+    <ClInclude Include="MDNSProtocol.h" />
     <ClInclude Include="KeyManager.h" />
     <ClInclude Include="Logger.h" />
     <ClInclude Include="NetworkDefs.h" />
