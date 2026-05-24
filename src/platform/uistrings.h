@@ -21,11 +21,21 @@
 
 #define CLP_UI_NAME "Name"
 #define CLP_UI_SECRET "Secret"
-#define CLP_UI_NETWORK_KEY "Network Key"
+#define CLP_UI_NETWORK_KEY "Network key"
 #define CLP_UI_NETWORK_KEY_FINGERPRINT "Network key fingerprint. Used only on this screen; not in itself a secret."
 #define CLP_UI_ENTER_NETWORK_SECRET "Enter network secret to create or join a network."
 #define CLP_UI_SECRET_TOO_SHORT "Secret must be at least 8 characters."
 #define CLP_UI_WORKING "... working ..."
+
+#define CLP_UI_CLIPBOARD "Clipboard"
+#define CLP_UI_CLIPBOARD_EMPTY "Clipboard traffic will appear here."
+#define CLP_UI_THIS_DEVICE "This device"
+#define CLP_UI_COPY "Copy"
+#define CLP_UI_LINK "Link"
+#define CLP_UI_TEXT "Text"
+#define CLP_UI_IMAGE "Image"
+#define CLP_UI_PRIVATE_TEXT "Private text"
+#define CLP_UI_UNSUPPORTED_CLIPBOARD_ITEM "Unsupported clipboard item"
 
 #define CLP_UI_PEERS "Peers"
 #define CLP_UI_NO_PEERS_HELP "Your devices will appear here when they're on the same network and running Clipp. Make sure they are are using the exact same network name and secret. Both are case-sensitive."

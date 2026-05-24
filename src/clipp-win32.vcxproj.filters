@@ -18,6 +18,9 @@
     <ClCompile Include="Listener.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="ClipboardActivityStore.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="ClipboardHashGuard.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -72,6 +75,9 @@
     <ClCompile Include="platform\win32\NetworkView.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="platform\win32\NetworkPage.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="platform\win32\SettingsPage.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -117,6 +123,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="BlockingQueue.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ClipboardActivityStore.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="ClipboardHashGuard.h">
@@ -171,6 +180,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="platform\win32\NetworkView.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="platform\win32\NetworkPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="platform\win32\SettingsPage.h">

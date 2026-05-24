@@ -171,6 +171,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Listener.cpp" />
+    <ClCompile Include="ClipboardActivityStore.cpp" />
     <ClCompile Include="ClipboardHashGuard.cpp" />
     <ClCompile Include="ClipboardWire.cpp" />
     <ClCompile Include="CryptoChannel.cpp" />
@@ -188,6 +189,7 @@
     <ClCompile Include="platform\win32\Settings.cpp" />
     <ClCompile Include="platform\win32\NetworkItem.cpp" />
     <ClCompile Include="platform\win32\NetworkView.cpp" />
+    <ClCompile Include="platform\win32\NetworkPage.cpp" />
     <ClCompile Include="platform\win32\SettingsPage.cpp" />
     <ClCompile Include="platform\win32\TerminalLogView.cpp" />
     <ClCompile Include="platform\win32\ClippPage.cpp" />
@@ -199,6 +201,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="BlockingQueue.h" />
+    <ClInclude Include="ClipboardActivityStore.h" />
     <ClInclude Include="ClipboardHashGuard.h" />
     <ClInclude Include="ClipboardData.h" />
     <ClInclude Include="ClipboardWire.h" />
@@ -211,6 +214,7 @@
     <ClInclude Include="platform\win32\AutoStart.h" />
     <ClInclude Include="platform\win32\NetworkItem.h" />
     <ClInclude Include="platform\win32\NetworkView.h" />
+    <ClInclude Include="platform\win32\NetworkPage.h" />
     <ClInclude Include="platform\win32\SettingsPage.h" />
     <ClInclude Include="platform\win32\TerminalLogView.h" />
     <ClInclude Include="platform\win32\ClippPage.h" />

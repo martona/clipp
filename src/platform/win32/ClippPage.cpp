@@ -1,40 +1,92 @@
 #include "ClippPage.h"
 
-#include "KeyManager.h"
-#include "Logger.h"
-#include "MDNSThread.h"
-#include "Settings.h"
-#include "platform/uiClippPage.h"
+#include "Clipboard.h"
+#include "platform/uistrings.h"
 #include "utils.h"
 
+#include <algorithm>
+#include <cwchar>
+#include <ctime>
 #include <string>
 
-#include <sodium.h>
-
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.Storage.Streams.h>
 #include <winrt/Windows.UI.h>
 #include <winrt/Windows.UI.Text.h>
 #include <winrt/Windows.UI.Xaml.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
+#include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
+#include <winrt/Windows.UI.Xaml.Media.Imaging.h>
 #include <winrt/base.h>
 
-extern Settings g_settings;
-extern KeyManager g_keyManager;
-extern Logger g_logger;
-
 namespace {
-constexpr wchar_t kMaskedPassword[] = L"••••••••••••••••";
+constexpr double kActivityFollowBottomTolerance = 48.0;
+constexpr double kActivityBubbleMaxWidth = 460.0;
+
+winrt::Windows::UI::Xaml::Media::SolidColorBrush MakeBrush(uint8_t alpha, uint8_t red, uint8_t green, uint8_t blue) {
+    return winrt::Windows::UI::Xaml::Media::SolidColorBrush(
+        winrt::Windows::UI::ColorHelper::FromArgb(alpha, red, green, blue));
 }
 
-ClippPage::ClippPage(HWND notificationTarget, UINT derivedKeyMessage, UINT peerDisplayUpdateMessage, PeerDisplay& peerDisplay, PeerManager& peerManager)
-    : notificationTarget_(notificationTarget)
-    , derivedKeyMessage_(derivedKeyMessage)
-    , peerDisplayUpdateMessage_(peerDisplayUpdateMessage)
-    , peerDisplay_(peerDisplay)
-    , peerManager_(peerManager)
-    , keyDerivationWorker_([this](const KeyManager::NetworkKey& key) {
-        PostDerivedKey(key);
-    }) {
+std::wstring FormatActivityTime(std::chrono::system_clock::time_point timestamp) {
+    const std::time_t rawTime = std::chrono::system_clock::to_time_t(timestamp);
+    std::tm localTime{};
+    if (localtime_safe(&localTime, &rawTime) != 0) {
+        return {};
+    }
+
+    wchar_t buffer[32]{};
+    if (std::wcsftime(buffer, cntof(buffer), L"%H:%M", &localTime) == 0) {
+        return {};
+    }
+    return buffer;
+}
+
+std::wstring PayloadKindLabel(ClipboardActivityPayloadKind kind) {
+    switch (kind) {
+    case ClipboardActivityPayloadKind::Text:
+        return CLP_W(CLP_UI_TEXT);
+    case ClipboardActivityPayloadKind::PrivateText:
+        return CLP_W(CLP_UI_PRIVATE_TEXT);
+    case ClipboardActivityPayloadKind::Link:
+        return CLP_W(CLP_UI_LINK);
+    case ClipboardActivityPayloadKind::Image:
+        return CLP_W(CLP_UI_IMAGE);
+    case ClipboardActivityPayloadKind::Unsupported:
+    default:
+        return CLP_W(CLP_UI_UNSUPPORTED_CLIPBOARD_ITEM);
+    }
+}
+
+winrt::Windows::UI::Xaml::Media::Imaging::BitmapImage BitmapFromPngBytes(const std::vector<unsigned char>& bytes) {
+    using namespace winrt::Windows::Storage::Streams;
+    using namespace winrt::Windows::UI::Xaml::Media::Imaging;
+
+    BitmapImage bitmap;
+    if (bytes.empty()) {
+        return bitmap;
+    }
+
+    try {
+        InMemoryRandomAccessStream stream;
+        DataWriter writer(stream.GetOutputStreamAt(0));
+        writer.WriteBytes(winrt::array_view<const uint8_t>(bytes.data(), bytes.data() + bytes.size()));
+        writer.StoreAsync().get();
+        writer.FlushAsync().get();
+        writer.DetachStream();
+        stream.Seek(0);
+        bitmap.SetSource(stream);
+    } catch (const winrt::hresult_error&) {
+    }
+
+    return bitmap;
+}
+}
+
+ClippPage::ClippPage(ClipboardActivityStore& activityStore)
+    : activityStore_(activityStore) {
     BuildView();
 }
 
@@ -54,349 +106,372 @@ void ClippPage::BuildView() {
     root_.HorizontalAlignment(HorizontalAlignment::Stretch);
     root_.VerticalAlignment(VerticalAlignment::Stretch);
 
-    StackPanel content;
-    content.Orientation(Orientation::Vertical);
-    content.Padding(ThicknessHelper::FromUniformLength(24));
-    content.Spacing(16);
+    RowDefinition headerRow;
+    headerRow.Height(GridLength{ 1, GridUnitType::Auto });
+    RowDefinition bodyRow;
+    bodyRow.Height(GridLength{ 1, GridUnitType::Star });
+    root_.RowDefinitions().Append(headerRow);
+    root_.RowDefinitions().Append(bodyRow);
+
+    StackPanel header;
+    header.Orientation(Orientation::Vertical);
+    header.Padding(ThicknessHelper::FromLengths(24, 24, 24, 12));
+    header.Spacing(6);
 
     TextBlock heading;
     heading.Text(CLP_W(CLP_UI_APP_NAME));
     heading.FontSize(28);
     heading.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
     heading.TextWrapping(TextWrapping::Wrap);
-    content.Children().Append(heading);
+    header.Children().Append(heading);
 
     TextBlock intro;
     intro.Text(CLP_W(CLP_UI_TAGLINE));
     intro.FontSize(14);
     intro.TextWrapping(TextWrapping::WrapWholeWords);
-    content.Children().Append(intro);
+    intro.Opacity(0.75);
+    header.Children().Append(intro);
 
-    BuildNetworkSecretSection(content);
+    auto activitySection = BuildActivitySection();
+    activitySection.Margin(ThicknessHelper::FromLengths(24, 0, 24, 24));
 
-    networkView_ = std::make_unique<NetworkView>(peerDisplay_);
-    content.Children().Append(networkView_->View());
-    PollNetworkView();
-
-    ScrollViewer mainScroll;
-    mainScroll.HorizontalAlignment(HorizontalAlignment::Stretch);
-    mainScroll.VerticalAlignment(VerticalAlignment::Stretch);
-    mainScroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);
-    mainScroll.Content(content);
-    root_.Children().Append(mainScroll);
+    Grid::SetRow(header, 0);
+    Grid::SetRow(activitySection, 1);
+    root_.Children().Append(header);
+    root_.Children().Append(activitySection);
 
     uiDispatcher_ = winrt::Windows::System::DispatcherQueue::GetForCurrentThread();
+    RefreshActivityItems(activityStore_.Snapshot());
 }
 
-void ClippPage::BuildNetworkSecretSection(winrt::Windows::UI::Xaml::Controls::StackPanel const& content) {
+winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivitySection() {
+    using namespace winrt::Windows::UI::Xaml;
+    using namespace winrt::Windows::UI::Xaml::Controls;
+
+    Grid section;
+    section.HorizontalAlignment(HorizontalAlignment::Stretch);
+    section.VerticalAlignment(VerticalAlignment::Stretch);
+    section.CornerRadius(CornerRadius{ 4 });
+    section.BorderThickness(ThicknessHelper::FromLengths(1, 1, 1, 1));
+    section.BorderBrush(MakeBrush(50, 150, 150, 150));
+
+    RowDefinition headerRow;
+    headerRow.Height(GridLength{ 1, GridUnitType::Auto });
+    RowDefinition listRow;
+    listRow.Height(GridLength{ 1, GridUnitType::Star });
+    section.RowDefinitions().Append(headerRow);
+    section.RowDefinitions().Append(listRow);
+
+    StackPanel header;
+    header.Orientation(Orientation::Vertical);
+    header.Padding(ThicknessHelper::FromLengths(16, 14, 16, 10));
+
+    TextBlock title;
+    title.Text(CLP_W(CLP_UI_CLIPBOARD));
+    title.FontSize(16);
+    title.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+    header.Children().Append(title);
+
+    Border separator;
+    separator.Height(1);
+    separator.Background(MakeBrush(35, 127, 127, 127));
+    separator.VerticalAlignment(VerticalAlignment::Bottom);
+
+    Grid listHost;
+    listHost.HorizontalAlignment(HorizontalAlignment::Stretch);
+    listHost.VerticalAlignment(VerticalAlignment::Stretch);
+
+    activityItemsPanel_ = StackPanel();
+    activityItemsPanel_.Orientation(Orientation::Vertical);
+    activityItemsPanel_.Spacing(12);
+    activityItemsPanel_.Padding(ThicknessHelper::FromLengths(16, 16, 16, 16));
+
+    activityScroll_ = ScrollViewer();
+    activityScroll_.HorizontalAlignment(HorizontalAlignment::Stretch);
+    activityScroll_.VerticalAlignment(VerticalAlignment::Stretch);
+    activityScroll_.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);
+    activityScroll_.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);
+    activityScroll_.Content(activityItemsPanel_);
+
+    activityEmptyMessage_ = TextBlock();
+    activityEmptyMessage_.Text(CLP_W(CLP_UI_CLIPBOARD_EMPTY));
+    activityEmptyMessage_.FontSize(14);
+    activityEmptyMessage_.Opacity(0.65);
+    activityEmptyMessage_.TextWrapping(TextWrapping::WrapWholeWords);
+    activityEmptyMessage_.HorizontalAlignment(HorizontalAlignment::Center);
+    activityEmptyMessage_.VerticalAlignment(VerticalAlignment::Center);
+    activityEmptyMessage_.Margin(ThicknessHelper::FromLengths(24, 24, 24, 24));
+
+    listHost.Children().Append(activityScroll_);
+    listHost.Children().Append(activityEmptyMessage_);
+
+    Grid::SetRow(header, 0);
+    Grid::SetRow(separator, 0);
+    Grid::SetRow(listHost, 1);
+    section.Children().Append(header);
+    section.Children().Append(separator);
+    section.Children().Append(listHost);
+    return section;
+}
+
+winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t itemID) {
     using namespace winrt::Windows::UI::Xaml;
     using namespace winrt::Windows::UI::Xaml::Controls;
     using namespace winrt::Windows::UI::Xaml::Media;
 
-    TextBlock passwordHeader;
-    passwordHeader.Text(CLP_W(CLP_UI_NETWORK));
-    passwordHeader.FontSize(16);
-    passwordHeader.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+    const auto display = activityStore_.DisplayItem(itemID);
+    if (!display) {
+        return Grid{ nullptr };
+    }
 
-    TextBlock networkNameLabel;
-    networkNameLabel.Text(CLP_W(CLP_UI_NAME));
-    networkNameLabel.VerticalAlignment(VerticalAlignment::Center);
+    const bool isOutgoing = display->header.direction == ClipboardActivityDirection::Outgoing;
 
-    TextBlock passwordLabel;
-    passwordLabel.Text(CLP_W(CLP_UI_SECRET));
-    passwordLabel.VerticalAlignment(VerticalAlignment::Center);
+    Grid row;
+    row.HorizontalAlignment(HorizontalAlignment::Stretch);
 
-    networkNameField_ = TextBox();
-    networkNameField_.VerticalAlignment(VerticalAlignment::Center);
+    Grid bubble;
+    bubble.MaxWidth(kActivityBubbleMaxWidth);
+    bubble.HorizontalAlignment(isOutgoing ? HorizontalAlignment::Right : HorizontalAlignment::Left);
+    bubble.CornerRadius(CornerRadius{ 8 });
+    bubble.Padding(ThicknessHelper::FromLengths(12, 10, 12, 10));
+    bubble.Background(isOutgoing ? MakeBrush(34, 0, 120, 215) : MakeBrush(24, 127, 127, 127));
 
-    const std::string currentName = g_settings.networkName();
-    const size_t sizeNeeded = utf8_to_utf16(currentName.c_str(), currentName.length(), nullptr, 0);
-    std::wstring wideCurrentName(sizeNeeded, 0);
-    utf8_to_utf16(currentName.c_str(), currentName.length(), &wideCurrentName[0], sizeNeeded);
-    networkNameField_.Text(wideCurrentName);
+    StackPanel content;
+    content.Orientation(Orientation::Vertical);
+    content.Spacing(7);
 
-    networkNameField_.LostFocus([this](auto const& sender, auto const&) {
-        auto tb = sender.as<TextBox>();
-        const std::string newName = winrt::to_string(tb.Text());
+    TextBlock meta;
+    std::wstring deviceName = display->header.deviceName;
+    if (deviceName.empty()) {
+        deviceName = isOutgoing ? CLP_W(CLP_UI_THIS_DEVICE) : CLP_W(CLP_UI_UNKNOWN_HOST);
+    }
+    meta.Text(deviceName + L" - " + FormatActivityTime(display->header.timestamp));
+    meta.FontSize(12);
+    meta.Opacity(0.68);
+    meta.TextWrapping(TextWrapping::WrapWholeWords);
+    content.Children().Append(meta);
 
-        if (newName != g_settings.networkName() && !newName.empty()) {
-            g_settings.set_networkName(newName);
-            g_keyManager.ClearNetworkKey();
-            MDNSNotifyNetworkKeyChange();
-            peerManager_.ClearPeers();
-            SetupPasswordFields();
+    if (display->kind == ClipboardActivityPayloadKind::Image && !display->imagePngData.empty()) {
+        Image image;
+        image.Source(BitmapFromPngBytes(display->imagePngData));
+        image.Stretch(Stretch::Uniform);
+        image.MaxWidth(kActivityBubbleMaxWidth - 24);
+        image.MaxHeight(260);
+        image.HorizontalAlignment(HorizontalAlignment::Left);
+        content.Children().Append(image);
+
+        TextBlock kindLabel;
+        kindLabel.Text(PayloadKindLabel(display->kind));
+        kindLabel.FontSize(12);
+        kindLabel.Opacity(0.68);
+        content.Children().Append(kindLabel);
+    } else {
+        if (display->kind == ClipboardActivityPayloadKind::Link && !display->linkHost.empty()) {
+            TextBlock host;
+            host.Text(display->linkHost);
+            host.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+            host.TextWrapping(TextWrapping::WrapWholeWords);
+            content.Children().Append(host);
+        } else if (display->kind == ClipboardActivityPayloadKind::PrivateText ||
+                   display->kind == ClipboardActivityPayloadKind::Unsupported) {
+            TextBlock kindLabel;
+            kindLabel.Text(PayloadKindLabel(display->kind));
+            kindLabel.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+            kindLabel.TextWrapping(TextWrapping::WrapWholeWords);
+            content.Children().Append(kindLabel);
         }
+
+        TextBlock preview;
+        preview.Text(display->previewText.empty() ? PayloadKindLabel(display->kind) : display->previewText);
+        preview.TextWrapping(TextWrapping::WrapWholeWords);
+        preview.IsTextSelectionEnabled(display->kind != ClipboardActivityPayloadKind::PrivateText);
+        preview.MaxLines(8);
+        preview.TextTrimming(TextTrimming::WordEllipsis);
+        content.Children().Append(preview);
+    }
+
+    Button copyButton;
+    copyButton.Content(winrt::box_value(winrt::hstring{ CLP_W(CLP_UI_COPY) }));
+    copyButton.HorizontalAlignment(HorizontalAlignment::Right);
+    copyButton.Padding(ThicknessHelper::FromLengths(10, 4, 10, 4));
+    copyButton.Click([this, itemID](auto const&, auto const&) {
+        CopyActivityItem(itemID);
     });
+    content.Children().Append(copyButton);
 
-    DispatcherTimer debounceTimer;
-    debounceTimer.Interval(std::chrono::milliseconds(500));
-    debounceTimer.Stop();
-    debounceTimer.Tick([this, debounceTimer](auto const&, auto const&) {
-        debounceTimer.Stop();
-        winrt::hstring pwd = passwordField_.Password();
+    bubble.Children().Append(content);
+    row.Children().Append(bubble);
+    return row;
+}
 
-        passwordStatusPanel_.Visibility(Visibility::Collapsed);
-        passwordInfoPanel_.Visibility(Visibility::Visible);
+void ClippPage::RefreshActivityItems(const std::vector<ClipboardActivityItemHeader>& items) {
+    if (!activityItemsPanel_) {
+        return;
+    }
 
-        if (pwd.size() < 8) {
-            passwordInfoText_.Text(CLP_W(CLP_UI_SECRET_TOO_SHORT));
-            return;
+    activityItemsPanel_.Children().Clear();
+    activityItemIDs_.clear();
+
+    for (const auto& item : items) {
+        auto row = BuildActivityRow(item.id);
+        if (!row) {
+            continue;
         }
+        activityItemsPanel_.Children().Append(row);
+        activityItemIDs_.push_back(item.id);
+    }
 
-        passwordInfoText_.Text(CLP_W(CLP_UI_WORKING));
+    SetActivityEmptyMessageVisible(activityItemIDs_.empty());
+    ScrollActivityToBottom();
+}
 
-        const std::string networkName = g_settings.networkName();
-        g_logger.log(__FUNCTION__, Logger::Level::Debug, "Generating key with secret (network name: %s)", networkName.c_str());
-        std::string newPassword = winrt::to_string(pwd);
-        std::string netNameAndPassword = uiClippPage::BuildKeyDerivationInput(networkName, newPassword);
-        keyDerivationWorker_.RequestKeyDerivation(netNameAndPassword);
-        sodium_memzero(newPassword.data(), newPassword.capacity());
-        sodium_memzero(netNameAndPassword.data(), netNameAndPassword.capacity());
-    });
+void ClippPage::AddActivityItem(uint64_t itemID) {
+    if (!activityItemsPanel_ || itemID == 0) {
+        return;
+    }
 
-    passwordField_ = PasswordBox();
-    passwordField_.VerticalAlignment(VerticalAlignment::Center);
-    passwordField_.MinWidth(200);
-    passwordField_.Tag(winrt::box_value(false));
-    passwordField_.GotFocus([this](auto const&, auto const&) {
-        passwordField_.Password(L"");
-    });
-    passwordField_.LostFocus([this](auto const&, auto const&) {
-        SetupPasswordFields();
-    });
-    passwordField_.PasswordChanged([this, debounceTimer](auto const&, auto const&) {
-        debounceTimer.Stop();
-        if (passwordField_.Password() != L"" && passwordField_.Password() != kMaskedPassword) {
-            debounceTimer.Start();
-        }
-    });
+    if (std::find(activityItemIDs_.begin(), activityItemIDs_.end(), itemID) != activityItemIDs_.end()) {
+        return;
+    }
 
-    Grid inputGrid;
-    inputGrid.CornerRadius(CornerRadius{ 4 });
-    inputGrid.BorderThickness(ThicknessHelper::FromLengths(1, 1, 1, 1));
-    inputGrid.BorderBrush(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(50, 150, 150, 150)));
-    inputGrid.Padding(ThicknessHelper::FromLengths(16, 12, 16, 12));
-    inputGrid.RowSpacing(12);
-    inputGrid.ColumnSpacing(16);
+    const bool shouldFollow = IsActivityNearBottom();
+    auto row = BuildActivityRow(itemID);
+    if (!row) {
+        return;
+    }
 
-    ColumnDefinition col1, col2;
-    col1.Width(GridLength{ 1, GridUnitType::Auto });
-    col2.Width(GridLength{ 1, GridUnitType::Star });
-    inputGrid.ColumnDefinitions().Append(col1);
-    inputGrid.ColumnDefinitions().Append(col2);
+    activityItemsPanel_.Children().Append(row);
+    activityItemIDs_.push_back(itemID);
+    SetActivityEmptyMessageVisible(false);
 
-    RowDefinition row1, row2;
-    row1.Height(GridLength{ 1, GridUnitType::Auto });
-    row2.Height(GridLength{ 1, GridUnitType::Auto });
-    inputGrid.RowDefinitions().Append(row1);
-    inputGrid.RowDefinitions().Append(row2);
+    if (shouldFollow) {
+        ScrollActivityToBottom();
+    }
+}
 
-    Grid::SetRow(networkNameLabel, 0);
-    Grid::SetColumn(networkNameLabel, 0);
-    Grid::SetRow(networkNameField_, 0);
-    Grid::SetColumn(networkNameField_, 1);
-    Grid::SetRow(passwordLabel, 1);
-    Grid::SetColumn(passwordLabel, 0);
-    Grid::SetRow(passwordField_, 1);
-    Grid::SetColumn(passwordField_, 1);
+void ClippPage::RemoveActivityItem(uint64_t itemID) {
+    if (!activityItemsPanel_) {
+        return;
+    }
 
-    inputGrid.Children().Append(networkNameLabel);
-    inputGrid.Children().Append(networkNameField_);
-    inputGrid.Children().Append(passwordLabel);
-    inputGrid.Children().Append(passwordField_);
+    const auto found = std::find(activityItemIDs_.begin(), activityItemIDs_.end(), itemID);
+    if (found == activityItemIDs_.end()) {
+        return;
+    }
 
-    passwordStatusPanel_ = StackPanel();
-    passwordStatusPanel_.CornerRadius(CornerRadius{ 4 });
-    passwordStatusPanel_.BorderThickness(ThicknessHelper::FromLengths(1, 1, 1, 1));
-    passwordStatusPanel_.BorderBrush(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(50, 150, 150, 150)));
-    passwordStatusPanel_.Padding(ThicknessHelper::FromLengths(16, 12, 16, 12));
-    passwordStatusPanel_.Orientation(Orientation::Horizontal);
-    passwordStatusPanel_.Spacing(12);
+    const auto index = static_cast<uint32_t>(found - activityItemIDs_.begin());
+    activityItemsPanel_.Children().RemoveAt(index);
+    activityItemIDs_.erase(found);
+    SetActivityEmptyMessageVisible(activityItemIDs_.empty());
+}
 
-    FontIcon keyIcon;
-    keyIcon.FontFamily(Media::FontFamily(L"Segoe MDL2 Assets"));
-    keyIcon.Glyph(L"\xE8D7");
-    keyIcon.FontSize(18);
-    keyIcon.VerticalAlignment(VerticalAlignment::Center);
+void ClippPage::ClearActivityItems() {
+    if (!activityItemsPanel_) {
+        return;
+    }
 
-    StackPanel statusTextStack;
-    statusTextStack.Orientation(Orientation::Vertical);
-    statusTextStack.Spacing(2);
-    statusTextStack.VerticalAlignment(VerticalAlignment::Center);
+    activityItemsPanel_.Children().Clear();
+    activityItemIDs_.clear();
+    SetActivityEmptyMessageVisible(true);
+}
 
-    passwordHashText_ = TextBlock();
-    passwordHashText_.FontWeight(winrt::Windows::UI::Text::FontWeights::Bold());
-    passwordHashText_.TextWrapping(TextWrapping::Wrap);
+void ClippPage::SetActivityEmptyMessageVisible(bool visible) {
+    if (!activityEmptyMessage_) {
+        return;
+    }
 
-    TextBlock hashExplainer;
-    hashExplainer.Text(CLP_W(CLP_UI_NETWORK_KEY_FINGERPRINT));
-    hashExplainer.Opacity(0.6);
-    hashExplainer.TextWrapping(TextWrapping::Wrap);
+    activityEmptyMessage_.Visibility(visible
+        ? winrt::Windows::UI::Xaml::Visibility::Visible
+        : winrt::Windows::UI::Xaml::Visibility::Collapsed);
+}
 
-    statusTextStack.Children().Append(passwordHashText_);
-    statusTextStack.Children().Append(hashExplainer);
-    passwordStatusPanel_.Children().Append(keyIcon);
-    passwordStatusPanel_.Children().Append(statusTextStack);
+bool ClippPage::IsActivityNearBottom() const {
+    if (!activityScroll_) {
+        return true;
+    }
 
-    passwordInfoPanel_ = StackPanel();
-    passwordInfoPanel_.CornerRadius(CornerRadius{ 4 });
-    passwordInfoPanel_.BorderThickness(ThicknessHelper::FromLengths(1, 1, 1, 1));
-    passwordInfoPanel_.BorderBrush(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(50, 150, 150, 150)));
-    passwordInfoPanel_.Padding(ThicknessHelper::FromLengths(16, 12, 16, 12));
-    passwordInfoPanel_.Orientation(Orientation::Horizontal);
-    passwordInfoPanel_.Spacing(12);
+    const double scrollableHeight = activityScroll_.ScrollableHeight();
+    if (scrollableHeight <= 0) {
+        return true;
+    }
 
-    FontIcon infoIcon;
-    infoIcon.FontFamily(Media::FontFamily(L"Segoe MDL2 Assets"));
-    infoIcon.Glyph(L"\xE946");
-    infoIcon.FontSize(18);
-    infoIcon.VerticalAlignment(VerticalAlignment::Center);
+    return (scrollableHeight - activityScroll_.VerticalOffset()) <= kActivityFollowBottomTolerance;
+}
 
-    passwordInfoText_ = TextBlock();
-    passwordInfoText_.VerticalAlignment(VerticalAlignment::Center);
+void ClippPage::ScrollActivityToBottom() const {
+    if (!activityScroll_) {
+        return;
+    }
 
-    passwordInfoPanel_.Children().Append(infoIcon);
-    passwordInfoPanel_.Children().Append(passwordInfoText_);
+    activityScroll_.UpdateLayout();
+    activityScroll_.ChangeView(nullptr, activityScroll_.ScrollableHeight(), nullptr, true);
+}
 
-    StackPanel outerContainer;
-    outerContainer.Orientation(Orientation::Vertical);
-    outerContainer.Spacing(10);
-    outerContainer.Children().Append(passwordHeader);
-    outerContainer.Children().Append(inputGrid);
-    outerContainer.Children().Append(passwordStatusPanel_);
-    outerContainer.Children().Append(passwordInfoPanel_);
+void ClippPage::CopyActivityItem(uint64_t itemID) {
+    auto payload = activityStore_.PayloadForClipboard(itemID);
+    if (!payload) {
+        return;
+    }
 
-    content.Children().Append(outerContainer);
-    SetupPasswordFields();
+    SetClipboardData(*payload);
 }
 
 void ClippPage::OnShown() {
-    BeginPeerNotifications();
-    StartNetworkPollTimer();
+    BeginActivityNotifications();
     if (uiDispatcher_) {
         uiDispatcher_.TryEnqueue([this]() {
-            SetupPasswordFields();
+            RefreshActivityItems(activityStore_.Snapshot());
         });
     }
 }
 
 void ClippPage::OnHidden() {
-    EndPeerNotifications();
-    StopNetworkPollTimer();
+    EndActivityNotifications();
 }
 
 void ClippPage::OnDestroy() {
     OnHidden();
-    networkView_.reset();
-    networkPollTimer_ = nullptr;
+    activityItemsPanel_ = nullptr;
+    activityScroll_ = nullptr;
+    activityEmptyMessage_ = nullptr;
 }
 
-void ClippPage::OnDerivedKey(const KeyManager::NetworkKey* key) {
-    if (!key) {
+void ClippPage::BeginActivityNotifications() {
+    if (activityWatcherID_ != 0) {
         return;
     }
 
-    g_settings.set_networkName(g_settings.networkName());
-    g_keyManager.SetNetworkKey(*key);
-    MDNSNotifyNetworkKeyChange();
-    peerManager_.ClearPeers();
-
-    if (uiDispatcher_) {
-        uiDispatcher_.TryEnqueue([this]() {
-            NewPasswordHashReceived();
-        });
-    }
+    const auto registration = activityStore_.QueryAndRegister(ClipboardActivityWatcher, this);
+    activityWatcherID_ = registration.watcherID;
+    RefreshActivityItems(registration.items);
 }
 
-void ClippPage::OnPeerDisplayUpdate() {
-    if (peerDisplayWatcherID_ != 0) {
-        PollNetworkView();
-    }
-}
-
-void ClippPage::PollNetworkView() {
-    if (networkView_) {
-        networkView_->Poll();
-    }
-}
-
-void ClippPage::StartNetworkPollTimer() {
-    if (!networkPollTimer_) {
-        networkPollTimer_ = winrt::Windows::UI::Xaml::DispatcherTimer();
-        networkPollTimer_.Interval(std::chrono::seconds(1));
-        networkPollTimer_.Tick([this](auto const&, auto const&) {
-            PollNetworkView();
-        });
-    }
-    networkPollTimer_.Start();
-}
-
-void ClippPage::StopNetworkPollTimer() {
-    if (networkPollTimer_) {
-        networkPollTimer_.Stop();
-    }
-}
-
-void ClippPage::BeginPeerNotifications() {
-    if (!notificationTarget_ || peerDisplayWatcherID_ != 0) {
+void ClippPage::EndActivityNotifications() {
+    if (activityWatcherID_ == 0) {
         return;
     }
 
-    const auto registration = peerDisplay_.QueryAndRegister(PeerDisplayWatcher, this);
-    peerDisplayWatcherID_ = registration.watcherID;
-    PollNetworkView();
+    activityStore_.Unregister(activityWatcherID_);
+    activityWatcherID_ = 0;
 }
 
-void ClippPage::EndPeerNotifications() {
-    if (peerDisplayWatcherID_ == 0) {
-        return;
-    }
-
-    peerDisplay_.Unregister(peerDisplayWatcherID_);
-    peerDisplayWatcherID_ = 0;
-}
-
-void ClippPage::SetupPasswordFields() {
-    using namespace winrt::Windows::UI::Xaml;
-
-    if (!passwordField_ || !passwordHashText_ || !passwordStatusPanel_ || !passwordInfoPanel_ || !passwordInfoText_) {
-        return;
-    }
-
-    if (g_keyManager.HaveNetworkKey()) {
-        passwordField_.Password(kMaskedPassword);
-        passwordHashText_.Text(g_keyManager.GetNetworkFingerprintHash());
-        passwordStatusPanel_.Visibility(Visibility::Visible);
-        passwordInfoPanel_.Visibility(Visibility::Collapsed);
-    } else {
-        passwordField_.Password(L"");
-        passwordInfoText_.Text(CLP_W(CLP_UI_ENTER_NETWORK_SECRET));
-        passwordStatusPanel_.Visibility(Visibility::Collapsed);
-        passwordInfoPanel_.Visibility(Visibility::Visible);
-    }
-}
-
-void ClippPage::NewPasswordHashReceived() {
-    using namespace winrt::Windows::UI::Xaml;
-
-    if (g_keyManager.HaveNetworkKey()) {
-        passwordHashText_.Text(g_keyManager.GetNetworkFingerprintHash());
-        passwordStatusPanel_.Visibility(Visibility::Visible);
-        passwordInfoPanel_.Visibility(Visibility::Collapsed);
-    }
-}
-
-void ClippPage::PostDerivedKey(const KeyManager::NetworkKey& key) {
-    if (notificationTarget_ == nullptr || derivedKeyMessage_ == 0) {
-        return;
-    }
-
-    SendMessage(notificationTarget_, derivedKeyMessage_, reinterpret_cast<WPARAM>(&key), 0);
-}
-
-void ClippPage::PeerDisplayWatcher(const PeerDisplayUpdate&, void* userData) {
+void ClippPage::ClipboardActivityWatcher(const ClipboardActivityUpdate& update, void* userData) {
     auto* page = reinterpret_cast<ClippPage*>(userData);
-    if (page && page->notificationTarget_ && IsWindow(page->notificationTarget_)) {
-        PostMessageW(page->notificationTarget_, page->peerDisplayUpdateMessage_, 0, 0);
+    if (!page || !page->uiDispatcher_) {
+        return;
     }
+
+    page->uiDispatcher_.TryEnqueue([page, update]() {
+        switch (update.type) {
+        case ClipboardActivityUpdate::Type::Added:
+            page->AddActivityItem(update.itemID);
+            break;
+        case ClipboardActivityUpdate::Type::Removed:
+            page->RemoveActivityItem(update.itemID);
+            break;
+        case ClipboardActivityUpdate::Type::Cleared:
+            page->ClearActivityItems();
+            break;
+        }
+    });
 }

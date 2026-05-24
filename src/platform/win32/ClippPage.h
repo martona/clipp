@@ -1,17 +1,10 @@
 #pragma once
 
-#include "KeyManager.h"
-#include "PeerDisplay.h"
-#include "PeerManager.h"
-#include "platform/uiClippPage.h"
-#include "NetworkView.h"
+#include "ClipboardActivityStore.h"
 
-#include <memory>
-
-#include <Windows.h>
-#ifdef GetCurrentTime
-#undef GetCurrentTime
-#endif
+#include <cstddef>
+#include <cstdint>
+#include <vector>
 
 #include <winrt/Windows.System.h>
 #include <winrt/Windows.UI.Xaml.h>
@@ -19,7 +12,7 @@
 
 class ClippPage {
 public:
-    ClippPage(HWND notificationTarget, UINT derivedKeyMessage, UINT peerDisplayUpdateMessage, PeerDisplay& peerDisplay, PeerManager& peerManager);
+    explicit ClippPage(ClipboardActivityStore& activityStore);
     ~ClippPage();
 
     ClippPage(const ClippPage&) = delete;
@@ -30,41 +23,33 @@ public:
     void OnShown();
     void OnHidden();
     void OnDestroy();
-    void OnDerivedKey(const KeyManager::NetworkKey* key);
-    void OnPeerDisplayUpdate();
 
 private:
     void BuildView();
-    void BuildNetworkSecretSection(winrt::Windows::UI::Xaml::Controls::StackPanel const& content);
+    winrt::Windows::UI::Xaml::Controls::Grid BuildActivitySection();
+    winrt::Windows::UI::Xaml::Controls::Grid BuildActivityRow(uint64_t itemID);
 
-    void PollNetworkView();
-    void StartNetworkPollTimer();
-    void StopNetworkPollTimer();
-    void BeginPeerNotifications();
-    void EndPeerNotifications();
-    void SetupPasswordFields();
-    void NewPasswordHashReceived();
-    void PostDerivedKey(const KeyManager::NetworkKey& key);
+    void RefreshActivityItems(const std::vector<ClipboardActivityItemHeader>& items);
+    void AddActivityItem(uint64_t itemID);
+    void RemoveActivityItem(uint64_t itemID);
+    void ClearActivityItems();
+    void SetActivityEmptyMessageVisible(bool visible);
+    bool IsActivityNearBottom() const;
+    void ScrollActivityToBottom() const;
+    void CopyActivityItem(uint64_t itemID);
+    void BeginActivityNotifications();
+    void EndActivityNotifications();
 
-    static void PeerDisplayWatcher(const PeerDisplayUpdate& update, void* userData);
+    static void ClipboardActivityWatcher(const ClipboardActivityUpdate& update, void* userData);
 
-    HWND notificationTarget_ = nullptr;
-    UINT derivedKeyMessage_ = 0;
-    UINT peerDisplayUpdateMessage_ = 0;
-    PeerDisplay& peerDisplay_;
-    PeerManager& peerManager_;
+    ClipboardActivityStore& activityStore_;
 
     winrt::Windows::UI::Xaml::Controls::Grid root_{ nullptr };
-    winrt::Windows::UI::Xaml::Controls::TextBox networkNameField_{ nullptr };
-    winrt::Windows::UI::Xaml::Controls::PasswordBox passwordField_{ nullptr };
-    winrt::Windows::UI::Xaml::Controls::StackPanel passwordStatusPanel_{ nullptr };
-    winrt::Windows::UI::Xaml::Controls::TextBlock passwordHashText_{ nullptr };
-    winrt::Windows::UI::Xaml::Controls::StackPanel passwordInfoPanel_{ nullptr };
-    winrt::Windows::UI::Xaml::Controls::TextBlock passwordInfoText_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::ScrollViewer activityScroll_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::StackPanel activityItemsPanel_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::TextBlock activityEmptyMessage_{ nullptr };
     winrt::Windows::System::DispatcherQueue uiDispatcher_{ nullptr };
-    winrt::Windows::UI::Xaml::DispatcherTimer networkPollTimer_{ nullptr };
 
-    std::unique_ptr<NetworkView> networkView_;
-    uiClippPage::KeyDerivationWorker keyDerivationWorker_;
-    std::size_t peerDisplayWatcherID_ = 0;
+    std::size_t activityWatcherID_ = 0;
+    std::vector<uint64_t> activityItemIDs_;
 };

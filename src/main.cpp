@@ -16,6 +16,8 @@
 #include "PeerManager.h"
 #include "PeerDisplay.h"
 #include "Clipboard.h"
+#include "ClipboardActivityStore.h"
+#include "platform/uistrings.h"
 #include "utils.h"
 
 #ifdef _WIN32
@@ -34,6 +36,7 @@ Settings g_settings;
 PeerDisplay g_peerDisplay;
 PeerManager g_peerManager;
 NetworkRuntime g_networkRuntime;
+ClipboardActivityStore g_clipboardActivityStore;
 
 #ifdef _WIN32
     namespace {
@@ -202,6 +205,7 @@ void OnClipboardNotification(PlatformWindowHandle hwnd) {
 		return;
 	}
 	auto payload = std::make_shared<const ClipboardPayload>(clipboardData);
+    g_clipboardActivityStore.AddOutgoing(CLP_W(CLP_UI_THIS_DEVICE), *payload);
     g_peerManager.BroadcastClipboard(payload);
 	g_logger.log(__FUNCTION__, Logger::Level::Debug, "Broadcast clipboard data to peers (format ID: %u, encoded size: %zu bytes, decoded size: %zu bytes)", clipboardData.formatId, clipboardData.rawData.size(), decodedDataSize);
 }

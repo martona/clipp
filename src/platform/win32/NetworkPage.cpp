@@ -1,0 +1,397 @@
+#include "NetworkPage.h"
+
+#include "KeyManager.h"
+#include "Logger.h"
+#include "MDNSThread.h"
+#include "Settings.h"
+#include "platform/uiClippPage.h"
+#include "platform/uistrings.h"
+#include "utils.h"
+
+#include <string>
+
+#include <sodium.h>
+
+#include <winrt/Windows.UI.h>
+#include <winrt/Windows.UI.Text.h>
+#include <winrt/Windows.UI.Xaml.h>
+#include <winrt/Windows.UI.Xaml.Controls.h>
+#include <winrt/Windows.UI.Xaml.Media.h>
+#include <winrt/base.h>
+
+extern Settings g_settings;
+extern KeyManager g_keyManager;
+extern Logger g_logger;
+
+namespace {
+constexpr wchar_t kMaskedPassword[] = L"••••••••••••••••";
+}
+
+NetworkPage::NetworkPage(HWND notificationTarget, UINT derivedKeyMessage, UINT peerDisplayUpdateMessage, PeerDisplay& peerDisplay, PeerManager& peerManager)
+    : notificationTarget_(notificationTarget)
+    , derivedKeyMessage_(derivedKeyMessage)
+    , peerDisplayUpdateMessage_(peerDisplayUpdateMessage)
+    , peerDisplay_(peerDisplay)
+    , peerManager_(peerManager)
+    , keyDerivationWorker_([this](const KeyManager::NetworkKey& key) {
+        PostDerivedKey(key);
+    }) {
+    BuildView();
+}
+
+NetworkPage::~NetworkPage() {
+    OnDestroy();
+}
+
+winrt::Windows::UI::Xaml::Controls::Grid NetworkPage::View() const {
+    return root_;
+}
+
+void NetworkPage::BuildView() {
+    using namespace winrt::Windows::UI::Xaml;
+    using namespace winrt::Windows::UI::Xaml::Controls;
+
+    root_ = Grid();
+    root_.HorizontalAlignment(HorizontalAlignment::Stretch);
+    root_.VerticalAlignment(VerticalAlignment::Stretch);
+
+    StackPanel content;
+    content.Orientation(Orientation::Vertical);
+    content.Padding(ThicknessHelper::FromUniformLength(24));
+    content.Spacing(16);
+
+    TextBlock heading;
+    heading.Text(CLP_W(CLP_UI_NETWORK));
+    heading.FontSize(28);
+    heading.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+    heading.TextWrapping(TextWrapping::Wrap);
+    content.Children().Append(heading);
+
+    BuildNetworkSecretSection(content);
+
+    networkView_ = std::make_unique<NetworkView>(peerDisplay_);
+    content.Children().Append(networkView_->View());
+    PollNetworkView();
+
+    ScrollViewer mainScroll;
+    mainScroll.HorizontalAlignment(HorizontalAlignment::Stretch);
+    mainScroll.VerticalAlignment(VerticalAlignment::Stretch);
+    mainScroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);
+    mainScroll.Content(content);
+    root_.Children().Append(mainScroll);
+
+    uiDispatcher_ = winrt::Windows::System::DispatcherQueue::GetForCurrentThread();
+}
+
+void NetworkPage::BuildNetworkSecretSection(winrt::Windows::UI::Xaml::Controls::StackPanel const& content) {
+    using namespace winrt::Windows::UI::Xaml;
+    using namespace winrt::Windows::UI::Xaml::Controls;
+    using namespace winrt::Windows::UI::Xaml::Media;
+
+    TextBlock passwordHeader;
+    passwordHeader.Text(CLP_W(CLP_UI_NETWORK_KEY));
+    passwordHeader.FontSize(16);
+    passwordHeader.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+
+    TextBlock networkNameLabel;
+    networkNameLabel.Text(CLP_W(CLP_UI_NAME));
+    networkNameLabel.VerticalAlignment(VerticalAlignment::Center);
+
+    TextBlock passwordLabel;
+    passwordLabel.Text(CLP_W(CLP_UI_SECRET));
+    passwordLabel.VerticalAlignment(VerticalAlignment::Center);
+
+    networkNameField_ = TextBox();
+    networkNameField_.VerticalAlignment(VerticalAlignment::Center);
+
+    const std::string currentName = g_settings.networkName();
+    const size_t sizeNeeded = utf8_to_utf16(currentName.c_str(), currentName.length(), nullptr, 0);
+    std::wstring wideCurrentName(sizeNeeded, 0);
+    utf8_to_utf16(currentName.c_str(), currentName.length(), &wideCurrentName[0], sizeNeeded);
+    networkNameField_.Text(wideCurrentName);
+
+    networkNameField_.LostFocus([this](auto const& sender, auto const&) {
+        auto tb = sender.as<TextBox>();
+        const std::string newName = winrt::to_string(tb.Text());
+
+        if (newName != g_settings.networkName() && !newName.empty()) {
+            g_settings.set_networkName(newName);
+            g_keyManager.ClearNetworkKey();
+            MDNSNotifyNetworkKeyChange();
+            peerManager_.ClearPeers();
+            SetupPasswordFields();
+        }
+    });
+
+    DispatcherTimer debounceTimer;
+    debounceTimer.Interval(std::chrono::milliseconds(500));
+    debounceTimer.Stop();
+    debounceTimer.Tick([this, debounceTimer](auto const&, auto const&) {
+        debounceTimer.Stop();
+        winrt::hstring pwd = passwordField_.Password();
+
+        passwordStatusPanel_.Visibility(Visibility::Collapsed);
+        passwordInfoPanel_.Visibility(Visibility::Visible);
+
+        if (pwd.size() < 8) {
+            passwordInfoText_.Text(CLP_W(CLP_UI_SECRET_TOO_SHORT));
+            return;
+        }
+
+        passwordInfoText_.Text(CLP_W(CLP_UI_WORKING));
+
+        const std::string networkName = g_settings.networkName();
+        g_logger.log(__FUNCTION__, Logger::Level::Debug, "Generating key with secret (network name: %s)", networkName.c_str());
+        std::string newPassword = winrt::to_string(pwd);
+        std::string netNameAndPassword = uiClippPage::BuildKeyDerivationInput(networkName, newPassword);
+        keyDerivationWorker_.RequestKeyDerivation(netNameAndPassword);
+        sodium_memzero(newPassword.data(), newPassword.capacity());
+        sodium_memzero(netNameAndPassword.data(), netNameAndPassword.capacity());
+    });
+
+    passwordField_ = PasswordBox();
+    passwordField_.VerticalAlignment(VerticalAlignment::Center);
+    passwordField_.MinWidth(200);
+    passwordField_.Tag(winrt::box_value(false));
+    passwordField_.GotFocus([this](auto const&, auto const&) {
+        passwordField_.Password(L"");
+    });
+    passwordField_.LostFocus([this](auto const&, auto const&) {
+        SetupPasswordFields();
+    });
+    passwordField_.PasswordChanged([this, debounceTimer](auto const&, auto const&) {
+        debounceTimer.Stop();
+        if (passwordField_.Password() != L"" && passwordField_.Password() != kMaskedPassword) {
+            debounceTimer.Start();
+        }
+    });
+
+    Grid inputGrid;
+    inputGrid.CornerRadius(CornerRadius{ 4 });
+    inputGrid.BorderThickness(ThicknessHelper::FromLengths(1, 1, 1, 1));
+    inputGrid.BorderBrush(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(50, 150, 150, 150)));
+    inputGrid.Padding(ThicknessHelper::FromLengths(16, 12, 16, 12));
+    inputGrid.RowSpacing(12);
+    inputGrid.ColumnSpacing(16);
+
+    ColumnDefinition col1, col2;
+    col1.Width(GridLength{ 1, GridUnitType::Auto });
+    col2.Width(GridLength{ 1, GridUnitType::Star });
+    inputGrid.ColumnDefinitions().Append(col1);
+    inputGrid.ColumnDefinitions().Append(col2);
+
+    RowDefinition row1, row2;
+    row1.Height(GridLength{ 1, GridUnitType::Auto });
+    row2.Height(GridLength{ 1, GridUnitType::Auto });
+    inputGrid.RowDefinitions().Append(row1);
+    inputGrid.RowDefinitions().Append(row2);
+
+    Grid::SetRow(networkNameLabel, 0);
+    Grid::SetColumn(networkNameLabel, 0);
+    Grid::SetRow(networkNameField_, 0);
+    Grid::SetColumn(networkNameField_, 1);
+    Grid::SetRow(passwordLabel, 1);
+    Grid::SetColumn(passwordLabel, 0);
+    Grid::SetRow(passwordField_, 1);
+    Grid::SetColumn(passwordField_, 1);
+
+    inputGrid.Children().Append(networkNameLabel);
+    inputGrid.Children().Append(networkNameField_);
+    inputGrid.Children().Append(passwordLabel);
+    inputGrid.Children().Append(passwordField_);
+
+    passwordStatusPanel_ = StackPanel();
+    passwordStatusPanel_.CornerRadius(CornerRadius{ 4 });
+    passwordStatusPanel_.BorderThickness(ThicknessHelper::FromLengths(1, 1, 1, 1));
+    passwordStatusPanel_.BorderBrush(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(50, 150, 150, 150)));
+    passwordStatusPanel_.Padding(ThicknessHelper::FromLengths(16, 12, 16, 12));
+    passwordStatusPanel_.Orientation(Orientation::Horizontal);
+    passwordStatusPanel_.Spacing(12);
+
+    FontIcon keyIcon;
+    keyIcon.FontFamily(Media::FontFamily(L"Segoe MDL2 Assets"));
+    keyIcon.Glyph(L"\xE8D7");
+    keyIcon.FontSize(18);
+    keyIcon.VerticalAlignment(VerticalAlignment::Center);
+
+    StackPanel statusTextStack;
+    statusTextStack.Orientation(Orientation::Vertical);
+    statusTextStack.Spacing(2);
+    statusTextStack.VerticalAlignment(VerticalAlignment::Center);
+
+    passwordHashText_ = TextBlock();
+    passwordHashText_.FontWeight(winrt::Windows::UI::Text::FontWeights::Bold());
+    passwordHashText_.TextWrapping(TextWrapping::Wrap);
+
+    TextBlock hashExplainer;
+    hashExplainer.Text(CLP_W(CLP_UI_NETWORK_KEY_FINGERPRINT));
+    hashExplainer.Opacity(0.6);
+    hashExplainer.TextWrapping(TextWrapping::Wrap);
+
+    statusTextStack.Children().Append(passwordHashText_);
+    statusTextStack.Children().Append(hashExplainer);
+    passwordStatusPanel_.Children().Append(keyIcon);
+    passwordStatusPanel_.Children().Append(statusTextStack);
+
+    passwordInfoPanel_ = StackPanel();
+    passwordInfoPanel_.CornerRadius(CornerRadius{ 4 });
+    passwordInfoPanel_.BorderThickness(ThicknessHelper::FromLengths(1, 1, 1, 1));
+    passwordInfoPanel_.BorderBrush(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(50, 150, 150, 150)));
+    passwordInfoPanel_.Padding(ThicknessHelper::FromLengths(16, 12, 16, 12));
+    passwordInfoPanel_.Orientation(Orientation::Horizontal);
+    passwordInfoPanel_.Spacing(12);
+
+    FontIcon infoIcon;
+    infoIcon.FontFamily(Media::FontFamily(L"Segoe MDL2 Assets"));
+    infoIcon.Glyph(L"\xE946");
+    infoIcon.FontSize(18);
+    infoIcon.VerticalAlignment(VerticalAlignment::Center);
+
+    passwordInfoText_ = TextBlock();
+    passwordInfoText_.VerticalAlignment(VerticalAlignment::Center);
+
+    passwordInfoPanel_.Children().Append(infoIcon);
+    passwordInfoPanel_.Children().Append(passwordInfoText_);
+
+    StackPanel outerContainer;
+    outerContainer.Orientation(Orientation::Vertical);
+    outerContainer.Spacing(10);
+    outerContainer.Children().Append(passwordHeader);
+    outerContainer.Children().Append(inputGrid);
+    outerContainer.Children().Append(passwordStatusPanel_);
+    outerContainer.Children().Append(passwordInfoPanel_);
+
+    content.Children().Append(outerContainer);
+    SetupPasswordFields();
+}
+
+void NetworkPage::OnShown() {
+    BeginPeerNotifications();
+    StartNetworkPollTimer();
+    if (uiDispatcher_) {
+        uiDispatcher_.TryEnqueue([this]() {
+            SetupPasswordFields();
+        });
+    }
+}
+
+void NetworkPage::OnHidden() {
+    EndPeerNotifications();
+    StopNetworkPollTimer();
+}
+
+void NetworkPage::OnDestroy() {
+    OnHidden();
+    networkView_.reset();
+    networkPollTimer_ = nullptr;
+}
+
+void NetworkPage::OnDerivedKey(const KeyManager::NetworkKey* key) {
+    if (!key) {
+        return;
+    }
+
+    g_settings.set_networkName(g_settings.networkName());
+    g_keyManager.SetNetworkKey(*key);
+    MDNSNotifyNetworkKeyChange();
+    peerManager_.ClearPeers();
+
+    if (uiDispatcher_) {
+        uiDispatcher_.TryEnqueue([this]() {
+            NewPasswordHashReceived();
+        });
+    }
+}
+
+void NetworkPage::OnPeerDisplayUpdate() {
+    if (peerDisplayWatcherID_ != 0) {
+        PollNetworkView();
+    }
+}
+
+void NetworkPage::PollNetworkView() {
+    if (networkView_) {
+        networkView_->Poll();
+    }
+}
+
+void NetworkPage::StartNetworkPollTimer() {
+    if (!networkPollTimer_) {
+        networkPollTimer_ = winrt::Windows::UI::Xaml::DispatcherTimer();
+        networkPollTimer_.Interval(std::chrono::seconds(1));
+        networkPollTimer_.Tick([this](auto const&, auto const&) {
+            PollNetworkView();
+        });
+    }
+    networkPollTimer_.Start();
+}
+
+void NetworkPage::StopNetworkPollTimer() {
+    if (networkPollTimer_) {
+        networkPollTimer_.Stop();
+    }
+}
+
+void NetworkPage::BeginPeerNotifications() {
+    if (!notificationTarget_ || peerDisplayWatcherID_ != 0) {
+        return;
+    }
+
+    const auto registration = peerDisplay_.QueryAndRegister(PeerDisplayWatcher, this);
+    peerDisplayWatcherID_ = registration.watcherID;
+    PollNetworkView();
+}
+
+void NetworkPage::EndPeerNotifications() {
+    if (peerDisplayWatcherID_ == 0) {
+        return;
+    }
+
+    peerDisplay_.Unregister(peerDisplayWatcherID_);
+    peerDisplayWatcherID_ = 0;
+}
+
+void NetworkPage::SetupPasswordFields() {
+    using namespace winrt::Windows::UI::Xaml;
+
+    if (!passwordField_ || !passwordHashText_ || !passwordStatusPanel_ || !passwordInfoPanel_ || !passwordInfoText_) {
+        return;
+    }
+
+    if (g_keyManager.HaveNetworkKey()) {
+        passwordField_.Password(kMaskedPassword);
+        passwordHashText_.Text(g_keyManager.GetNetworkFingerprintHash());
+        passwordStatusPanel_.Visibility(Visibility::Visible);
+        passwordInfoPanel_.Visibility(Visibility::Collapsed);
+    } else {
+        passwordField_.Password(L"");
+        passwordInfoText_.Text(CLP_W(CLP_UI_ENTER_NETWORK_SECRET));
+        passwordStatusPanel_.Visibility(Visibility::Collapsed);
+        passwordInfoPanel_.Visibility(Visibility::Visible);
+    }
+}
+
+void NetworkPage::NewPasswordHashReceived() {
+    using namespace winrt::Windows::UI::Xaml;
+
+    if (g_keyManager.HaveNetworkKey()) {
+        passwordHashText_.Text(g_keyManager.GetNetworkFingerprintHash());
+        passwordStatusPanel_.Visibility(Visibility::Visible);
+        passwordInfoPanel_.Visibility(Visibility::Collapsed);
+    }
+}
+
+void NetworkPage::PostDerivedKey(const KeyManager::NetworkKey& key) {
+    if (notificationTarget_ == nullptr || derivedKeyMessage_ == 0) {
+        return;
+    }
+
+    SendMessage(notificationTarget_, derivedKeyMessage_, reinterpret_cast<WPARAM>(&key), 0);
+}
+
+void NetworkPage::PeerDisplayWatcher(const PeerDisplayUpdate&, void* userData) {
+    auto* page = reinterpret_cast<NetworkPage*>(userData);
+    if (page && page->notificationTarget_ && IsWindow(page->notificationTarget_)) {
+        PostMessageW(page->notificationTarget_, page->peerDisplayUpdateMessage_, 0, 0);
+    }
+}

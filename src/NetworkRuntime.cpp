@@ -10,12 +10,16 @@
 #define CLIPP_IOS_CLIPBOARD_RECEIVE_STUB 1
 void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const ClipboardPayload& payload);
 #else
+#include "ClipboardActivityStore.h"
 #include "Clipboard.h"
 #define CLIPP_IOS_CLIPBOARD_RECEIVE_STUB 0
 #endif
 
 extern PeerManager g_peerManager;
 extern Settings g_settings;
+#if !CLIPP_IOS_CLIPBOARD_RECEIVE_STUB
+extern ClipboardActivityStore g_clipboardActivityStore;
+#endif
 
 NetworkRuntime::NetworkRuntime()
     : listener_([this](const std::wstring& hostName, const HostId& hostID, ClipboardPayload& payload) {
@@ -111,6 +115,7 @@ void NetworkRuntime::OnClipboardReceived(const std::wstring& hostName, const Hos
 #if CLIPP_IOS_CLIPBOARD_RECEIVE_STUB
     CLPIOSReceiveClipboardPayload(hostName, payload);
 #else
+    g_clipboardActivityStore.AddIncoming(hostName, payload);
     SetClipboardData(payload);
 #endif
 }

@@ -1,0 +1,71 @@
+#pragma once
+
+#include "KeyManager.h"
+#include "NetworkView.h"
+#include "PeerDisplay.h"
+#include "PeerManager.h"
+#include "platform/uiClippPage.h"
+
+#include <cstddef>
+#include <memory>
+
+#include <Windows.h>
+#ifdef GetCurrentTime
+#undef GetCurrentTime
+#endif
+
+#include <winrt/Windows.System.h>
+#include <winrt/Windows.UI.Xaml.h>
+#include <winrt/Windows.UI.Xaml.Controls.h>
+
+class NetworkPage {
+public:
+    NetworkPage(HWND notificationTarget, UINT derivedKeyMessage, UINT peerDisplayUpdateMessage, PeerDisplay& peerDisplay, PeerManager& peerManager);
+    ~NetworkPage();
+
+    NetworkPage(const NetworkPage&) = delete;
+    NetworkPage& operator=(const NetworkPage&) = delete;
+
+    winrt::Windows::UI::Xaml::Controls::Grid View() const;
+
+    void OnShown();
+    void OnHidden();
+    void OnDestroy();
+    void OnDerivedKey(const KeyManager::NetworkKey* key);
+    void OnPeerDisplayUpdate();
+
+private:
+    void BuildView();
+    void BuildNetworkSecretSection(winrt::Windows::UI::Xaml::Controls::StackPanel const& content);
+
+    void PollNetworkView();
+    void StartNetworkPollTimer();
+    void StopNetworkPollTimer();
+    void BeginPeerNotifications();
+    void EndPeerNotifications();
+    void SetupPasswordFields();
+    void NewPasswordHashReceived();
+    void PostDerivedKey(const KeyManager::NetworkKey& key);
+
+    static void PeerDisplayWatcher(const PeerDisplayUpdate& update, void* userData);
+
+    HWND notificationTarget_ = nullptr;
+    UINT derivedKeyMessage_ = 0;
+    UINT peerDisplayUpdateMessage_ = 0;
+    PeerDisplay& peerDisplay_;
+    PeerManager& peerManager_;
+
+    winrt::Windows::UI::Xaml::Controls::Grid root_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::TextBox networkNameField_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::PasswordBox passwordField_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::StackPanel passwordStatusPanel_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::TextBlock passwordHashText_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::StackPanel passwordInfoPanel_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::TextBlock passwordInfoText_{ nullptr };
+    winrt::Windows::System::DispatcherQueue uiDispatcher_{ nullptr };
+    winrt::Windows::UI::Xaml::DispatcherTimer networkPollTimer_{ nullptr };
+
+    std::unique_ptr<NetworkView> networkView_;
+    uiClippPage::KeyDerivationWorker keyDerivationWorker_;
+    std::size_t peerDisplayWatcherID_ = 0;
+};

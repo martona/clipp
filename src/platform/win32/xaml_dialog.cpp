@@ -1,8 +1,10 @@
 #include "Logger.h"
 #include "PeerDisplay.h"
 #include "PeerManager.h"
+#include "ClipboardActivityStore.h"
 #include "clipp-win32-darkmode32/DMSubclass.h"
 #include "ClippPage.h"
+#include "NetworkPage.h"
 #include "LogsPage.h"
 #include "AboutPage.h"
 #include "SettingsPage.h"
@@ -45,6 +47,7 @@
 
 extern PeerManager g_peerManager;
 extern PeerDisplay g_peerDisplay;
+extern ClipboardActivityStore g_clipboardActivityStore;
 extern Logger g_logger;
 
 namespace {
@@ -214,9 +217,10 @@ public:
 private:
     enum class PageID {
         Clipp = 0,
-        Settings = 1,
-        Logs = 2,
-        About = 3,
+        Network = 1,
+        Settings = 2,
+        Logs = 3,
+        About = 4,
     };
 
     struct MenuItemDefinition {
@@ -266,6 +270,9 @@ private:
                 if (clippPage_) {
                     clippPage_->OnShown();
                 }
+                if (networkPage_) {
+                    networkPage_->OnShown();
+                }
                 if (logsPage_) {
                     logsPage_->OnShown();
                 }
@@ -275,6 +282,9 @@ private:
             } else {
                 if (clippPage_) {
                     clippPage_->OnHidden();
+                }
+                if (networkPage_) {
+                    networkPage_->OnHidden();
                 }
                 if (logsPage_) {
                     logsPage_->OnHidden();
@@ -305,10 +315,14 @@ private:
             if (clippPage_) {
                 clippPage_->OnDestroy();
             }
+            if (networkPage_) {
+                networkPage_->OnDestroy();
+            }
             if (logsPage_) {
                 logsPage_->OnDestroy();
             }
             clippPage_.reset();
+            networkPage_.reset();
             settingsPage_.reset();
             logsPage_.reset();
             aboutPage_.reset();
@@ -319,15 +333,15 @@ private:
         default:
             if (msg == derivedKeyMessage_) {
                 auto* result = reinterpret_cast<const KeyManager::NetworkKey*>(wParam);
-                if (clippPage_) {
-                    clippPage_->OnDerivedKey(result);
+                if (networkPage_) {
+                    networkPage_->OnDerivedKey(result);
                 }
                 return 0;
             }
 
             if (msg == peerDisplayUpdateMessage_) {
-                if (clippPage_) {
-                    clippPage_->OnPeerDisplayUpdate();
+                if (networkPage_) {
+                    networkPage_->OnPeerDisplayUpdate();
                 }
                 return 0;
             }
@@ -356,7 +370,8 @@ private:
         using namespace winrt::Windows::UI::Xaml::Controls;
         using namespace winrt::Windows::UI::Xaml::Media;
 
-        clippPage_ = std::make_unique<ClippPage>(hwnd_, derivedKeyMessage_, peerDisplayUpdateMessage_, g_peerDisplay, g_peerManager);
+        clippPage_ = std::make_unique<ClippPage>(g_clipboardActivityStore);
+        networkPage_ = std::make_unique<NetworkPage>(hwnd_, derivedKeyMessage_, peerDisplayUpdateMessage_, g_peerDisplay, g_peerManager);
         settingsPage_ = std::make_unique<SettingsPage>();
         logsPage_ = std::make_unique<LogsPage>();
         aboutPage_ = std::make_unique<AboutPage>();
@@ -384,6 +399,7 @@ private:
 
         const MenuItemDefinition menuItems[] = {
             { L"\xE77F", CLP_W(CLP_UI_APP_NAME) },
+            { L"\xE968", CLP_W(CLP_UI_NETWORK) },
             { L"\xE713", CLP_W(CLP_UI_SETTINGS) },
             { L"\xE8A5", CLP_W(CLP_UI_LOGS) },
             { L"\xE946", CLP_W(CLP_UI_ABOUT) },
@@ -496,6 +512,9 @@ private:
         switch (pageID) {
         case PageID::Clipp:
             contentPresenter_.Content(clippPage_->View());
+            break;
+        case PageID::Network:
+            contentPresenter_.Content(networkPage_->View());
             break;
         case PageID::Settings:
             settingsPage_->OnShown();
@@ -692,6 +711,7 @@ private:
     winrt::Windows::UI::Xaml::Hosting::DesktopWindowXamlSource xamlSource_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::ContentControl contentPresenter_{ nullptr };
     std::unique_ptr<ClippPage> clippPage_;
+    std::unique_ptr<NetworkPage> networkPage_;
     std::unique_ptr<SettingsPage> settingsPage_;
     std::unique_ptr<LogsPage> logsPage_;
     std::unique_ptr<AboutPage> aboutPage_;
