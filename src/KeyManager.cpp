@@ -32,7 +32,7 @@
         return oss.str();
     }
 
-    static CFMutableDictionaryRef CreateNetworkKeyQuery(CFStringRef account) {
+    static CFMutableDictionaryRef CreateNetworkKeyQuery(CFStringRef account, CFStringRef accessGroup = nullptr) {
         CFMutableDictionaryRef query = CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
             &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
         if (query == nullptr) {
@@ -42,6 +42,9 @@
         CFDictionaryAddValue(query, kSecClass, kSecClassGenericPassword);
         CFDictionaryAddValue(query, kSecAttrService, CFSTR("net.clipp.app"));
         CFDictionaryAddValue(query, kSecAttrAccount, account);
+        if (accessGroup != nullptr) {
+            CFDictionaryAddValue(query, kSecAttrAccessGroup, accessGroup);
+        }
 
         return query;
     }
@@ -65,8 +68,40 @@
 #endif
     }
 
-    static void DeleteNetworkKeyItem(CFStringRef account) {
-        CFMutableDictionaryRef query = CreateNetworkKeyQuery(account);
+    static CFStringRef CopyNetworkKeyAppIdentifierPrefix() {
+#if TARGET_OS_IPHONE
+        CFTypeRef value = CFBundleGetValueForInfoDictionaryKey(CFBundleGetMainBundle(), CFSTR("AppIdentifierPrefix"));
+        if (value != nullptr && CFGetTypeID(value) == CFStringGetTypeID()) {
+            CFStringRef prefix = static_cast<CFStringRef>(value);
+            if (CFStringGetLength(prefix) > 0 && CFStringFind(prefix, CFSTR("$("), 0).location == kCFNotFound) {
+                return static_cast<CFStringRef>(CFRetain(prefix));
+            }
+        }
+
+        return CFStringCreateWithCString(kCFAllocatorDefault, "2262A4CP8N.", kCFStringEncodingUTF8);
+#else
+        return nullptr;
+#endif
+    }
+
+    static CFStringRef CopyNetworkKeyAccessGroup(CFStringRef suffix) {
+#if TARGET_OS_IPHONE
+        CFStringRef prefix = CopyNetworkKeyAppIdentifierPrefix();
+        CFStringRef accessGroup = CFStringCreateWithFormat(kCFAllocatorDefault,
+                                                           nullptr,
+                                                           CFSTR("%@%@"),
+                                                           prefix,
+                                                           suffix);
+        CFRelease(prefix);
+        return accessGroup;
+#else
+        (void)suffix;
+        return nullptr;
+#endif
+    }
+
+    static void DeleteNetworkKeyItemInAccessGroup(CFStringRef account, CFStringRef accessGroup) {
+        CFMutableDictionaryRef query = CreateNetworkKeyQuery(account, accessGroup);
         if (query == nullptr) {
             return;
         }
@@ -77,8 +112,24 @@
         CFRelease(query);
     }
 
-    static OSStatus CopyNetworkKeyData(CFStringRef account, CFTypeRef* outData) {
-        CFMutableDictionaryRef query = CreateNetworkKeyQuery(account);
+    static void DeleteNetworkKeyItem(CFStringRef account) {
+        CFStringRef sharedAccessGroup = CopyNetworkKeyAccessGroup(CFSTR("net.clipp.ios.shared"));
+        CFStringRef legacyAccessGroup = CopyNetworkKeyAccessGroup(CFSTR("net.clipp.ios"));
+
+        DeleteNetworkKeyItemInAccessGroup(account, sharedAccessGroup);
+        DeleteNetworkKeyItemInAccessGroup(account, nullptr);
+        DeleteNetworkKeyItemInAccessGroup(account, legacyAccessGroup);
+
+        if (sharedAccessGroup != nullptr) {
+            CFRelease(sharedAccessGroup);
+        }
+        if (legacyAccessGroup != nullptr) {
+            CFRelease(legacyAccessGroup);
+        }
+    }
+
+    static OSStatus CopyNetworkKeyDataInAccessGroup(CFStringRef account, CFStringRef accessGroup, CFTypeRef* outData) {
+        CFMutableDictionaryRef query = CreateNetworkKeyQuery(account, accessGroup);
         if (query == nullptr) {
             return errSecAllocate;
         }
@@ -90,6 +141,61 @@
 
         OSStatus status = SecItemCopyMatching(query, outData);
         CFRelease(query);
+        return status;
+    }
+
+    static OSStatus CopyNetworkKeyData(CFStringRef account, CFTypeRef* outData) {
+        CFStringRef sharedAccessGroup = CopyNetworkKeyAccessGroup(CFSTR("net.clipp.ios.shared"));
+        CFStringRef legacyAccessGroup = CopyNetworkKeyAccessGroup(CFSTR("net.clipp.ios"));
+
+        OSStatus status = CopyNetworkKeyDataInAccessGroup(account, sharedAccessGroup, outData);
+        if (status != errSecSuccess) {
+            status = CopyNetworkKeyDataInAccessGroup(account, nullptr, outData);
+        }
+        if (status != errSecSuccess) {
+            status = CopyNetworkKeyDataInAccessGroup(account, legacyAccessGroup, outData);
+        }
+
+        if (sharedAccessGroup != nullptr) {
+            CFRelease(sharedAccessGroup);
+        }
+        if (legacyAccessGroup != nullptr) {
+            CFRelease(legacyAccessGroup);
+        }
+        return status;
+    }
+
+    static OSStatus AddNetworkKeyData(CFStringRef account, CFDataRef plainData) {
+        CFStringRef sharedAccessGroup = CopyNetworkKeyAccessGroup(CFSTR("net.clipp.ios.shared"));
+        CFMutableDictionaryRef addQuery = CreateNetworkKeyQuery(account, sharedAccessGroup);
+        if (addQuery == nullptr) {
+            if (sharedAccessGroup != nullptr) {
+                CFRelease(sharedAccessGroup);
+            }
+            return errSecAllocate;
+        }
+
+        CFDictionaryAddValue(addQuery, kSecValueData, plainData);
+        CFDictionaryAddValue(addQuery, kSecAttrAccessible, kSecAttrAccessibleAfterFirstUnlock);
+        SetNetworkKeySynchronizable(addQuery, kCFBooleanTrue);
+
+        OSStatus status = SecItemAdd(addQuery, nullptr);
+        CFRelease(addQuery);
+
+        if (status != errSecSuccess && sharedAccessGroup != nullptr) {
+            CFMutableDictionaryRef fallbackQuery = CreateNetworkKeyQuery(account);
+            if (fallbackQuery != nullptr) {
+                CFDictionaryAddValue(fallbackQuery, kSecValueData, plainData);
+                CFDictionaryAddValue(fallbackQuery, kSecAttrAccessible, kSecAttrAccessibleAfterFirstUnlock);
+                SetNetworkKeySynchronizable(fallbackQuery, kCFBooleanTrue);
+                status = SecItemAdd(fallbackQuery, nullptr);
+                CFRelease(fallbackQuery);
+            }
+        }
+
+        if (sharedAccessGroup != nullptr) {
+            CFRelease(sharedAccessGroup);
+        }
         return status;
     }
 #endif
@@ -248,22 +354,7 @@ bool KeyManager::SetNetworkKey(const NetworkKey& networkKey, std::string* errorM
         return false;
     }
 
-    CFMutableDictionaryRef addQuery = CreateNetworkKeyQuery(CFSTR("NetworkKeyV2"));
-    if (addQuery == nullptr) {
-        CFRelease(plainData);
-        if (errorMessage != nullptr) *errorMessage = "Failed to allocate keychain add query";
-        return false;
-    }
-
-    CFDictionaryAddValue(addQuery, kSecValueData, plainData);
-    CFDictionaryAddValue(addQuery, kSecAttrAccessible, kSecAttrAccessibleAfterFirstUnlock);
-#if TARGET_OS_IPHONE
-    SetNetworkKeySynchronizable(addQuery, kCFBooleanTrue);
-#endif
-
-    OSStatus status = SecItemAdd(addQuery, nullptr);
-    CFRelease(addQuery);
-
+    OSStatus status = AddNetworkKeyData(CFSTR("NetworkKeyV2"), plainData);
     CFRelease(plainData);
 
     if (status != errSecSuccess) {

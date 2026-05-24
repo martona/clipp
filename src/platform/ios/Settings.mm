@@ -12,8 +12,21 @@
 namespace {
 constexpr wchar_t kIOSHostIDName[] = L"HostID";
 static const CFStringRef kIOSHostIDService = CFSTR("net.clipp.ios.host");
+static NSString* const kIOSAppGroupIdentifier = @"group.net.clipp.ios";
 
 static NSUserDefaults* GetSettingsStore() {
+    static NSUserDefaults* store = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        store = [[NSUserDefaults alloc] initWithSuiteName:kIOSAppGroupIdentifier];
+        if (store == nil) {
+            store = [NSUserDefaults standardUserDefaults];
+        }
+    });
+    return store;
+}
+
+static NSUserDefaults* GetLegacySettingsStore() {
     return [NSUserDefaults standardUserDefaults];
 }
 
@@ -33,7 +46,30 @@ static NSString* SettingsKey(const wchar_t* valueName) {
     return key;
 }
 
-static CFMutableDictionaryRef CreateHostIDQuery() {
+static CFStringRef CopySettingsAppIdentifierPrefix() {
+    CFTypeRef value = CFBundleGetValueForInfoDictionaryKey(CFBundleGetMainBundle(), CFSTR("AppIdentifierPrefix"));
+    if (value != nullptr && CFGetTypeID(value) == CFStringGetTypeID()) {
+        CFStringRef prefix = static_cast<CFStringRef>(value);
+        if (CFStringGetLength(prefix) > 0 && CFStringFind(prefix, CFSTR("$("), 0).location == kCFNotFound) {
+            return static_cast<CFStringRef>(CFRetain(prefix));
+        }
+    }
+
+    return CFStringCreateWithCString(kCFAllocatorDefault, "2262A4CP8N.", kCFStringEncodingUTF8);
+}
+
+static CFStringRef CopySettingsKeychainAccessGroup(CFStringRef suffix) {
+    CFStringRef prefix = CopySettingsAppIdentifierPrefix();
+    CFStringRef accessGroup = CFStringCreateWithFormat(kCFAllocatorDefault,
+                                                       nullptr,
+                                                       CFSTR("%@%@"),
+                                                       prefix,
+                                                       suffix);
+    CFRelease(prefix);
+    return accessGroup;
+}
+
+static CFMutableDictionaryRef CreateHostIDQuery(CFStringRef accessGroup) {
     CFMutableDictionaryRef query = CFDictionaryCreateMutable(kCFAllocatorDefault,
                                                              0,
                                                              &kCFTypeDictionaryKeyCallBacks,
@@ -46,19 +82,26 @@ static CFMutableDictionaryRef CreateHostIDQuery() {
     CFDictionaryAddValue(query, kSecAttrService, kIOSHostIDService);
     CFDictionaryAddValue(query, kSecAttrAccount, CFSTR("HostID"));
     CFDictionaryAddValue(query, kSecAttrSynchronizable, kCFBooleanFalse);
+    if (accessGroup != nullptr) {
+        CFDictionaryAddValue(query, kSecAttrAccessGroup, accessGroup);
+    }
     return query;
 }
 
-static bool WriteHostIDValue(const unsigned char* data, size_t len) {
-    if (data == nullptr || len == 0) {
-        return false;
+static void DeleteHostIDValue(CFStringRef accessGroup) {
+    CFMutableDictionaryRef query = CreateHostIDQuery(accessGroup);
+    if (query == nullptr) {
+        return;
     }
+    SecItemDelete(query);
+    CFRelease(query);
+}
 
-    CFMutableDictionaryRef query = CreateHostIDQuery();
+static bool AddHostIDValue(const unsigned char* data, size_t len, CFStringRef accessGroup) {
+    CFMutableDictionaryRef query = CreateHostIDQuery(accessGroup);
     if (query == nullptr) {
         return false;
     }
-    SecItemDelete(query);
 
     CFDataRef payload = CFDataCreate(kCFAllocatorDefault, data, len);
     if (payload == nullptr) {
@@ -75,8 +118,8 @@ static bool WriteHostIDValue(const unsigned char* data, size_t len) {
     return status == errSecSuccess;
 }
 
-static bool ReadHostIDValue(std::vector<unsigned char>& outValue) {
-    CFMutableDictionaryRef query = CreateHostIDQuery();
+static bool CopyHostIDValue(std::vector<unsigned char>& outValue, CFStringRef accessGroup) {
+    CFMutableDictionaryRef query = CreateHostIDQuery(accessGroup);
     if (query == nullptr) {
         return false;
     }
@@ -103,6 +146,71 @@ static bool ReadHostIDValue(std::vector<unsigned char>& outValue) {
     CFRelease(result);
     return true;
 }
+
+static bool WriteHostIDValue(const unsigned char* data, size_t len) {
+    if (data == nullptr || len == 0) {
+        return false;
+    }
+
+    CFStringRef sharedAccessGroup = CopySettingsKeychainAccessGroup(CFSTR("net.clipp.ios.shared"));
+    CFStringRef legacyAccessGroup = CopySettingsKeychainAccessGroup(CFSTR("net.clipp.ios"));
+
+    DeleteHostIDValue(sharedAccessGroup);
+    DeleteHostIDValue(nullptr);
+    DeleteHostIDValue(legacyAccessGroup);
+
+    bool written = AddHostIDValue(data, len, sharedAccessGroup);
+    if (!written) {
+        written = AddHostIDValue(data, len, nullptr);
+    }
+
+    if (sharedAccessGroup != nullptr) {
+        CFRelease(sharedAccessGroup);
+    }
+    if (legacyAccessGroup != nullptr) {
+        CFRelease(legacyAccessGroup);
+    }
+    return written;
+}
+
+static bool ReadHostIDValue(std::vector<unsigned char>& outValue) {
+    CFStringRef sharedAccessGroup = CopySettingsKeychainAccessGroup(CFSTR("net.clipp.ios.shared"));
+    CFStringRef legacyAccessGroup = CopySettingsKeychainAccessGroup(CFSTR("net.clipp.ios"));
+
+    bool read = CopyHostIDValue(outValue, sharedAccessGroup)
+        || CopyHostIDValue(outValue, nullptr)
+        || CopyHostIDValue(outValue, legacyAccessGroup);
+
+    if (sharedAccessGroup != nullptr) {
+        CFRelease(sharedAccessGroup);
+    }
+    if (legacyAccessGroup != nullptr) {
+        CFRelease(legacyAccessGroup);
+    }
+    return read;
+}
+
+static id ReadSettingsObject(NSString* key) {
+    id value = [GetSettingsStore() objectForKey:key];
+    if (value != nil) {
+        return value;
+    }
+
+    NSUserDefaults* legacyStore = GetLegacySettingsStore();
+    if (legacyStore != GetSettingsStore()) {
+        return [legacyStore objectForKey:key];
+    }
+    return nil;
+}
+
+static bool SynchronizeSettingsStores() {
+    bool ok = [GetSettingsStore() synchronize];
+    NSUserDefaults* legacyStore = GetLegacySettingsStore();
+    if (legacyStore != GetSettingsStore()) {
+        ok = [legacyStore synchronize] && ok;
+    }
+    return ok;
+}
 }
 
 bool Settings::ReadStringValue(const wchar_t* valueName, std::string& outValue) {
@@ -111,12 +219,12 @@ bool Settings::ReadStringValue(const wchar_t* valueName, std::string& outValue) 
         return false;
     }
 
-    NSString* value = [GetSettingsStore() stringForKey:key];
-    if (value == nil) {
+    id value = ReadSettingsObject(key);
+    if (value == nil || ![value isKindOfClass:[NSString class]]) {
         return false;
     }
 
-    outValue = std::string(value.UTF8String);
+    outValue = std::string([(NSString*)value UTF8String]);
     return true;
 }
 
@@ -126,7 +234,7 @@ bool Settings::ReadUint32Value(const wchar_t* valueName, int& outValue) {
         return false;
     }
 
-    id value = [GetSettingsStore() objectForKey:key];
+    id value = ReadSettingsObject(key);
     if (value == nil || ![value isKindOfClass:[NSNumber class]]) {
         return false;
     }
@@ -141,7 +249,7 @@ bool Settings::ReadUint64Value(const wchar_t* valueName, uint64_t& outValue) {
         return false;
     }
 
-    id value = [GetSettingsStore() objectForKey:key];
+    id value = ReadSettingsObject(key);
     if (value == nil || ![value isKindOfClass:[NSNumber class]]) {
         return false;
     }
@@ -156,8 +264,13 @@ bool Settings::WriteStringValue(const wchar_t* valueName, const std::string& val
         return false;
     }
 
-    [GetSettingsStore() setObject:[NSString stringWithUTF8String:value.c_str()] forKey:key];
-    return [GetSettingsStore() synchronize];
+    NSString* stringValue = [NSString stringWithUTF8String:value.c_str()];
+    [GetSettingsStore() setObject:stringValue forKey:key];
+    NSUserDefaults* legacyStore = GetLegacySettingsStore();
+    if (legacyStore != GetSettingsStore()) {
+        [legacyStore setObject:stringValue forKey:key];
+    }
+    return SynchronizeSettingsStores();
 }
 
 bool Settings::WriteUint32Value(const wchar_t* valueName, int value) {
@@ -167,7 +280,11 @@ bool Settings::WriteUint32Value(const wchar_t* valueName, int value) {
     }
 
     [GetSettingsStore() setInteger:value forKey:key];
-    return [GetSettingsStore() synchronize];
+    NSUserDefaults* legacyStore = GetLegacySettingsStore();
+    if (legacyStore != GetSettingsStore()) {
+        [legacyStore setInteger:value forKey:key];
+    }
+    return SynchronizeSettingsStores();
 }
 
 bool Settings::WriteUint64Value(const wchar_t* valueName, uint64_t value) {
@@ -178,7 +295,11 @@ bool Settings::WriteUint64Value(const wchar_t* valueName, uint64_t value) {
 
     NSNumber* numberValue = [NSNumber numberWithUnsignedLongLong:value];
     [GetSettingsStore() setObject:numberValue forKey:key];
-    return [GetSettingsStore() synchronize];
+    NSUserDefaults* legacyStore = GetLegacySettingsStore();
+    if (legacyStore != GetSettingsStore()) {
+        [legacyStore setObject:numberValue forKey:key];
+    }
+    return SynchronizeSettingsStores();
 }
 
 bool Settings::WriteBinaryValue(const wchar_t* valueName, const unsigned char* data, size_t len) {
@@ -193,7 +314,11 @@ bool Settings::WriteBinaryValue(const wchar_t* valueName, const unsigned char* d
 
     NSData* blob = [NSData dataWithBytes:data length:len];
     [GetSettingsStore() setObject:blob forKey:key];
-    return [GetSettingsStore() synchronize];
+    NSUserDefaults* legacyStore = GetLegacySettingsStore();
+    if (legacyStore != GetSettingsStore()) {
+        [legacyStore setObject:blob forKey:key];
+    }
+    return SynchronizeSettingsStores();
 }
 
 bool Settings::ReadBinaryValue(const wchar_t* valueName, std::vector<unsigned char>& outValue) {
@@ -206,14 +331,15 @@ bool Settings::ReadBinaryValue(const wchar_t* valueName, std::vector<unsigned ch
         return false;
     }
 
-    NSData* value = [GetSettingsStore() dataForKey:key];
-    if (value == nil) {
+    id value = ReadSettingsObject(key);
+    if (value == nil || ![value isKindOfClass:[NSData class]]) {
         return false;
     }
 
-    outValue.resize(value.length);
+    NSData* data = (NSData*)value;
+    outValue.resize(data.length);
     if (!outValue.empty()) {
-        std::memcpy(outValue.data(), value.bytes, outValue.size());
+        std::memcpy(outValue.data(), data.bytes, outValue.size());
     }
     return true;
 }

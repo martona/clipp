@@ -9,6 +9,8 @@
 /* Begin PBXBuildFile section */
 		3B7E0A052FD2800000C1A001 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B7E0A032FD2800000C1A001 /* ShareViewController.swift */; };
 		3B7E0A062FD2800000C1A001 /* ClippShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 3B7E0A012FD2800000C1A001 /* ClippShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		3B7E0A182FD2800000C1A001 /* ClippShareBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = 3B7E0A162FD2800000C1A001 /* ClippShareBridge.mm */; };
+		3B7E0A192FD2800000C1A001 /* ClippShareCore.mm in Sources */ = {isa = PBXBuildFile; fileRef = 3B7E0A172FD2800000C1A001 /* ClippShareCore.mm */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -40,6 +42,11 @@
 		3B7E0A012FD2800000C1A001 /* ClippShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ClippShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		3B7E0A032FD2800000C1A001 /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
 		3B7E0A042FD2800000C1A001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		3B7E0A142FD2800000C1A001 /* Clipp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Clipp/Clipp.entitlements; sourceTree = "<group>"; };
+		3B7E0A152FD2800000C1A001 /* ClippShareExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ClippShareExtension.entitlements; sourceTree = "<group>"; };
+		3B7E0A162FD2800000C1A001 /* ClippShareBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = ClippShareBridge.mm; sourceTree = "<group>"; };
+		3B7E0A172FD2800000C1A001 /* ClippShareCore.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = ClippShareCore.mm; sourceTree = "<group>"; };
+		3B7E0A1A2FD2800000C1A001 /* ClippShareBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ClippShareBridge.h; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -72,6 +79,7 @@
 			isa = PBXGroup;
 			children = (
 				3B1C0BBE2FC1725A00D70FBA /* Clipp */,
+				3B7E0A142FD2800000C1A001 /* Clipp.entitlements */,
 				3B7E0A022FD2800000C1A001 /* ClippShareExtension */,
 				3B1C0BBD2FC1725A00D70FBA /* Products */,
 			);
@@ -90,7 +98,11 @@
 			isa = PBXGroup;
 			children = (
 				3B7E0A032FD2800000C1A001 /* ShareViewController.swift */,
+				3B7E0A1A2FD2800000C1A001 /* ClippShareBridge.h */,
+				3B7E0A162FD2800000C1A001 /* ClippShareBridge.mm */,
+				3B7E0A172FD2800000C1A001 /* ClippShareCore.mm */,
 				3B7E0A042FD2800000C1A001 /* Info.plist */,
+				3B7E0A152FD2800000C1A001 /* ClippShareExtension.entitlements */,
 			);
 			path = ClippShareExtension;
 			sourceTree = "<group>";
@@ -209,6 +221,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				3B7E0A052FD2800000C1A001 /* ShareViewController.swift in Sources */,
+				3B7E0A182FD2800000C1A001 /* ClippShareBridge.mm in Sources */,
+				3B7E0A192FD2800000C1A001 /* ClippShareCore.mm in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -349,6 +363,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Clipp/Clipp.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2262A4CP8N;
@@ -363,10 +378,11 @@
 					"$(inherited)",
 					"$(PROJECT_DIR)/../vcpkg-installed/arm64-ios-simulator/include",
 				);
+				INFOPLIST_KEY_AppIdentifierPrefix = "$(AppIdentifierPrefix)";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Clipp uses your local network to discover and connect to your trusted devices.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Clipp uses your local network to discover and connect to your trusted devices.";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -412,6 +428,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Clipp/Clipp.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2262A4CP8N;
@@ -426,10 +443,11 @@
 					"$(inherited)",
 					"$(PROJECT_DIR)/../vcpkg-installed/arm64-ios-simulator/include",
 				);
+				INFOPLIST_KEY_AppIdentifierPrefix = "$(AppIdentifierPrefix)";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Clipp uses your local network to discover and connect to your trusted devices.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Clipp uses your local network to discover and connect to your trusted devices.";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -474,11 +492,20 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = ClippShareExtension/ClippShareExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2262A4CP8N;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = NO;
+				"HEADER_SEARCH_PATHS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/../vcpkg-installed/arm64-ios/include",
+				);
+				"HEADER_SEARCH_PATHS[sdk=iphonesimulator*]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/../vcpkg-installed/arm64-ios-simulator/include",
+				);
 				INFOPLIST_FILE = ClippShareExtension/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -486,7 +513,27 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
+				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/../vcpkg-installed/arm64-ios/lib",
+				);
+				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/../vcpkg-installed/arm64-ios-simulator/lib",
+				);
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework",
+					Security,
+					"-framework",
+					UIKit,
+					"-framework",
+					CoreFoundation,
+					"-lsodium",
+					"-lxxhash",
+					"-lzstd",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = net.clipp.ios.ShareExtension;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -494,6 +541,7 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = ClippShareExtension/ClippShareBridge.h;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -504,11 +552,20 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = ClippShareExtension/ClippShareExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2262A4CP8N;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = NO;
+				"HEADER_SEARCH_PATHS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/../vcpkg-installed/arm64-ios/include",
+				);
+				"HEADER_SEARCH_PATHS[sdk=iphonesimulator*]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/../vcpkg-installed/arm64-ios-simulator/include",
+				);
 				INFOPLIST_FILE = ClippShareExtension/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -516,15 +573,36 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
+				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/../vcpkg-installed/arm64-ios/lib",
+				);
+				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/../vcpkg-installed/arm64-ios-simulator/lib",
+				);
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework",
+					Security,
+					"-framework",
+					UIKit,
+					"-framework",
+					CoreFoundation,
+					"-lsodium",
+					"-lxxhash",
+					"-lzstd",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = net.clipp.ios.ShareExtension;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = ClippShareExtension/ClippShareBridge.h;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
