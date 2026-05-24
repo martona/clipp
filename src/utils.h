@@ -1,6 +1,6 @@
 #pragma once
 
-static std::wstring Utf8ToWideString(const std::string& value) {
+static inline std::wstring Utf8ToWideString(const std::string& value) {
 	if (value.empty()) return L"";
 
 	const size_t size = utf8_to_utf16(value.c_str(), value.size(), nullptr, 0);
@@ -11,7 +11,7 @@ static std::wstring Utf8ToWideString(const std::string& value) {
 	return wide;
 }
 
-static std::string WideToUtf8String(const std::wstring& value) {
+static inline std::string WideToUtf8String(const std::wstring& value) {
 	if (value.empty()) return "";
 
 	const size_t size = utf16_to_utf8(value.c_str(), value.size(), nullptr, 0);
@@ -21,4 +21,3 @@ static std::string WideToUtf8String(const std::wstring& value) {
 	utf16_to_utf8(value.c_str(), value.size(), narrow.data(), size);
 	return narrow;
 }
-

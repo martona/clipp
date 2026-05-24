@@ -121,7 +121,7 @@ enum class SocketWaitResult {
 	Failed,
 };
 
-static int LastSocketError() {
+static inline int LastSocketError() {
 #ifdef _WIN32
 	return WSAGetLastError();
 #else
@@ -129,7 +129,7 @@ static int LastSocketError() {
 #endif
 }
 
-static bool SocketWouldBlock(int error) {
+static inline bool SocketWouldBlock(int error) {
 #ifdef _WIN32
 	return error == WSAEWOULDBLOCK;
 #else
@@ -137,7 +137,7 @@ static bool SocketWouldBlock(int error) {
 #endif
 }
 
-static bool SocketInterrupted(int error) {
+static inline bool SocketInterrupted(int error) {
 #ifdef _WIN32
 	return error == WSAEINTR;
 #else
@@ -145,7 +145,7 @@ static bool SocketInterrupted(int error) {
 #endif
 }
 
-static bool SetSocketBlockingMode(SOCKET socket, bool blocking) {
+static inline bool SetSocketBlockingMode(SOCKET socket, bool blocking) {
 #ifdef _WIN32
 	u_long mode = blocking ? 0 : 1;
 	return ioctlsocket(socket, FIONBIO, &mode) == 0;
@@ -157,7 +157,7 @@ static bool SetSocketBlockingMode(SOCKET socket, bool blocking) {
 #endif
 }
 
-static bool IsConnectPendingError(int error) {
+static inline bool IsConnectPendingError(int error) {
 #ifdef _WIN32
 	return error == WSAEWOULDBLOCK || error == WSAEINPROGRESS || error == WSAEALREADY;
 #else
@@ -165,13 +165,13 @@ static bool IsConnectPendingError(int error) {
 #endif
 }
 
-static bool GetPendingConnectError(SOCKET socket, int& connectError) {
+static inline bool GetPendingConnectError(SOCKET socket, int& connectError) {
 	socklen_t optionLength = sizeof(connectError);
 	connectError = 0;
 	return getsockopt(socket, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&connectError), &optionLength) == 0;
 }
 
-static SOCKET ConnectTcpSocket(const std::string& ip, unsigned short port, std::chrono::milliseconds timeout) {
+static inline SOCKET ConnectTcpSocket(const std::string& ip, unsigned short port, std::chrono::milliseconds timeout) {
 	SOCKET socket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (socket == INVALID_SOCKET) {
 		return INVALID_SOCKET;
@@ -225,7 +225,7 @@ static SOCKET ConnectTcpSocket(const std::string& ip, unsigned short port, std::
 	return socket;
 }
 
-static SocketWaitResult WaitForSocket(SOCKET sock, const SocketWakeEvent* wakeEvent, bool readable, bool writable) {
+static inline SocketWaitResult WaitForSocket(SOCKET sock, const SocketWakeEvent* wakeEvent, bool readable, bool writable) {
 	fd_set readSet;
 	fd_set writeSet;
 	FD_ZERO(&readSet);
@@ -261,7 +261,7 @@ static SocketWaitResult WaitForSocket(SOCKET sock, const SocketWakeEvent* wakeEv
 	return SocketWaitResult::Failed;
 }
 
-static unsigned short SocketPeerPort(SOCKET socket) {
+static inline unsigned short SocketPeerPort(SOCKET socket) {
 	sockaddr_storage address{};
 	socklen_t addressLength = sizeof(address);
 	if (getpeername(socket, reinterpret_cast<sockaddr*>(&address), &addressLength) != 0) {
@@ -281,7 +281,7 @@ static unsigned short SocketPeerPort(SOCKET socket) {
 	return 0;
 }
 
-static std::string SocketPeerIp(SOCKET socket) {
+static inline std::string SocketPeerIp(SOCKET socket) {
 	sockaddr_storage address{};
 	socklen_t addressLength = sizeof(address);
 	if (getpeername(socket, reinterpret_cast<sockaddr*>(&address), &addressLength) != 0) {
@@ -308,7 +308,7 @@ static std::string SocketPeerIp(SOCKET socket) {
 	return ip;
 }
 
-static bool RecvAll(const SocketIoContext& io, char* buffer, int length) {
+static inline bool RecvAll(const SocketIoContext& io, char* buffer, int length) {
 	int total = 0;
 	while (total < length) {
 		if (io.stopRequested.load())
@@ -337,7 +337,7 @@ static bool RecvAll(const SocketIoContext& io, char* buffer, int length) {
 	return true;
 }
 
-static bool SendAll(const SocketIoContext& io, const char* buffer, int length) {
+static inline bool SendAll(const SocketIoContext& io, const char* buffer, int length) {
 	int total = 0;
 	while (total < length) {
 		if (io.stopRequested.load())

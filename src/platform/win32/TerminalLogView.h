@@ -31,6 +31,7 @@ private:
 
     winrt::Windows::UI::Xaml::Media::Brush defaultBrush_{ nullptr };
     winrt::Windows::UI::Xaml::Media::Brush grayBrush_{ nullptr };
+    winrt::Windows::UI::Xaml::Media::Brush dimCyanBrush_{ nullptr };
     winrt::Windows::UI::Xaml::Media::Brush cyanBrush_{ nullptr };
     winrt::Windows::UI::Xaml::Media::Brush greenBrush_{ nullptr };
     winrt::Windows::UI::Xaml::Media::Brush yellowBrush_{ nullptr };

@@ -18,6 +18,7 @@ TerminalLogView::TerminalLogView() {
 
     defaultBrush_ = SolidColorBrush(winrt::Windows::UI::Colors::LightGray());
     grayBrush_    = SolidColorBrush(winrt::Windows::UI::Colors::Gray());
+    dimCyanBrush_ = SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(255, 80, 150, 165));
     cyanBrush_    = SolidColorBrush(winrt::Windows::UI::Colors::Cyan());
     greenBrush_   = SolidColorBrush(winrt::Windows::UI::Colors::LimeGreen());
     yellowBrush_  = SolidColorBrush(winrt::Windows::UI::Colors::Gold());
@@ -167,11 +168,12 @@ winrt::Windows::UI::Xaml::Documents::Paragraph TerminalLogView::CreateParagraphF
 
 winrt::Windows::UI::Xaml::Media::Brush TerminalLogView::BrushForAnsiCode(const std::wstring& code) const {
     if (code == L"0") return defaultBrush_;
-    if (code == L"90") return grayBrush_;
-    if (code == L"36") return cyanBrush_;
-    if (code == L"1;32") return greenBrush_;
-    if (code == L"1;33") return yellowBrush_;
-    if (code == L"1;31") return redBrush_;
+    if (code == L"90" || code == L"0;90") return grayBrush_;
+    if (code == L"2;36" || code == L"0;2;36") return dimCyanBrush_;
+    if (code == L"36" || code == L"0;36") return cyanBrush_;
+    if (code == L"1;32" || code == L"0;1;32") return greenBrush_;
+    if (code == L"1;33" || code == L"0;1;33") return yellowBrush_;
+    if (code == L"1;31" || code == L"0;1;31") return redBrush_;
     return defaultBrush_;
 }
 

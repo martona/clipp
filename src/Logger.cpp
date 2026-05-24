@@ -125,9 +125,9 @@ void Logger::writeLine(const wchar_t* function, Level level, const wchar_t* mess
 
     // Console Output (With ANSI Colors)
     std::wstringstream wstrstr;
-    wstrstr << L"\x1b[90m" << tsStr
+    wstrstr << L"\x1b[0;90m" << tsStr
         << LevelToColor(level) << L" [" << lvlStr << L"] "
-        << L"\x1b[90m" << L"[" << fnStr << L"] "
+        << L"\x1b[0;90m" << L"[" << fnStr << L"] "
         << ResetColor() << msgStr << std::endl;
 	std::wstring wstr = wstrstr.str();
 
@@ -202,15 +202,15 @@ const wchar_t* Logger::LevelToColor(Level level) {
     // The trailing 'm' signals the end of the color code.
     switch (level) {
     case Level::DDebug:
-        return L"\x1b[2;36m";     // Dim cyan for very chatty diagnostics
+        return L"\x1b[0;2;36m";   // Dim cyan for very chatty diagnostics
     case Level::Debug:
-        return L"\x1b[36m";       // Cyan (Clear, but visually recedes slightly for spammy logs)
+        return L"\x1b[0;36m";     // Cyan (Clear, but visually recedes slightly for spammy logs)
     case Level::Info:
-        return L"\x1b[1;32m";     // Bold Green (Bright, positive confirmation)
+        return L"\x1b[0;1;32m";   // Bold Green (Bright, positive confirmation)
     case Level::Warning:
-        return L"\x1b[1;33m";     // Bold Yellow (High contrast, catches the eye)
+        return L"\x1b[0;1;33m";   // Bold Yellow (High contrast, catches the eye)
     case Level::Error:
-        return L"\x1b[1;31m";     // Bold Red (Maximum urgency)
+        return L"\x1b[0;1;31m";   // Bold Red (Maximum urgency)
     default:
         return L"\x1b[0m";        // Reset (Returns to default terminal foreground)
     }

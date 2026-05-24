@@ -15,11 +15,13 @@ NSColor* DefaultTextColor() {
 }
 
 NSColor* ColorForAnsiCode(const std::wstring& code) {
-    if (code == L"90") return [NSColor colorWithCalibratedWhite:0.50 alpha:1.0];
-    if (code == L"36") return [NSColor colorWithCalibratedRed:0.33 green:0.78 blue:0.92 alpha:1.0];
-    if (code == L"1;32") return [NSColor colorWithCalibratedRed:0.40 green:0.86 blue:0.45 alpha:1.0];
-    if (code == L"1;33") return [NSColor colorWithCalibratedRed:0.95 green:0.76 blue:0.25 alpha:1.0];
-    if (code == L"1;31") return [NSColor colorWithCalibratedRed:1.00 green:0.36 blue:0.25 alpha:1.0];
+    if (code == L"0") return DefaultTextColor();
+    if (code == L"90" || code == L"0;90") return [NSColor colorWithCalibratedWhite:0.50 alpha:1.0];
+    if (code == L"2;36" || code == L"0;2;36") return [NSColor colorWithCalibratedRed:0.24 green:0.58 blue:0.68 alpha:1.0];
+    if (code == L"36" || code == L"0;36") return [NSColor colorWithCalibratedRed:0.33 green:0.78 blue:0.92 alpha:1.0];
+    if (code == L"1;32" || code == L"0;1;32") return [NSColor colorWithCalibratedRed:0.40 green:0.86 blue:0.45 alpha:1.0];
+    if (code == L"1;33" || code == L"0;1;33") return [NSColor colorWithCalibratedRed:0.95 green:0.76 blue:0.25 alpha:1.0];
+    if (code == L"1;31" || code == L"0;1;31") return [NSColor colorWithCalibratedRed:1.00 green:0.36 blue:0.25 alpha:1.0];
     return DefaultTextColor();
 }
 

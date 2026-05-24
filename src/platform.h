@@ -16,12 +16,9 @@
     #include <ws2tcpip.h>
     #include <conio.h>
 #elif defined(__APPLE__)
-    #define _LIBCPP_DISABLE_DEPRECATION_WARNINGS 1
     #include <CoreFoundation/CoreFoundation.h>
     #include <TargetConditionals.h>
     #include <cstddef>
-    #include <codecvt>
-    #include <locale>
     #include <sys/socket.h>
     #include <arpa/inet.h>
     #include <netinet/in.h>
@@ -73,50 +70,173 @@
 #elif defined(__APPLE__)
     using PlatformWindowHandle = void*;
 
-    #pragma clang diagnostic push
-    #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    namespace clipp_apple_encoding_detail {
+        static inline bool DecodeUtf8CodePoint(const char* utf8, size_t n_utf8, size_t& offset, uint32_t& codePoint) {
+            if (offset >= n_utf8) {
+                return false;
+            }
 
-    static size_t utf8_to_utf16(const char* utf8, size_t n_utf8, wchar_t* utf16, size_t n_utf16) {
+            const auto byteAt = [&](size_t index) -> unsigned char {
+                return static_cast<unsigned char>(utf8[index]);
+            };
+
+            const size_t start = offset;
+            const unsigned char lead = byteAt(offset++);
+            if (lead < 0x80) {
+                codePoint = lead;
+                return true;
+            }
+
+            uint32_t value = 0;
+            size_t continuationCount = 0;
+            uint32_t minimumValue = 0;
+
+            if ((lead & 0xE0) == 0xC0) {
+                value = lead & 0x1F;
+                continuationCount = 1;
+                minimumValue = 0x80;
+            } else if ((lead & 0xF0) == 0xE0) {
+                value = lead & 0x0F;
+                continuationCount = 2;
+                minimumValue = 0x800;
+            } else if ((lead & 0xF8) == 0xF0) {
+                value = lead & 0x07;
+                continuationCount = 3;
+                minimumValue = 0x10000;
+            } else {
+                offset = start;
+                return false;
+            }
+
+            if (offset + continuationCount > n_utf8) {
+                offset = start;
+                return false;
+            }
+
+            for (size_t i = 0; i < continuationCount; ++i) {
+                const unsigned char next = byteAt(offset++);
+                if ((next & 0xC0) != 0x80) {
+                    offset = start;
+                    return false;
+                }
+                value = (value << 6) | (next & 0x3F);
+            }
+
+            if (value < minimumValue || value > 0x10FFFF || (value >= 0xD800 && value <= 0xDFFF)) {
+                offset = start;
+                return false;
+            }
+
+            codePoint = value;
+            return true;
+        }
+
+        static inline bool AppendUtf8CodePoint(char* utf8, size_t n_utf8, size_t& offset, uint32_t codePoint) {
+            unsigned char bytes[4]{};
+            size_t byteCount = 0;
+
+            if (codePoint <= 0x7F) {
+                bytes[0] = static_cast<unsigned char>(codePoint);
+                byteCount = 1;
+            } else if (codePoint <= 0x7FF) {
+                bytes[0] = static_cast<unsigned char>(0xC0 | (codePoint >> 6));
+                bytes[1] = static_cast<unsigned char>(0x80 | (codePoint & 0x3F));
+                byteCount = 2;
+            } else if (codePoint <= 0xFFFF) {
+                if (codePoint >= 0xD800 && codePoint <= 0xDFFF) {
+                    return false;
+                }
+                bytes[0] = static_cast<unsigned char>(0xE0 | (codePoint >> 12));
+                bytes[1] = static_cast<unsigned char>(0x80 | ((codePoint >> 6) & 0x3F));
+                bytes[2] = static_cast<unsigned char>(0x80 | (codePoint & 0x3F));
+                byteCount = 3;
+            } else if (codePoint <= 0x10FFFF) {
+                bytes[0] = static_cast<unsigned char>(0xF0 | (codePoint >> 18));
+                bytes[1] = static_cast<unsigned char>(0x80 | ((codePoint >> 12) & 0x3F));
+                bytes[2] = static_cast<unsigned char>(0x80 | ((codePoint >> 6) & 0x3F));
+                bytes[3] = static_cast<unsigned char>(0x80 | (codePoint & 0x3F));
+                byteCount = 4;
+            } else {
+                return false;
+            }
+
+            if (utf8 != nullptr && offset + byteCount <= n_utf8) {
+                std::memcpy(utf8 + offset, bytes, byteCount);
+            }
+            offset += byteCount;
+            return true;
+        }
+    }
+
+    static inline size_t utf8_to_utf16(const char* utf8, size_t n_utf8, wchar_t* utf16, size_t n_utf16) {
         if (!utf8) return 0;
 
-        std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
-        std::wstring wide;
-        try {
-            wide = converter.from_bytes(utf8, utf8 + n_utf8);
-        } catch (...) {
-            return 0;
+        size_t inputOffset = 0;
+        size_t outputOffset = 0;
+        while (inputOffset < n_utf8) {
+            uint32_t codePoint = 0;
+            if (!clipp_apple_encoding_detail::DecodeUtf8CodePoint(utf8, n_utf8, inputOffset, codePoint)) {
+                return 0;
+            }
+
+            if constexpr (sizeof(wchar_t) == 2) {
+                if (codePoint <= 0xFFFF) {
+                    if (utf16 != nullptr && outputOffset < n_utf16) {
+                        utf16[outputOffset] = static_cast<wchar_t>(codePoint);
+                    }
+                    ++outputOffset;
+                } else {
+                    const uint32_t shifted = codePoint - 0x10000;
+                    if (utf16 != nullptr && outputOffset < n_utf16) {
+                        utf16[outputOffset] = static_cast<wchar_t>(0xD800 | (shifted >> 10));
+                    }
+                    ++outputOffset;
+                    if (utf16 != nullptr && outputOffset < n_utf16) {
+                        utf16[outputOffset] = static_cast<wchar_t>(0xDC00 | (shifted & 0x3FF));
+                    }
+                    ++outputOffset;
+                }
+            } else {
+                if (utf16 != nullptr && outputOffset < n_utf16) {
+                    utf16[outputOffset] = static_cast<wchar_t>(codePoint);
+                }
+                ++outputOffset;
+            }
         }
 
-        if (utf16 == nullptr || n_utf16 == 0) {
-            return wide.size();
-        }
-
-        const size_t copyLen = (std::min)(wide.size(), n_utf16);
-        std::memcpy(utf16, wide.data(), copyLen * sizeof(wchar_t));
-        return copyLen;
+        return utf16 == nullptr || n_utf16 == 0 ? outputOffset : (std::min)(outputOffset, n_utf16);
     }
 
-    static size_t utf16_to_utf8(const wchar_t* utf16, size_t n_utf16, char* utf8, size_t n_utf8) {
+    static inline size_t utf16_to_utf8(const wchar_t* utf16, size_t n_utf16, char* utf8, size_t n_utf8) {
         if (!utf16) return 0;
 
-        std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
-        std::string narrow;
-        try {
-            narrow = converter.to_bytes(utf16, utf16 + n_utf16);
-        } catch (...) {
-            return 0;
+        size_t outputOffset = 0;
+        for (size_t i = 0; i < n_utf16; ++i) {
+            uint32_t codePoint = static_cast<uint32_t>(utf16[i]);
+            if constexpr (sizeof(wchar_t) == 2) {
+                if (codePoint >= 0xD800 && codePoint <= 0xDBFF) {
+                    if (i + 1 >= n_utf16) {
+                        return 0;
+                    }
+
+                    const uint32_t low = static_cast<uint32_t>(utf16[++i]);
+                    if (low < 0xDC00 || low > 0xDFFF) {
+                        return 0;
+                    }
+
+                    codePoint = 0x10000 + (((codePoint - 0xD800) << 10) | (low - 0xDC00));
+                } else if (codePoint >= 0xDC00 && codePoint <= 0xDFFF) {
+                    return 0;
+                }
+            }
+
+            if (!clipp_apple_encoding_detail::AppendUtf8CodePoint(utf8, n_utf8, outputOffset, codePoint)) {
+                return 0;
+            }
         }
 
-        if (utf8 == nullptr || n_utf8 == 0) {
-            return narrow.size();
-        }
-
-        const size_t copyLen = (std::min)(narrow.size(), n_utf8);
-        std::memcpy(utf8, narrow.data(), copyLen);
-        return copyLen;
+        return utf8 == nullptr || n_utf8 == 0 ? outputOffset : (std::min)(outputOffset, n_utf8);
     }
-
-    #pragma clang diagnostic pop
 
     static inline int vsnprintf_truncate(char* buffer, size_t size, const char* format, va_list args) {
         return std::vsnprintf(buffer, size, format, args);
