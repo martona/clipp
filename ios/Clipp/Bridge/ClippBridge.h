@@ -4,10 +4,10 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-NS_SWIFT_NAME(IncomingClipboardPayloadKind)
-typedef NS_ENUM(NSInteger, CLPIncomingClipboardPayloadKind) {
-    CLPIncomingClipboardPayloadKindText = 1,
-    CLPIncomingClipboardPayloadKindImage = 2,
+NS_SWIFT_NAME(ClipboardPayloadKind)
+typedef NS_ENUM(NSInteger, CLPClipboardPayloadKind) {
+    CLPClipboardPayloadKindText = 1,
+    CLPClipboardPayloadKindImage = 2,
 };
 
 NS_SWIFT_NAME(IncomingClipboardItem)
@@ -16,7 +16,7 @@ NS_SWIFT_NAME(IncomingClipboardItem)
 @property(nonatomic, copy, readonly) NSString* identifier;
 @property(nonatomic, copy, readonly) NSString* deviceName;
 @property(nonatomic, copy, readonly) NSDate* receivedAt;
-@property(nonatomic, assign, readonly) CLPIncomingClipboardPayloadKind kind;
+@property(nonatomic, assign, readonly) CLPClipboardPayloadKind kind;
 @property(nonatomic, copy, nullable, readonly) NSString* text;
 @property(nonatomic, copy, nullable, readonly) NSData* imagePNGData;
 @property(nonatomic, assign, readonly) BOOL hasTextPayload;
@@ -25,7 +25,7 @@ NS_SWIFT_NAME(IncomingClipboardItem)
 - (instancetype)initWithIdentifier:(NSString*)identifier
                         deviceName:(NSString*)deviceName
                         receivedAt:(NSDate*)receivedAt
-                              kind:(CLPIncomingClipboardPayloadKind)kind
+                              kind:(CLPClipboardPayloadKind)kind
                               text:(nullable NSString*)text
                       imagePNGData:(nullable NSData*)imagePNGData NS_DESIGNATED_INITIALIZER;
 - (instancetype)init NS_UNAVAILABLE;
@@ -40,6 +40,33 @@ NS_SWIFT_NAME(IncomingClipboardBridge)
 + (NSArray<CLPIncomingClipboardItem*>*)recentItems NS_SWIFT_NAME(recentItems());
 + (BOOL)copyItem:(CLPIncomingClipboardItem*)item
            error:(NSError**)error NS_SWIFT_NAME(copy(_:));
+
+@end
+
+NS_SWIFT_NAME(OutgoingClipboardItem)
+@interface CLPOutgoingClipboardItem : NSObject
+
+@property(nonatomic, copy, readonly) NSString* identifier;
+@property(nonatomic, copy, readonly) NSDate* sentAt;
+@property(nonatomic, assign, readonly) CLPClipboardPayloadKind kind;
+@property(nonatomic, copy, nullable, readonly) NSString* text;
+@property(nonatomic, copy, nullable, readonly) NSData* imagePNGData;
+@property(nonatomic, assign, readonly) BOOL hasTextPayload;
+@property(nonatomic, assign, readonly) BOOL hasImagePayload;
+
+- (instancetype)initWithIdentifier:(NSString*)identifier
+                            sentAt:(NSDate*)sentAt
+                              kind:(CLPClipboardPayloadKind)kind
+                              text:(nullable NSString*)text
+                      imagePNGData:(nullable NSData*)imagePNGData NS_DESIGNATED_INITIALIZER;
+- (instancetype)init NS_UNAVAILABLE;
+
+@end
+
+NS_SWIFT_NAME(OutgoingClipboardBridge)
+@interface CLPOutgoingClipboardBridge : NSObject
+
++ (nullable CLPOutgoingClipboardItem*)sendCurrentPasteboardWithError:(NSError**)error NS_SWIFT_NAME(sendCurrentPasteboard());
 
 @end
 

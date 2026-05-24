@@ -10,10 +10,10 @@ import Combine
 import UIKit
 
 struct ContentView: View {
-    @StateObject private var incomingClipboard = IncomingClipboardViewModel()
+    @StateObject private var clipboardStream = ClipboardStreamViewModel()
 
     @State private var activePanel: AppPanel?
-    @State private var inspectedItem: ClipboardItem?
+    @State private var inspectedItem: ClipboardStreamItem?
     @State private var didCheckInitialNetworkKey = false
     @State private var networkIndicatorMode: NetworkIndicatorMode = .ok
 
@@ -21,22 +21,21 @@ struct ContentView: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(spacing: 18) {
-                    if !incomingClipboard.items.isEmpty {
-                        Text(incomingClipboard.items.first?.dayTitle ?? "Recent")
+                    if !clipboardStream.items.isEmpty {
+                        Text(clipboardStream.items.first?.dayTitle ?? "Recent")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                             .padding(.top, 10)
 
-                        ForEach(incomingClipboard.items) { item in
+                        ForEach(clipboardStream.items) { item in
                             ClipboardGroupView(
-                                deviceName: item.deviceName,
                                 item: item,
-                                isCopied: incomingClipboard.copiedItemID == item.id,
+                                isCopied: clipboardStream.copiedItemID == item.id,
                                 onInspect: {
                                     inspectedItem = item
                                 },
                                 onCopy: {
-                                    incomingClipboard.copy(item)
+                                    clipboardStream.copy(item)
                                 }
                             )
                         }
@@ -52,6 +51,15 @@ struct ContentView: View {
             .navigationTitle(CLP_UI_APP_NAME)
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        clipboardStream.send()
+                    } label: {
+                        SendToolbarIndicator(state: clipboardStream.sendState)
+                    }
+                    .disabled(clipboardStream.sendState == .sending)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Send Clipboard")
+
                     Button {
                         activePanel = .network
                     } label: {
@@ -79,13 +87,18 @@ struct ContentView: View {
             }
             .sheet(item: $inspectedItem) { item in
                 ClipboardInspectSheet(item: item) {
-                    incomingClipboard.copy(item)
+                    clipboardStream.copy(item)
                 }
             }
-            .alert("Unable to Copy", isPresented: incomingClipboard.copyErrorIsPresented) {
+            .alert("Unable to Copy", isPresented: clipboardStream.copyErrorIsPresented) {
                 Button("OK", role: .cancel) {}
             } message: {
-                Text(incomingClipboard.copyErrorMessage ?? "The clipboard item could not be copied.")
+                Text(clipboardStream.copyErrorMessage ?? "The clipboard item could not be copied.")
+            }
+            .alert("Unable to Send", isPresented: clipboardStream.sendErrorIsPresented) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(clipboardStream.sendErrorMessage ?? "The clipboard could not be sent.")
             }
             .task {
                 await showNetworkSetupIfNeeded()
@@ -154,20 +167,35 @@ struct ContentView: View {
     }
 
     private func observeIncomingClipboard() async {
-        incomingClipboard.refresh()
+        clipboardStream.refreshIncoming()
 
         let name = Notification.Name(IncomingClipboardBridge.didChangeNotificationName())
         for await _ in NotificationCenter.default.notifications(named: name) {
-            incomingClipboard.refresh()
+            clipboardStream.refreshIncoming()
         }
     }
 }
 
+private enum OutgoingSendState: Sendable {
+    case idle
+    case sending
+    case sent
+}
+
 @MainActor
-private final class IncomingClipboardViewModel: ObservableObject {
-    @Published var items: [ClipboardItem] = []
+private final class ClipboardStreamViewModel: ObservableObject {
+    @Published var incomingItems: [ClipboardStreamItem] = []
+    @Published var outgoingItems: [ClipboardStreamItem] = []
     @Published var copiedItemID: String?
     @Published var copyErrorMessage: String?
+    @Published var sendState: OutgoingSendState = .idle
+    @Published var sendErrorMessage: String?
+
+    var items: [ClipboardStreamItem] {
+        (incomingItems + outgoingItems).sorted { lhs, rhs in
+            lhs.timestamp > rhs.timestamp
+        }
+    }
 
     var copyErrorIsPresented: Binding<Bool> {
         Binding(
@@ -180,13 +208,29 @@ private final class IncomingClipboardViewModel: ObservableObject {
         )
     }
 
-    func refresh() {
-        items = IncomingClipboardBridge.recentItems().compactMap(ClipboardItem.init(sourceItem:))
+    var sendErrorIsPresented: Binding<Bool> {
+        Binding(
+            get: { self.sendErrorMessage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    self.sendErrorMessage = nil
+                }
+            }
+        )
     }
 
-    func copy(_ item: ClipboardItem) {
+    func refreshIncoming() {
+        incomingItems = IncomingClipboardBridge.recentItems()
+            .compactMap(ClipboardStreamItem.init(incomingItem:))
+    }
+
+    func copy(_ item: ClipboardStreamItem) {
+        guard let sourceItem = item.incomingSourceItem else {
+            return
+        }
+
         do {
-            try IncomingClipboardBridge.copy(item.sourceItem)
+            try IncomingClipboardBridge.copy(sourceItem)
             copiedItemID = item.id
 
             Task {
@@ -199,6 +243,31 @@ private final class IncomingClipboardViewModel: ObservableObject {
             }
         } catch {
             copyErrorMessage = error.localizedDescription
+        }
+    }
+
+    func send() {
+        guard sendState != .sending else {
+            return
+        }
+
+        sendState = .sending
+        do {
+            let sentItem = try OutgoingClipboardBridge.sendCurrentPasteboard()
+            outgoingItems.insert(ClipboardStreamItem(outgoingItem: sentItem), at: 0)
+            sendState = .sent
+
+            Task {
+                try? await Task.sleep(nanoseconds: 1_400_000_000)
+                await MainActor.run {
+                    if self.sendState == .sent {
+                        self.sendState = .idle
+                    }
+                }
+            }
+        } catch {
+            sendState = .idle
+            sendErrorMessage = error.localizedDescription
         }
     }
 }
@@ -277,6 +346,26 @@ private struct NetworkToolbarIndicator: View {
     }
 }
 
+private struct SendToolbarIndicator: View {
+    let state: OutgoingSendState
+
+    var body: some View {
+        ZStack {
+            switch state {
+            case .idle:
+                Image(systemName: "paperplane")
+            case .sending:
+                ProgressView()
+                    .controlSize(.mini)
+            case .sent:
+                Image(systemName: "checkmark")
+                    .font(.body.weight(.semibold))
+            }
+        }
+        .frame(width: 28, height: 28)
+    }
+}
+
 private enum ClipboardPayload {
     case text(String)
     case privateText(String)
@@ -284,38 +373,69 @@ private enum ClipboardPayload {
     case image(Data)
 }
 
-private struct ClipboardItem: Identifiable {
+private enum ClipboardDirection {
+    case incoming
+    case outgoing
+}
+
+private struct ClipboardStreamItem: Identifiable {
     let id: String
     let deviceName: String
-    let receivedAt: Date
+    let timestamp: Date
+    let direction: ClipboardDirection
     let payload: ClipboardPayload
-    let sourceItem: IncomingClipboardItem
+    let incomingSourceItem: IncomingClipboardItem?
 
     var time: String {
-        receivedAt.formatted(date: .omitted, time: .shortened)
+        timestamp.formatted(date: .omitted, time: .shortened)
     }
 
     var dayTitle: String {
-        if Calendar.current.isDateInToday(receivedAt) {
+        if Calendar.current.isDateInToday(timestamp) {
             return "Today"
         }
 
-        return receivedAt.formatted(date: .abbreviated, time: .omitted)
+        return timestamp.formatted(date: .abbreviated, time: .omitted)
     }
 
-    init?(sourceItem: IncomingClipboardItem) {
-        if sourceItem.hasImagePayload, let imagePNGData = sourceItem.imagePNGData {
+    var alignment: HorizontalAlignment {
+        direction == .outgoing ? .trailing : .leading
+    }
+
+    var frameAlignment: Alignment {
+        direction == .outgoing ? .trailing : .leading
+    }
+
+    init?(incomingItem: IncomingClipboardItem) {
+        if incomingItem.hasImagePayload, let imagePNGData = incomingItem.imagePNGData {
             payload = .image(imagePNGData)
-        } else if sourceItem.hasTextPayload, let text = sourceItem.text {
+        } else if incomingItem.hasTextPayload, let text = incomingItem.text {
             payload = Self.classify(text: text)
         } else {
             return nil
         }
 
-        id = sourceItem.identifier
-        deviceName = sourceItem.deviceName
-        receivedAt = sourceItem.receivedAt
-        self.sourceItem = sourceItem
+        id = incomingItem.identifier
+        deviceName = incomingItem.deviceName
+        timestamp = incomingItem.receivedAt
+        direction = .incoming
+        incomingSourceItem = incomingItem
+    }
+
+    init(outgoingItem: OutgoingClipboardItem) {
+        if outgoingItem.hasImagePayload, let imagePNGData = outgoingItem.imagePNGData {
+            payload = .image(imagePNGData)
+        } else if outgoingItem.hasTextPayload, let text = outgoingItem.text {
+            payload = Self.classify(text: text)
+        } else {
+            payload = .text("")
+        }
+
+        id = outgoingItem.identifier
+        deviceName = "This iPhone"
+        timestamp = outgoingItem.sentAt
+        direction = .outgoing
+        incomingSourceItem = nil
     }
 
     private static func classify(text: String) -> ClipboardPayload {
@@ -369,16 +489,19 @@ private struct EmptyIncomingClipboardView: View {
 }
 
 private struct ClipboardGroupView: View {
-    let deviceName: String
-    let item: ClipboardItem
+    let item: ClipboardStreamItem
     let isCopied: Bool
     let onInspect: () -> Void
     let onCopy: () -> Void
 
     var body: some View {
         HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 7) {
-                Text(deviceName)
+            if item.direction == .outgoing {
+                Spacer(minLength: 54)
+            }
+
+            VStack(alignment: item.alignment, spacing: 7) {
+                Text(item.deviceName)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 4)
@@ -390,70 +513,75 @@ private struct ClipboardGroupView: View {
                     onCopy: onCopy
                 )
             }
-            .frame(maxWidth: 330, alignment: .leading)
+            .frame(maxWidth: 330, alignment: item.frameAlignment)
 
-            Spacer(minLength: 54)
+            if item.direction == .incoming {
+                Spacer(minLength: 54)
+            }
         }
     }
 }
 
 private struct ClipboardBubble: View {
-    let item: ClipboardItem
+    let item: ClipboardStreamItem
     let isCopied: Bool
     let onInspect: () -> Void
     let onCopy: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ClipboardPayloadView(payload: item.payload)
+            ClipboardPayloadView(payload: item.payload, isOutgoing: item.direction == .outgoing)
                 .contentShape(Rectangle())
                 .onTapGesture(perform: onInspect)
 
             HStack(spacing: 8) {
                 Text(item.time)
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(item.direction == .outgoing ? .white.opacity(0.62) : .secondary)
 
                 Spacer(minLength: 12)
 
-                Button(action: onCopy) {
-                    Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
-                        .font(.caption.weight(.semibold))
-                        .frame(width: 24, height: 24)
+                if item.direction == .incoming {
+                    Button(action: onCopy) {
+                        Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
+                            .font(.caption.weight(.semibold))
+                            .frame(width: 24, height: 24)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel(isCopied ? "Copied" : "Copy")
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .accessibilityLabel(isCopied ? "Copied" : "Copy")
             }
         }
         .padding(.vertical, 10)
         .padding(.horizontal, 12)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
+                .fill(item.direction == .outgoing ? Color.clippInk : Color(.secondarySystemGroupedBackground))
         )
         .overlay {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(.black.opacity(0.05))
+                .strokeBorder(item.direction == .outgoing ? .white.opacity(0.10) : .black.opacity(0.05))
         }
     }
 }
 
 private struct ClipboardPayloadView: View {
     let payload: ClipboardPayload
+    let isOutgoing: Bool
 
     var body: some View {
         switch payload {
         case .text(let text):
             Text(text)
                 .font(.system(.callout, design: .monospaced))
-                .foregroundStyle(.primary)
+                .foregroundStyle(isOutgoing ? .white : .primary)
                 .lineSpacing(3)
                 .lineLimit(8)
                 .textSelection(.enabled)
 
         case .privateText(let text):
-            PrivateLineView(text: text)
+            PrivateLineView(text: text, isOutgoing: isOutgoing)
 
         case .link(let title, let host, let url):
             VStack(alignment: .leading, spacing: 5) {
@@ -463,15 +591,15 @@ private struct ClipboardPayloadView: View {
                     Text(host)
                         .font(.caption.weight(.semibold))
                 }
-                .foregroundStyle(.secondary)
+                .foregroundStyle(isOutgoing ? .white.opacity(0.72) : .secondary)
 
                 Text(title)
                     .font(.callout.weight(.semibold))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(isOutgoing ? .white : .primary)
 
                 Text(url)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(isOutgoing ? .white.opacity(0.72) : .secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
@@ -503,6 +631,7 @@ private struct ClipboardImagePreview: View {
 
 private struct PrivateLineView: View {
     let text: String
+    let isOutgoing: Bool
 
     @State private var isPeeking = false
 
@@ -514,13 +643,13 @@ private struct PrivateLineView: View {
         HStack(spacing: 9) {
             Text(isPeeking ? text : maskedText)
                 .font(.system(.callout, design: .monospaced))
-                .foregroundStyle(.primary)
+                .foregroundStyle(isOutgoing ? .white : .primary)
                 .lineLimit(1)
                 .truncationMode(.middle)
 
             Image(systemName: isPeeking ? "eye.fill" : "eye")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(isOutgoing ? .white.opacity(0.72) : .secondary)
         }
         .contentShape(Rectangle())
         .onLongPressGesture(
@@ -538,7 +667,7 @@ private struct PrivateLineView: View {
 }
 
 private struct ClipboardInspectSheet: View {
-    let item: ClipboardItem
+    let item: ClipboardStreamItem
     let onCopy: () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -567,10 +696,12 @@ private struct ClipboardInspectSheet: View {
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(action: onCopy) {
-                        Image(systemName: "doc.on.doc")
+                    if item.direction == .incoming {
+                        Button(action: onCopy) {
+                            Image(systemName: "doc.on.doc")
+                        }
+                        .accessibilityLabel("Copy")
                     }
-                    .accessibilityLabel("Copy")
                 }
             }
         }
@@ -589,7 +720,7 @@ private struct ClipboardInspectPayloadView: View {
                 .textSelection(.enabled)
 
         case .privateText(let text):
-            PrivateLineView(text: text)
+            PrivateLineView(text: text, isOutgoing: false)
                 .padding(.vertical, 4)
 
         case .link(let title, let host, let url):
@@ -633,6 +764,10 @@ private struct ClipboardInspectPayloadView: View {
             }
         }
     }
+}
+
+private extension Color {
+    static let clippInk = Color(red: 0.0, green: 15.0 / 255.0, blue: 54.0 / 255.0)
 }
 
 #Preview {
