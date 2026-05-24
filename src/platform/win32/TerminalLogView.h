@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include "../../TerminalLogBuffer.h"
+
 #include <winrt/Windows.UI.Xaml.Controls.h>
 #include <winrt/Windows.UI.Xaml.Documents.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
@@ -20,9 +22,9 @@ public:
 
 private:
     void AppendAnsiLogText(const std::wstring& text, bool scrollToBottom);
-    winrt::Windows::UI::Xaml::Documents::Paragraph CreateParagraphForAnsiLine(const std::wstring& line) const;
-    winrt::Windows::UI::Xaml::Media::Brush BrushForAnsiCode(const std::wstring& code) const;
-    void TrimOldLines();
+    winrt::Windows::UI::Xaml::Documents::Paragraph CreateParagraphForLine(const TerminalLogBuffer::Line& line) const;
+    winrt::Windows::UI::Xaml::Media::Brush BrushForColor(TerminalLogBuffer::Color color) const;
+    void RemoveOldestLines(std::size_t lineCount);
     bool IsNearBottom() const;
     void ScrollToBottom();
 
@@ -36,4 +38,5 @@ private:
     winrt::Windows::UI::Xaml::Media::Brush greenBrush_{ nullptr };
     winrt::Windows::UI::Xaml::Media::Brush yellowBrush_{ nullptr };
     winrt::Windows::UI::Xaml::Media::Brush redBrush_{ nullptr };
+    TerminalLogBuffer buffer_;
 };

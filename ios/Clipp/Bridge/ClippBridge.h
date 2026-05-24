@@ -96,6 +96,49 @@ NS_SWIFT_NAME(NetworkTrafficSnapshot)
 
 @end
 
+NS_SWIFT_NAME(DiagnosticLogRunColor)
+typedef NS_ENUM(NSInteger, CLPDiagnosticLogRunColor) {
+    CLPDiagnosticLogRunColorDefault = 0,
+    CLPDiagnosticLogRunColorGray = 1,
+    CLPDiagnosticLogRunColorDimCyan = 2,
+    CLPDiagnosticLogRunColorCyan = 3,
+    CLPDiagnosticLogRunColorGreen = 4,
+    CLPDiagnosticLogRunColorYellow = 5,
+    CLPDiagnosticLogRunColorRed = 6,
+};
+
+NS_SWIFT_NAME(DiagnosticLogRun)
+@interface CLPDiagnosticLogRun : NSObject
+
+@property(nonatomic, copy, readonly) NSString* text;
+@property(nonatomic, assign, readonly) CLPDiagnosticLogRunColor color;
+
+- (instancetype)initWithText:(NSString*)text
+                       color:(CLPDiagnosticLogRunColor)color NS_DESIGNATED_INITIALIZER;
+- (instancetype)init NS_UNAVAILABLE;
+
+@end
+
+NS_SWIFT_NAME(DiagnosticLogLine)
+@interface CLPDiagnosticLogLine : NSObject
+
+@property(nonatomic, copy, readonly) NSArray<CLPDiagnosticLogRun*>* runs;
+
+- (instancetype)initWithRuns:(NSArray<CLPDiagnosticLogRun*>*)runs NS_DESIGNATED_INITIALIZER;
+- (instancetype)init NS_UNAVAILABLE;
+
+@end
+
+NS_SWIFT_NAME(DiagnosticLogsBridge)
+@interface CLPDiagnosticLogsBridge : NSObject
+
++ (NSString*)didChangeNotificationName;
++ (NSArray<CLPDiagnosticLogLine*>*)snapshot NS_SWIFT_NAME(snapshot());
++ (NSString*)plainText NS_SWIFT_NAME(plainText());
++ (NSUInteger)lineCount NS_SWIFT_NAME(lineCount());
+
+@end
+
 NS_SWIFT_NAME(NetworkKeyBridge)
 @interface CLPNetworkKeyBridge : NSObject
 

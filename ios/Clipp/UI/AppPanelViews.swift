@@ -7,6 +7,7 @@
 
 import SwiftUI
 import Combine
+import UIKit
 
 enum AppPanel: String, Identifiable {
     case network
@@ -773,23 +774,150 @@ private struct SettingsStatusText: View {
 }
 
 private struct DiagnosticsPanelView: View {
-    private let lines = [
-        "09:41:02 discovery started",
-        "09:41:04 peer MacBook Pro reachable",
-        "09:42:18 clipboard item received",
-        "09:45:31 clipboard item queued for send"
-    ]
+    @StateObject private var model = DiagnosticLogViewModel()
 
     var body: some View {
-        List {
-            Section("Recent") {
-                ForEach(lines, id: \.self) { line in
-                    Text(line)
-                        .font(.system(.footnote, design: .monospaced))
-                        .foregroundStyle(.secondary)
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Text(CLP_UI_LIVE_DIAGNOSTIC_OUTPUT)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+
+                Spacer(minLength: 8)
+
+                Button(model.copyTitle) {
+                    model.copy()
                 }
+                .disabled(model.lines.isEmpty)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+
+            DiagnosticsTextView(lines: model.lines)
+                .ignoresSafeArea(edges: .bottom)
+        }
+        .background(Color(.systemGroupedBackground))
+    }
+}
+
+@MainActor
+private final class DiagnosticLogViewModel: ObservableObject {
+    @Published var lines: [DiagnosticLogLine] = []
+    @Published private var plainText: String = ""
+
+    private var observer: AnyCancellable?
+
+    var copyTitle: String {
+        String(format: CLP_UI_COPY_LOG_LINES_FORMAT, lines.count)
+    }
+
+    init() {
+        reload()
+        observer = NotificationCenter.default.publisher(
+            for: Notification.Name(DiagnosticLogsBridge.didChangeNotificationName())
+        )
+        .receive(on: RunLoop.main)
+        .sink { [weak self] _ in
+            self?.reload()
+        }
+    }
+
+    func copy() {
+        UIPasteboard.general.string = plainText
+    }
+
+    private func reload() {
+        lines = DiagnosticLogsBridge.snapshot()
+        plainText = DiagnosticLogsBridge.plainText()
+    }
+}
+
+private struct DiagnosticsTextView: UIViewRepresentable {
+    let lines: [DiagnosticLogLine]
+
+    func makeUIView(context: Context) -> UITextView {
+        let textView = UITextView()
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isScrollEnabled = true
+        textView.alwaysBounceVertical = true
+        textView.backgroundColor = UIColor(white: 0.06, alpha: 1.0)
+        textView.textContainerInset = UIEdgeInsets(top: 10, left: 10, bottom: 10, right: 10)
+        textView.textContainer.lineFragmentPadding = 0
+        textView.font = UIFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        textView.textColor = Self.color(forRawValue: 0)
+        return textView
+    }
+
+    func updateUIView(_ textView: UITextView, context: Context) {
+        let shouldFollow = Self.isNearBottom(textView)
+        textView.attributedText = Self.attributedText(for: lines)
+        if shouldFollow {
+            DispatchQueue.main.async {
+                Self.scrollToBottom(textView)
             }
         }
+    }
+
+    private static func attributedText(for lines: [DiagnosticLogLine]) -> NSAttributedString {
+        let text = NSMutableAttributedString()
+        let font = UIFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+
+        for line in lines {
+            for run in line.runs {
+                text.append(NSAttributedString(
+                    string: run.text,
+                    attributes: [
+                        .font: font,
+                        .foregroundColor: color(forRawValue: run.color.rawValue)
+                    ]
+                ))
+            }
+            text.append(NSAttributedString(
+                string: "\n",
+                attributes: [
+                    .font: font,
+                    .foregroundColor: color(forRawValue: 0)
+                ]
+            ))
+        }
+
+        return text
+    }
+
+    private static func color(forRawValue rawValue: Int) -> UIColor {
+        switch rawValue {
+        case 1:
+            return UIColor(white: 0.50, alpha: 1.0)
+        case 2:
+            return UIColor(red: 0.24, green: 0.58, blue: 0.68, alpha: 1.0)
+        case 3:
+            return UIColor(red: 0.33, green: 0.78, blue: 0.92, alpha: 1.0)
+        case 4:
+            return UIColor(red: 0.40, green: 0.86, blue: 0.45, alpha: 1.0)
+        case 5:
+            return UIColor(red: 0.95, green: 0.76, blue: 0.25, alpha: 1.0)
+        case 6:
+            return UIColor(red: 1.00, green: 0.36, blue: 0.25, alpha: 1.0)
+        default:
+            return UIColor(white: 0.82, alpha: 1.0)
+        }
+    }
+
+    private static func isNearBottom(_ textView: UITextView) -> Bool {
+        textView.layoutIfNeeded()
+        let visibleHeight = textView.bounds.height - textView.adjustedContentInset.top - textView.adjustedContentInset.bottom
+        let distanceFromBottom = textView.contentSize.height - visibleHeight - textView.contentOffset.y
+        return distanceFromBottom <= 48
+    }
+
+    private static func scrollToBottom(_ textView: UITextView) {
+        guard textView.attributedText.length > 0 else {
+            return
+        }
+
+        textView.scrollRangeToVisible(NSRange(location: textView.attributedText.length, length: 0))
     }
 }
 

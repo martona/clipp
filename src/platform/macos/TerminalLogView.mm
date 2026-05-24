@@ -7,21 +7,19 @@
 #import <AppKit/AppKit.h>
 
 namespace {
-constexpr unsigned int kMaxTerminalLogLines = 1000;
 constexpr CGFloat kFollowScrollTolerance = 48.0;
 
 NSColor* DefaultTextColor() {
     return [NSColor colorWithCalibratedWhite:0.82 alpha:1.0];
 }
 
-NSColor* ColorForAnsiCode(const std::wstring& code) {
-    if (code == L"0") return DefaultTextColor();
-    if (code == L"90" || code == L"0;90") return [NSColor colorWithCalibratedWhite:0.50 alpha:1.0];
-    if (code == L"2;36" || code == L"0;2;36") return [NSColor colorWithCalibratedRed:0.24 green:0.58 blue:0.68 alpha:1.0];
-    if (code == L"36" || code == L"0;36") return [NSColor colorWithCalibratedRed:0.33 green:0.78 blue:0.92 alpha:1.0];
-    if (code == L"1;32" || code == L"0;1;32") return [NSColor colorWithCalibratedRed:0.40 green:0.86 blue:0.45 alpha:1.0];
-    if (code == L"1;33" || code == L"0;1;33") return [NSColor colorWithCalibratedRed:0.95 green:0.76 blue:0.25 alpha:1.0];
-    if (code == L"1;31" || code == L"0;1;31") return [NSColor colorWithCalibratedRed:1.00 green:0.36 blue:0.25 alpha:1.0];
+NSColor* ColorForRun(TerminalLogBuffer::Color color) {
+    if (color == TerminalLogBuffer::Color::Gray) return [NSColor colorWithCalibratedWhite:0.50 alpha:1.0];
+    if (color == TerminalLogBuffer::Color::DimCyan) return [NSColor colorWithCalibratedRed:0.24 green:0.58 blue:0.68 alpha:1.0];
+    if (color == TerminalLogBuffer::Color::Cyan) return [NSColor colorWithCalibratedRed:0.33 green:0.78 blue:0.92 alpha:1.0];
+    if (color == TerminalLogBuffer::Color::Green) return [NSColor colorWithCalibratedRed:0.40 green:0.86 blue:0.45 alpha:1.0];
+    if (color == TerminalLogBuffer::Color::Yellow) return [NSColor colorWithCalibratedRed:0.95 green:0.76 blue:0.25 alpha:1.0];
+    if (color == TerminalLogBuffer::Color::Red) return [NSColor colorWithCalibratedRed:1.00 green:0.36 blue:0.25 alpha:1.0];
     return DefaultTextColor();
 }
 
@@ -72,119 +70,66 @@ void MacOSTerminalLogView::AppendAnsiLogText(const std::wstring& text) {
 }
 
 void MacOSTerminalLogView::SetAnsiLogText(const std::vector<std::wstring>& lines) {
+    buffer_.SetAnsiLogText(lines);
     [textView_.textStorage setAttributedString:[[NSAttributedString alloc] initWithString:@""]];
-    lineCount_ = 0;
 
-    for (const auto& line : lines) {
-        AppendAnsiLogText(line, false);
+    for (const auto& line : buffer_.Lines()) {
+        AppendLine(line);
     }
 
-    TrimOldLines();
     ScrollToBottom();
 }
 
 unsigned int MacOSTerminalLogView::LineCount() const {
-    return lineCount_;
+    return static_cast<unsigned int>(buffer_.LineCount());
 }
 
 NSString* MacOSTerminalLogView::PlainText() const {
-    return textView_ != nil ? textView_.textStorage.string : @"";
+    return MacOSToNSString(buffer_.PlainText());
 }
 
 void MacOSTerminalLogView::AppendAnsiLogText(const std::wstring& text, bool scrollToBottom) {
-    std::wstring trimmedText = text;
-    while (!trimmedText.empty() && (trimmedText.back() == L'\r' || trimmedText.back() == L'\n')) {
-        trimmedText.pop_back();
-    }
+    const bool shouldScrollToBottom = scrollToBottom && IsNearBottom();
+    const TerminalLogBuffer::AppendResult update = buffer_.AppendAnsiLogText(text);
 
-    if (trimmedText.empty()) {
+    if (update.addedLines.empty()) {
         return;
     }
 
-    const bool shouldScrollToBottom = scrollToBottom && IsNearBottom();
-
-    std::size_t lineStart = 0;
-    while (lineStart <= trimmedText.size()) {
-        const std::size_t lineEnd = trimmedText.find_first_of(L"\r\n", lineStart);
-        const std::wstring line = lineEnd == std::wstring::npos
-            ? trimmedText.substr(lineStart)
-            : trimmedText.substr(lineStart, lineEnd - lineStart);
-
-        AppendAnsiLine(line);
-
-        if (lineEnd == std::wstring::npos) {
-            break;
-        }
-
-        lineStart = lineEnd + 1;
-        if (trimmedText[lineEnd] == L'\r' && lineStart < trimmedText.size() && trimmedText[lineStart] == L'\n') {
-            ++lineStart;
-        }
+    RemoveOldestLines(update.removedLineCount);
+    for (const auto& line : update.addedLines) {
+        AppendLine(line);
     }
-
-    TrimOldLines();
     if (shouldScrollToBottom) {
         ScrollToBottom();
     }
 }
 
-void MacOSTerminalLogView::AppendAnsiLine(const std::wstring& line) {
+void MacOSTerminalLogView::AppendLine(const TerminalLogBuffer::Line& line) {
     NSMutableAttributedString* attributedLine = [[NSMutableAttributedString alloc] init];
-    NSColor* currentColor = DefaultTextColor();
-    std::wstring currentText;
 
-    auto flushText = [&]() {
-        if (currentText.empty()) {
-            return;
-        }
-        NSAttributedString* run = [[NSAttributedString alloc] initWithString:MacOSToNSString(currentText)
-                                                                  attributes:AttributesForColor(currentColor)];
+    for (const auto& logRun : line.runs) {
+        NSAttributedString* run = [[NSAttributedString alloc] initWithString:MacOSToNSString(logRun.text)
+                                                                  attributes:AttributesForColor(ColorForRun(logRun.color))];
         [attributedLine appendAttributedString:run];
-        currentText.clear();
-    };
-
-    std::size_t i = 0;
-    while (i < line.length()) {
-        if (line[i] == L'\x1b' && i + 1 < line.length() && line[i + 1] == L'[') {
-            flushText();
-
-            i += 2;
-            std::wstring code;
-            while (i < line.length() && line[i] != L'm') {
-                code += line[i];
-                ++i;
-            }
-            if (i < line.length() && line[i] == L'm') {
-                ++i;
-            }
-
-            currentColor = ColorForAnsiCode(code);
-        } else {
-            currentText += line[i];
-            ++i;
-        }
     }
-
-    flushText();
 
     NSAttributedString* newline = [[NSAttributedString alloc] initWithString:@"\n"
                                                                   attributes:AttributesForColor(DefaultTextColor())];
     [attributedLine appendAttributedString:newline];
     [textView_.textStorage appendAttributedString:attributedLine];
-    ++lineCount_;
 }
 
-void MacOSTerminalLogView::TrimOldLines() {
-    if (lineCount_ <= kMaxTerminalLogLines) {
+void MacOSTerminalLogView::RemoveOldestLines(std::size_t lineCount) {
+    if (lineCount == 0) {
         return;
     }
 
-    const unsigned int linesToRemove = lineCount_ - kMaxTerminalLogLines;
     NSString* text = textView_.textStorage.string;
     NSUInteger removeEnd = 0;
-    unsigned int removed = 0;
+    std::size_t removed = 0;
 
-    while (removed < linesToRemove && removeEnd < text.length) {
+    while (removed < lineCount && removeEnd < text.length) {
         NSRange newlineRange = [text rangeOfString:@"\n"
                                            options:0
                                              range:NSMakeRange(removeEnd, text.length - removeEnd)];
@@ -198,7 +143,6 @@ void MacOSTerminalLogView::TrimOldLines() {
 
     if (removeEnd > 0) {
         [textView_.textStorage deleteCharactersInRange:NSMakeRange(0, removeEnd)];
-        lineCount_ -= removed;
     }
 }
 

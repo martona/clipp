@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "../../TerminalLogBuffer.h"
+
 @class NSScrollView;
 @class NSTextView;
 @class NSString;
@@ -21,14 +23,14 @@ public:
 
 private:
     void AppendAnsiLogText(const std::wstring& text, bool scrollToBottom);
-    void AppendAnsiLine(const std::wstring& line);
-    void TrimOldLines();
+    void AppendLine(const TerminalLogBuffer::Line& line);
+    void RemoveOldestLines(std::size_t lineCount);
     bool IsNearBottom() const;
     void ScrollToBottom();
 
     NSScrollView* scrollView_ = nullptr;
     NSTextView* textView_ = nullptr;
-    unsigned int lineCount_ = 0;
+    TerminalLogBuffer buffer_;
 };
 
 #endif

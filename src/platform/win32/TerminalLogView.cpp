@@ -8,7 +8,6 @@
 #include <winrt/Windows.UI.Xaml.Documents.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
 
-static constexpr uint32_t kMaxTerminalLogLines = 1000;
 static constexpr double kFollowScrollToleranceDips = 48.0;
 
 TerminalLogView::TerminalLogView() {
@@ -48,139 +47,78 @@ void TerminalLogView::AppendAnsiLogText(const std::wstring& text) {
 }
 
 void TerminalLogView::SetAnsiLogText(const std::vector<std::wstring>& lines) {
+    buffer_.SetAnsiLogText(lines);
     richTextBlock_.Blocks().Clear();
-    for (const auto& line : lines) {
-        AppendAnsiLogText(line, false);
+
+    for (const auto& line : buffer_.Lines()) {
+        richTextBlock_.Blocks().Append(CreateParagraphForLine(line));
     }
-    TrimOldLines();
     ScrollToBottom();
 }
 
 uint32_t TerminalLogView::LineCount() const {
-    return richTextBlock_ ? richTextBlock_.Blocks().Size() : 0;
+    return static_cast<uint32_t>(buffer_.LineCount());
 }
 
 std::wstring TerminalLogView::PlainText() const {
-    std::wstring text;
-    if (!richTextBlock_) {
-        return text;
-    }
-
-    auto blocks = richTextBlock_.Blocks();
-    for (uint32_t blockIndex = 0; blockIndex < blocks.Size(); ++blockIndex) {
-        auto paragraph = blocks.GetAt(blockIndex).try_as<winrt::Windows::UI::Xaml::Documents::Paragraph>();
-        if (paragraph) {
-            auto inlines = paragraph.Inlines();
-            for (uint32_t inlineIndex = 0; inlineIndex < inlines.Size(); ++inlineIndex) {
-                auto run = inlines.GetAt(inlineIndex).try_as<winrt::Windows::UI::Xaml::Documents::Run>();
-                if (run) {
-                    const winrt::hstring runText = run.Text();
-                    text.append(runText.c_str(), runText.size());
-                }
-            }
-        }
-        text.push_back(L'\n');
-    }
-
-    return text;
+    return buffer_.PlainText();
 }
 
 void TerminalLogView::AppendAnsiLogText(const std::wstring& text, bool scrollToBottom) {
-    std::wstring trimmedText = text;
-    while (!trimmedText.empty() && (trimmedText.back() == L'\r' || trimmedText.back() == L'\n')) {
-        trimmedText.pop_back();
-    }
+    const bool shouldScrollToBottom = scrollToBottom && IsNearBottom();
+    const TerminalLogBuffer::AppendResult update = buffer_.AppendAnsiLogText(text);
 
-    if (trimmedText.empty()) {
+    if (update.addedLines.empty()) {
         return;
     }
 
-    const bool shouldScrollToBottom = scrollToBottom && IsNearBottom();
-
-    std::size_t lineStart = 0;
-    while (lineStart <= trimmedText.size()) {
-        const std::size_t lineEnd = trimmedText.find_first_of(L"\r\n", lineStart);
-        const std::wstring line = lineEnd == std::wstring::npos
-            ? trimmedText.substr(lineStart)
-            : trimmedText.substr(lineStart, lineEnd - lineStart);
-
-        richTextBlock_.Blocks().Append(CreateParagraphForAnsiLine(line));
-
-        if (lineEnd == std::wstring::npos) {
-            break;
-        }
-
-        lineStart = lineEnd + 1;
-        if (trimmedText[lineEnd] == L'\r' && lineStart < trimmedText.size() && trimmedText[lineStart] == L'\n') {
-            ++lineStart;
-        }
+    RemoveOldestLines(update.removedLineCount);
+    for (const auto& line : update.addedLines) {
+        richTextBlock_.Blocks().Append(CreateParagraphForLine(line));
     }
-
-    TrimOldLines();
     if (shouldScrollToBottom) {
         ScrollToBottom();
     }
 }
 
-winrt::Windows::UI::Xaml::Documents::Paragraph TerminalLogView::CreateParagraphForAnsiLine(const std::wstring& line) const {
+winrt::Windows::UI::Xaml::Documents::Paragraph TerminalLogView::CreateParagraphForLine(const TerminalLogBuffer::Line& line) const {
     using namespace winrt::Windows::UI::Xaml::Documents;
 
     Paragraph paragraph;
-    auto currentBrush = defaultBrush_;
-    std::wstring currentText;
-
-    auto flushText = [&]() {
-        if (!currentText.empty()) {
-            Run run;
-            run.Text(currentText);
-            run.Foreground(currentBrush);
-            paragraph.Inlines().Append(run);
-            currentText.clear();
-        }
-    };
-
-    std::size_t i = 0;
-    while (i < line.length()) {
-        if (line[i] == L'\x1b' && i + 1 < line.length() && line[i + 1] == L'[') {
-            flushText();
-
-            i += 2;
-            std::wstring code;
-
-            while (i < line.length() && line[i] != L'm') {
-                code += line[i];
-                ++i;
-            }
-            if (i < line.length() && line[i] == L'm') {
-                ++i;
-            }
-
-            currentBrush = BrushForAnsiCode(code);
-        } else {
-            currentText += line[i];
-            ++i;
-        }
+    for (const auto& logRun : line.runs) {
+        Run run;
+        run.Text(logRun.text);
+        run.Foreground(BrushForColor(logRun.color));
+        paragraph.Inlines().Append(run);
     }
-
-    flushText();
     return paragraph;
 }
 
-winrt::Windows::UI::Xaml::Media::Brush TerminalLogView::BrushForAnsiCode(const std::wstring& code) const {
-    if (code == L"0") return defaultBrush_;
-    if (code == L"90" || code == L"0;90") return grayBrush_;
-    if (code == L"2;36" || code == L"0;2;36") return dimCyanBrush_;
-    if (code == L"36" || code == L"0;36") return cyanBrush_;
-    if (code == L"1;32" || code == L"0;1;32") return greenBrush_;
-    if (code == L"1;33" || code == L"0;1;33") return yellowBrush_;
-    if (code == L"1;31" || code == L"0;1;31") return redBrush_;
-    return defaultBrush_;
+winrt::Windows::UI::Xaml::Media::Brush TerminalLogView::BrushForColor(TerminalLogBuffer::Color color) const {
+    switch (color) {
+    case TerminalLogBuffer::Color::Gray:
+        return grayBrush_;
+    case TerminalLogBuffer::Color::DimCyan:
+        return dimCyanBrush_;
+    case TerminalLogBuffer::Color::Cyan:
+        return cyanBrush_;
+    case TerminalLogBuffer::Color::Green:
+        return greenBrush_;
+    case TerminalLogBuffer::Color::Yellow:
+        return yellowBrush_;
+    case TerminalLogBuffer::Color::Red:
+        return redBrush_;
+    case TerminalLogBuffer::Color::Default:
+    default:
+        return defaultBrush_;
+    }
 }
 
-void TerminalLogView::TrimOldLines() {
+void TerminalLogView::RemoveOldestLines(std::size_t lineCount) {
     auto blocks = richTextBlock_.Blocks();
-    while (blocks.Size() > kMaxTerminalLogLines) {
+    while (lineCount > 0 && blocks.Size() > 0) {
         blocks.RemoveAt(0);
+        --lineCount;
     }
 }
 

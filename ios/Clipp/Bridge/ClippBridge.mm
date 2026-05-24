@@ -12,6 +12,7 @@
 #include "../../../src/PeerDisplay.h"
 #include "../../../src/PeerManager.h"
 #include "../../../src/Settings.h"
+#include "../../../src/TerminalLogBuffer.h"
 #include "../../../src/platform/uiClippPage.h"
 #include "../../../src/platform/uiSettingsPage.h"
 
@@ -23,6 +24,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include "../../../src/ClipboardActivityStore.cpp"
 
@@ -39,13 +41,19 @@ constexpr NSInteger kClippClipboardActivityErrorBase = 4300;
 constexpr NSInteger kClippOutgoingClipboardErrorBase = 4400;
 constexpr NSInteger kClippSettingsErrorBase = 4500;
 NSString* const kClipboardActivityDidChangeNotification = @"net.clipp.ios.clipboard-activity-did-change";
+NSString* const kDiagnosticLogsDidChangeNotification = @"net.clipp.ios.diagnostic-logs-did-change";
 std::mutex g_runtimeBridgeMutex;
+std::mutex g_diagnosticLogMutex;
 bool g_runtimeBridgeStarted = false;
+bool g_diagnosticLogInitializing = false;
 std::once_flag g_clipboardHistoryLimitsOnce;
 std::once_flag g_clipboardActivityWatcherOnce;
+std::once_flag g_diagnosticLogReflectorOnce;
 std::size_t g_clipboardActivityWatcherID = 0;
 ClipboardActivityStore g_clipboardActivityStore;
 ClipboardHashGuard g_clipboardHashGuard;
+TerminalLogBuffer g_diagnosticLogBuffer;
+std::vector<std::wstring> g_diagnosticLogPendingLines;
 
 NSError* MakeError(NSInteger code, NSString* message) {
     return [NSError errorWithDomain:@"net.clipp.ios.network-key"
@@ -205,8 +213,27 @@ void PostClipboardActivityChanged() {
     });
 }
 
+void PostDiagnosticLogsChanged() {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[NSNotificationCenter defaultCenter] postNotificationName:kDiagnosticLogsDidChangeNotification
+                                                            object:nil];
+    });
+}
+
 void ClipboardActivityWatcher(const ClipboardActivityUpdate&, void*) {
     PostClipboardActivityChanged();
+}
+
+void DiagnosticLogReflector(const std::wstring& line) {
+    {
+        std::lock_guard<std::mutex> lock(g_diagnosticLogMutex);
+        if (g_diagnosticLogInitializing) {
+            g_diagnosticLogPendingLines.push_back(line);
+        } else {
+            g_diagnosticLogBuffer.AppendAnsiLogText(line);
+        }
+    }
+    PostDiagnosticLogsChanged();
 }
 
 void EnsureClipboardActivityWatcher() {
@@ -215,6 +242,26 @@ void EnsureClipboardActivityWatcher() {
         const ClipboardActivityRegistration registration =
             g_clipboardActivityStore.QueryAndRegister(ClipboardActivityWatcher, nullptr);
         g_clipboardActivityWatcherID = registration.watcherID;
+    });
+}
+
+void EnsureDiagnosticLogReflector() {
+    std::call_once(g_diagnosticLogReflectorOnce, [] {
+        {
+            std::lock_guard<std::mutex> lock(g_diagnosticLogMutex);
+            g_diagnosticLogInitializing = true;
+            g_diagnosticLogPendingLines.clear();
+        }
+
+        const Logger::LogHistory history = g_logger.AddLogReflector(DiagnosticLogReflector);
+
+        std::lock_guard<std::mutex> lock(g_diagnosticLogMutex);
+        g_diagnosticLogBuffer.SetAnsiLogText(history);
+        for (const auto& line : g_diagnosticLogPendingLines) {
+            g_diagnosticLogBuffer.AppendAnsiLogText(line);
+        }
+        g_diagnosticLogPendingLines.clear();
+        g_diagnosticLogInitializing = false;
     });
 }
 
@@ -361,6 +408,35 @@ CLPSettingsSnapshot* LoadSettingsSnapshot(NSError** error) {
                                                                    multicastIP:ToNSString(g_settings.multicastIp())
                                                                         hostID:ToNSString(hostID.ToHexString())
                                                      hasHostIDCollisionWarning:MDNSHasHostIDCollisionWarning()];
+}
+
+CLPDiagnosticLogRunColor ToBridgeLogRunColor(TerminalLogBuffer::Color color) {
+    switch (color) {
+    case TerminalLogBuffer::Color::Gray:
+        return CLPDiagnosticLogRunColorGray;
+    case TerminalLogBuffer::Color::DimCyan:
+        return CLPDiagnosticLogRunColorDimCyan;
+    case TerminalLogBuffer::Color::Cyan:
+        return CLPDiagnosticLogRunColorCyan;
+    case TerminalLogBuffer::Color::Green:
+        return CLPDiagnosticLogRunColorGreen;
+    case TerminalLogBuffer::Color::Yellow:
+        return CLPDiagnosticLogRunColorYellow;
+    case TerminalLogBuffer::Color::Red:
+        return CLPDiagnosticLogRunColorRed;
+    case TerminalLogBuffer::Color::Default:
+    default:
+        return CLPDiagnosticLogRunColorDefault;
+    }
+}
+
+CLPDiagnosticLogLine* MakeDiagnosticLogLine(const TerminalLogBuffer::Line& line) {
+    NSMutableArray<CLPDiagnosticLogRun*>* runs = [NSMutableArray arrayWithCapacity:line.runs.size()];
+    for (const auto& run : line.runs) {
+        [runs addObject:[[CLPDiagnosticLogRun alloc] initWithText:ToNSString(run.text)
+                                                           color:ToBridgeLogRunColor(run.color)]];
+    }
+    return [[CLPDiagnosticLogLine alloc] initWithRuns:runs];
 }
 }
 
@@ -573,6 +649,64 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const Clipboard
         _bytesReceived = bytesReceived;
     }
     return self;
+}
+
+@end
+
+@implementation CLPDiagnosticLogRun
+
+- (instancetype)initWithText:(NSString*)text
+                       color:(CLPDiagnosticLogRunColor)color {
+    self = [super init];
+    if (self) {
+        _text = [text copy];
+        _color = color;
+    }
+    return self;
+}
+
+@end
+
+@implementation CLPDiagnosticLogLine
+
+- (instancetype)initWithRuns:(NSArray<CLPDiagnosticLogRun*>*)runs {
+    self = [super init];
+    if (self) {
+        _runs = [runs copy];
+    }
+    return self;
+}
+
+@end
+
+@implementation CLPDiagnosticLogsBridge
+
++ (NSString*)didChangeNotificationName {
+    return kDiagnosticLogsDidChangeNotification;
+}
+
++ (NSArray<CLPDiagnosticLogLine*>*)snapshot {
+    EnsureDiagnosticLogReflector();
+    std::lock_guard<std::mutex> lock(g_diagnosticLogMutex);
+
+    const auto& lines = g_diagnosticLogBuffer.Lines();
+    NSMutableArray<CLPDiagnosticLogLine*>* snapshot = [NSMutableArray arrayWithCapacity:lines.size()];
+    for (const auto& line : lines) {
+        [snapshot addObject:MakeDiagnosticLogLine(line)];
+    }
+    return snapshot;
+}
+
++ (NSString*)plainText {
+    EnsureDiagnosticLogReflector();
+    std::lock_guard<std::mutex> lock(g_diagnosticLogMutex);
+    return ToNSString(g_diagnosticLogBuffer.PlainText());
+}
+
++ (NSUInteger)lineCount {
+    EnsureDiagnosticLogReflector();
+    std::lock_guard<std::mutex> lock(g_diagnosticLogMutex);
+    return g_diagnosticLogBuffer.LineCount();
 }
 
 @end
