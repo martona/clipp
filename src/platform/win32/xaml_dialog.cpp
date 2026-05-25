@@ -29,6 +29,7 @@
 #include <windows.ui.xaml.hosting.desktopwindowxamlsource.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.System.h>
 #include <winrt/Windows.UI.h>
 #include <winrt/Windows.UI.Text.h>
 #include <winrt/Windows.UI.Xaml.h>
@@ -161,6 +162,31 @@ int DipsToPixels(double dips, UINT dpi) {
     return static_cast<int>(std::ceil(dips * dpi / USER_DEFAULT_SCREEN_DPI));
 }
 
+winrt::Windows::UI::Xaml::Controls::ScrollViewer FindFirstScrollViewer(
+    winrt::Windows::Foundation::IInspectable const& node)
+{
+    using namespace winrt::Windows::UI::Xaml::Controls;
+
+    if (!node) {
+        return nullptr;
+    }
+    if (auto scroll = node.try_as<ScrollViewer>()) {
+        return scroll;
+    }
+    if (auto panel = node.try_as<Panel>()) {
+        for (auto const& child : panel.Children()) {
+            if (auto found = FindFirstScrollViewer(child)) {
+                return found;
+            }
+        }
+    } else if (auto border = node.try_as<Border>()) {
+        return FindFirstScrollViewer(border.Child());
+    } else if (auto contentControl = node.try_as<ContentControl>()) {
+        return FindFirstScrollViewer(contentControl.Content());
+    }
+    return nullptr;
+}
+
 class MainXamlDialog {
 public:
     enum class PageID {
@@ -197,6 +223,7 @@ public:
                 SizeAndCenter(owner);
                 ShowWindow(hwnd_, SW_SHOWNORMAL);
                 SetForegroundWindow(hwnd_);
+                FocusCurrentPageContent();
             } else if (!createError_.empty()) {
             DarkMode::DarkMessageBox(owner, createError_.c_str(), CLP_W(CLP_UI_APP_NAME), MB_ICONERROR | MB_OK);
             }
@@ -524,6 +551,33 @@ private:
 
         currentPageID_ = pageID;
         ActivatePage(pageID);
+        FocusCurrentPageContent();
+    }
+
+    void FocusCurrentPageContent() {
+        using namespace winrt::Windows::UI::Xaml;
+        if (!contentPresenter_) {
+            return;
+        }
+        auto content = contentPresenter_.Content();
+        auto applyFocus = [content]() {
+            if (auto scroll = FindFirstScrollViewer(content)) {
+                scroll.IsTabStop(true);
+                scroll.Focus(FocusState::Programmatic);
+            }
+        };
+        auto fe = content.try_as<FrameworkElement>();
+        if (!fe || fe.IsLoaded()) {
+            applyFocus();
+            return;
+        }
+        auto tokenStore = std::make_shared<winrt::event_token>();
+        *tokenStore = fe.Loaded([fe, tokenStore, applyFocus](
+            winrt::Windows::Foundation::IInspectable const&,
+            winrt::Windows::UI::Xaml::RoutedEventArgs const&) {
+            fe.Loaded(*tokenStore);
+            applyFocus();
+        });
     }
 
     void SelectPage(PageID pageID) {

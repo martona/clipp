@@ -15,8 +15,7 @@ struct ClipboardPayload {
 	// When true, rawData contains a zstd frame. Image payloads are already
 	// compressed by their media format, so this is normally text-only.
 	bool isCompressed{ false };
-	// Size of rawData after zstd decompression. Despite the older packet
-	// wording, this is not decoded image bitmap size.
+	// Size of rawData after zstd decompression. This is not decoded image bitmap size.
 	uint32_t uncompressedDataSize{ 0 };
 	std::vector<unsigned char> rawData;
 
