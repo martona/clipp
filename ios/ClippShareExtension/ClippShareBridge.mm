@@ -4,6 +4,7 @@
 #include "../../src/ClipboardData.h"
 #include "../../src/CryptoChannel.h"
 #include "../../src/KeyManager.h"
+#include "../../src/LocalPeerName.h"
 #include "../../src/Logger.h"
 #include "../../src/MDNSProtocol.h"
 #include "../../src/Settings.h"
@@ -161,10 +162,7 @@ bool SendPayloadsToPeer(const MDNSProtocol::DiscoveredPeer& peer, const std::vec
             break;
         }
 
-        char localHostName[CryptoChannel::HOSTNAME_MAX_BYTES] = {};
-        if (gethostname(localHostName, sizeof(localHostName)) != 0) {
-            break;
-        }
+        const std::string localHostName = clipp::GetLocalPeerDisplayName("iPhone", CryptoChannel::HOSTNAME_MAX_BYTES);
 
         CryptoChannel channel;
         HostId remoteHostID;

@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "KeyManager.h"
+#include "LocalPeerName.h"
 #include "Settings.h"
 #include "platform.h"
 #include "utils.h"
@@ -127,7 +128,7 @@ namespace {
             return false;
         }
 
-        return gethostname(hostNameUtf8.data(), static_cast<int>(hostNameUtf8.size())) == 0;
+        return clipp::CopyLocalPeerDisplayName(hostNameUtf8.data(), hostNameUtf8.size());
     }
 
     bool DeriveClientSessionKeys(

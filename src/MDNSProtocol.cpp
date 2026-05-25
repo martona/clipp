@@ -1,6 +1,7 @@
 #include "MDNSProtocol.h"
 
 #include "KeyManager.h"
+#include "LocalPeerName.h"
 #include "Settings.h"
 
 #include <algorithm>
@@ -112,11 +113,7 @@ bool ParsePacket(Packet& packet, ParsedPacket& parsedPacket) {
 }
 
 std::string GetLocalHostName(const char* fallback) {
-    char hostName[256] = {};
-    if (gethostname(hostName, sizeof(hostName)) == 0) {
-        return hostName;
-    }
-    return fallback != nullptr ? fallback : "unknown";
+    return clipp::GetLocalPeerDisplayName(fallback, sizeof(Packet::hostName));
 }
 
 bool AddUniquePeer(std::vector<DiscoveredPeer>& peers, DiscoveredPeer peer) {

@@ -15,6 +15,7 @@
 #include "Settings.h"
 #include "ClipboardWire.h"
 #include "CryptoChannel.h"
+#include "LocalPeerName.h"
 #include "NetworkDefs.h"
 #include "utils.h"
 #include "utils_socket.h"
@@ -324,11 +325,10 @@ void Peer::ThreadProcSend() {
 		std::string remoteHostNameUtf8;
 		HostId localHostId;
 		if (!g_settings.getHostID(localHostId)) { break; }
-		char localHostNameA[256] = {};
-		if (gethostname(localHostNameA, sizeof(localHostNameA)) != 0) { break; }
+		const std::string localHostName = clipp::GetLocalPeerDisplayName("unknown", CryptoChannel::HOSTNAME_MAX_BYTES);
 		SOCKET socket = CurrentSocket();
 		const SocketIoContext io{ socket, wakeEvent_, stopRequested_ };
-		if (socket == INVALID_SOCKET || !channel.ClientHandshake(io, localHostId, localHostNameA, remoteHostId, remoteHostNameUtf8)) {
+		if (socket == INVALID_SOCKET || !channel.ClientHandshake(io, localHostId, localHostName, remoteHostId, remoteHostNameUtf8)) {
 			log(__FUNCTION__, Logger::Level::Debug, L"Peer: secure handshake failed.");
 			break;
 		}
