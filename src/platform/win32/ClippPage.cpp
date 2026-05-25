@@ -14,11 +14,15 @@
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Storage.Streams.h>
+#include <winrt/Windows.System.h>
 #include <winrt/Windows.UI.h>
+#include <winrt/Windows.UI.Input.h>
 #include <winrt/Windows.UI.Text.h>
 #include <winrt/Windows.UI.Xaml.h>
+#include <winrt/Windows.UI.Xaml.Automation.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
 #include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
+#include <winrt/Windows.UI.Xaml.Input.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
 #include <winrt/Windows.UI.Xaml.Media.Imaging.h>
 #include <winrt/base.h>
@@ -26,8 +30,12 @@
 extern KeyManager g_keyManager;
 
 namespace {
-constexpr double kActivityFollowBottomTolerance = 48.0;
+namespace Automation = winrt::Windows::UI::Xaml::Automation;
+namespace Input = winrt::Windows::UI::Xaml::Input;
+constexpr double kActivityFollowTopTolerance = 48.0;
 constexpr double kActivityBubbleMaxWidth = 460.0;
+constexpr double kActivityWheelScrollDips = 48.0;
+constexpr int kMouseWheelDelta = 120;
 
 winrt::Windows::UI::Xaml::Media::SolidColorBrush MakeBrush(uint8_t alpha, uint8_t red, uint8_t green, uint8_t blue) {
     return winrt::Windows::UI::Xaml::Media::SolidColorBrush(
@@ -144,6 +152,33 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivitySection() {
     activityScroll_.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);
     activityScroll_.Content(activityItemsPanel_);
 
+    const auto scrollActivityByWheel = [this](Input::PointerRoutedEventArgs const& args) {
+        if (!activityScroll_) {
+            return;
+        }
+
+        const int delta = args.GetCurrentPoint(activityScroll_).Properties().MouseWheelDelta();
+        if (delta == 0) {
+            return;
+        }
+
+        const double scrollSteps = static_cast<double>(delta) / static_cast<double>(kMouseWheelDelta);
+        const double targetOffset = std::clamp(
+            activityScroll_.VerticalOffset() - scrollSteps * kActivityWheelScrollDips,
+            0.0,
+            activityScroll_.ScrollableHeight());
+        activityScroll_.ChangeView(nullptr, targetOffset, nullptr, true);
+        args.Handled(true);
+    };
+
+    activityScroll_.PointerWheelChanged([scrollActivityByWheel](auto const&, Input::PointerRoutedEventArgs const& args) {
+        scrollActivityByWheel(args);
+    });
+
+    activityItemsPanel_.PointerWheelChanged([scrollActivityByWheel](auto const&, Input::PointerRoutedEventArgs const& args) {
+        scrollActivityByWheel(args);
+    });
+
     activityEmptyState_ = StackPanel();
     activityEmptyState_.Orientation(Orientation::Vertical);
     activityEmptyState_.Spacing(10);
@@ -209,11 +244,35 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t it
     if (deviceName.empty()) {
         deviceName = isOutgoing ? CLP_W(CLP_UI_THIS_DEVICE) : CLP_W(CLP_UI_UNKNOWN_HOST);
     }
-    meta.Text(deviceName + L" - " + FormatActivityTime(display->header.timestamp));
+    const std::wstring metaText = deviceName + L" - " + FormatActivityTime(display->header.timestamp);
+    meta.Text(metaText);
     meta.FontSize(12);
     meta.Opacity(0.68);
     meta.TextWrapping(TextWrapping::WrapWholeWords);
-    content.Children().Append(meta);
+
+    FontIcon copyIcon;
+    copyIcon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
+    copyIcon.Glyph(L"\xE8C8");
+    copyIcon.FontSize(13);
+    copyIcon.Width(28);
+    copyIcon.Height(28);
+    copyIcon.VerticalAlignment(VerticalAlignment::Center);
+    copyIcon.HorizontalAlignment(HorizontalAlignment::Center);
+    copyIcon.Opacity(0.0);
+    copyIcon.IsHitTestVisible(false);
+
+    Grid header;
+    ColumnDefinition metaColumn;
+    metaColumn.Width(GridLength{ 1, GridUnitType::Star });
+    ColumnDefinition actionColumn;
+    actionColumn.Width(GridLength{ 1, GridUnitType::Auto });
+    header.ColumnDefinitions().Append(metaColumn);
+    header.ColumnDefinitions().Append(actionColumn);
+    Grid::SetColumn(meta, 0);
+    Grid::SetColumn(copyIcon, 1);
+    header.Children().Append(meta);
+    header.Children().Append(copyIcon);
+    content.Children().Append(header);
 
     if (display->kind == ClipboardActivityPayloadKind::Image && !display->imageData.empty()) {
         Image image;
@@ -248,23 +307,55 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t it
         TextBlock preview;
         preview.Text(display->previewText.empty() ? PayloadKindLabel(display->kind) : display->previewText);
         preview.TextWrapping(TextWrapping::WrapWholeWords);
-        preview.IsTextSelectionEnabled(display->kind != ClipboardActivityPayloadKind::PrivateText);
+        preview.IsTextSelectionEnabled(false);
         preview.MaxLines(8);
         preview.TextTrimming(TextTrimming::WordEllipsis);
         content.Children().Append(preview);
     }
 
-    Button copyButton;
-    copyButton.Content(winrt::box_value(winrt::hstring{ CLP_W(CLP_UI_COPY) }));
-    copyButton.HorizontalAlignment(HorizontalAlignment::Right);
-    copyButton.Padding(ThicknessHelper::FromLengths(10, 4, 10, 4));
-    copyButton.Click([this, itemID](auto const&, auto const&) {
+    const auto setCopyIconVisible = [copyIcon](bool visible) {
+        copyIcon.Opacity(visible ? 1.0 : 0.0);
+    };
+
+    Button rowButton;
+    rowButton.HorizontalAlignment(HorizontalAlignment::Stretch);
+    rowButton.VerticalAlignment(VerticalAlignment::Stretch);
+    rowButton.HorizontalContentAlignment(HorizontalAlignment::Stretch);
+    rowButton.VerticalContentAlignment(VerticalAlignment::Stretch);
+    rowButton.Padding(ThicknessHelper::FromLengths(0, 0, 0, 0));
+    rowButton.BorderThickness(ThicknessHelper::FromLengths(0, 0, 0, 0));
+    rowButton.Background(MakeBrush(0, 0, 0, 0));
+    rowButton.Content(bubble);
+    rowButton.Click([this, itemID](auto const&, auto const&) {
         CopyActivityItem(itemID);
     });
-    content.Children().Append(copyButton);
+    rowButton.PointerEntered([setCopyIconVisible](auto const&, auto const&) {
+        setCopyIconVisible(true);
+    });
+    rowButton.PointerExited([setCopyIconVisible](auto const&, auto const&) {
+        setCopyIconVisible(false);
+    });
+    rowButton.GotFocus([setCopyIconVisible](auto const&, auto const&) {
+        setCopyIconVisible(true);
+    });
+    rowButton.LostFocus([setCopyIconVisible](auto const&, auto const&) {
+        setCopyIconVisible(false);
+    });
+
+    MenuFlyout contextMenu;
+    MenuFlyoutItem copyMenuItem;
+    copyMenuItem.Text(winrt::hstring{ CLP_W(CLP_UI_COPY) });
+    copyMenuItem.Click([this, itemID](auto const&, auto const&) {
+        CopyActivityItem(itemID);
+    });
+    contextMenu.Items().Append(copyMenuItem);
+    rowButton.ContextFlyout(contextMenu);
+    ToolTipService::SetToolTip(rowButton, winrt::box_value(winrt::hstring{ CLP_W(CLP_UI_COPY) }));
+    Automation::AutomationProperties::SetName(rowButton, winrt::hstring{ metaText });
+    Automation::AutomationProperties::SetHelpText(rowButton, winrt::hstring{ CLP_W(CLP_UI_COPY) });
 
     bubble.Children().Append(content);
-    row.Children().Append(bubble);
+    row.Children().Append(rowButton);
     return row;
 }
 
@@ -276,17 +367,17 @@ void ClippPage::RefreshActivityItems(const std::vector<ClipboardActivityItemHead
     activityItemsPanel_.Children().Clear();
     activityItemIDs_.clear();
 
-    for (const auto& item : items) {
-        auto row = BuildActivityRow(item.id);
+    for (auto item = items.rbegin(); item != items.rend(); ++item) {
+        auto row = BuildActivityRow(item->id);
         if (!row) {
             continue;
         }
         activityItemsPanel_.Children().Append(row);
-        activityItemIDs_.push_back(item.id);
+        activityItemIDs_.push_back(item->id);
     }
 
     SetActivityEmptyMessageVisible(activityItemIDs_.empty());
-    ScrollActivityToBottom();
+    ScrollActivityToTop();
 }
 
 void ClippPage::AddActivityItem(uint64_t itemID) {
@@ -298,18 +389,18 @@ void ClippPage::AddActivityItem(uint64_t itemID) {
         return;
     }
 
-    const bool shouldFollow = IsActivityNearBottom();
+    const bool shouldFollow = IsActivityNearTop();
     auto row = BuildActivityRow(itemID);
     if (!row) {
         return;
     }
 
-    activityItemsPanel_.Children().Append(row);
-    activityItemIDs_.push_back(itemID);
+    activityItemsPanel_.Children().InsertAt(0, row);
+    activityItemIDs_.insert(activityItemIDs_.begin(), itemID);
     SetActivityEmptyMessageVisible(false);
 
     if (shouldFollow) {
-        ScrollActivityToBottom();
+        ScrollActivityToTop();
     }
 }
 
@@ -364,26 +455,21 @@ void ClippPage::UpdateActivityEmptyState() {
         : winrt::Windows::UI::Xaml::Visibility::Visible);
 }
 
-bool ClippPage::IsActivityNearBottom() const {
+bool ClippPage::IsActivityNearTop() const {
     if (!activityScroll_) {
         return true;
     }
 
-    const double scrollableHeight = activityScroll_.ScrollableHeight();
-    if (scrollableHeight <= 0) {
-        return true;
-    }
-
-    return (scrollableHeight - activityScroll_.VerticalOffset()) <= kActivityFollowBottomTolerance;
+    return activityScroll_.VerticalOffset() <= kActivityFollowTopTolerance;
 }
 
-void ClippPage::ScrollActivityToBottom() const {
+void ClippPage::ScrollActivityToTop() const {
     if (!activityScroll_) {
         return;
     }
 
     activityScroll_.UpdateLayout();
-    activityScroll_.ChangeView(nullptr, activityScroll_.ScrollableHeight(), nullptr, true);
+    activityScroll_.ChangeView(nullptr, 0.0, nullptr, true);
 }
 
 void ClippPage::CopyActivityItem(uint64_t itemID) {

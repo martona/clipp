@@ -39,8 +39,8 @@ private:
     void ClearActivityItems();
     void SetActivityEmptyMessageVisible(bool visible);
     void UpdateActivityEmptyState();
-    bool IsActivityNearBottom() const;
-    void ScrollActivityToBottom() const;
+    bool IsActivityNearTop() const;
+    void ScrollActivityToTop() const;
     void CopyActivityItem(uint64_t itemID);
     void BeginActivityNotifications();
     void EndActivityNotifications();

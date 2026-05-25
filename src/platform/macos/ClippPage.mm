@@ -67,9 +67,112 @@ extern KeyManager g_keyManager;
 
 @end
 
+@interface MacOSActivityRowView : NSView {
+@private
+    NSTrackingArea* trackingArea_;
+    NSButton* copyButton_;
+    id copyTarget_;
+    SEL copyAction_;
+    BOOL mouseInside_;
+}
+- (void)setCopyButton:(NSButton*)button target:(id)target action:(SEL)action;
+@end
+
+@implementation MacOSActivityRowView
+
+- (void)setCopyButton:(NSButton*)button target:(id)target action:(SEL)action {
+    copyButton_ = button;
+    copyTarget_ = target;
+    copyAction_ = action;
+    [self updateCopyButtonVisibility];
+}
+
+- (BOOL)acceptsFirstResponder {
+    return YES;
+}
+
+- (BOOL)becomeFirstResponder {
+    const BOOL result = [super becomeFirstResponder];
+    [self updateCopyButtonVisibility];
+    return result;
+}
+
+- (BOOL)resignFirstResponder {
+    const BOOL result = [super resignFirstResponder];
+    [self updateCopyButtonVisibility];
+    return result;
+}
+
+- (void)updateTrackingAreas {
+    if (trackingArea_ != nil) {
+        [self removeTrackingArea:trackingArea_];
+    }
+
+    trackingArea_ = [[NSTrackingArea alloc] initWithRect:NSZeroRect
+                                                 options:NSTrackingMouseEnteredAndExited | NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect
+                                                   owner:self
+                                                userInfo:nil];
+    [self addTrackingArea:trackingArea_];
+    [super updateTrackingAreas];
+}
+
+- (void)mouseEntered:(NSEvent*)event {
+    (void)event;
+    mouseInside_ = YES;
+    [self updateCopyButtonVisibility];
+}
+
+- (void)mouseExited:(NSEvent*)event {
+    (void)event;
+    mouseInside_ = NO;
+    [self updateCopyButtonVisibility];
+}
+
+- (void)mouseDown:(NSEvent*)event {
+    [self.window makeFirstResponder:self];
+    [super mouseDown:event];
+}
+
+- (void)keyDown:(NSEvent*)event {
+    NSString* characters = event.charactersIgnoringModifiers.lowercaseString;
+    const BOOL copyShortcut = (event.modifierFlags & NSEventModifierFlagCommand) != 0 && [characters isEqualToString:@"c"];
+    const BOOL activate = [characters isEqualToString:@"\r"] || [characters isEqualToString:@" "];
+    if (copyShortcut || activate) {
+        [self invokeCopy:self];
+        return;
+    }
+
+    [super keyDown:event];
+}
+
+- (NSMenu*)menuForEvent:(NSEvent*)event {
+    (void)event;
+    NSMenu* menu = [[NSMenu alloc] initWithTitle:@""];
+    NSMenuItem* copyItem = [[NSMenuItem alloc] initWithTitle:CLP_NS(CLP_UI_COPY)
+                                                      action:copyAction_
+                                               keyEquivalent:@""];
+    copyItem.target = copyTarget_;
+    [menu addItem:copyItem];
+    return menu;
+}
+
+- (void)invokeCopy:(id)sender {
+    if (copyTarget_ != nil && copyAction_ != nullptr) {
+        [NSApp sendAction:copyAction_ to:copyTarget_ from:sender];
+    }
+}
+
+- (void)updateCopyButtonVisibility {
+    const BOOL visible = mouseInside_ || self.window.firstResponder == self;
+    copyButton_.alphaValue = visible ? 1.0 : 0.0;
+    copyButton_.enabled = visible;
+}
+
+@end
+
 namespace {
 constexpr CGFloat kPageInset = 28.0;
-constexpr CGFloat kActivityFollowBottomTolerance = 48.0;
+constexpr CGFloat kActivityFollowTopTolerance = 48.0;
 constexpr CGFloat kActivityBubbleMaxWidth = 460.0;
 
 NSString* FormatActivityTime(std::chrono::system_clock::time_point timestamp) {
@@ -223,8 +326,9 @@ NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
 
     const bool isOutgoing = display->header.direction == ClipboardActivityDirection::Outgoing;
 
-    NSView* row = [[NSView alloc] initWithFrame:NSZeroRect];
+    MacOSActivityRowView* row = [[MacOSActivityRowView alloc] initWithFrame:NSZeroRect];
     row.translatesAutoresizingMaskIntoConstraints = NO;
+    row.toolTip = CLP_NS(CLP_UI_COPY);
 
     NSBox* bubble = MacOSMakeGroupBox();
     bubble.fillColor = ActivityBubbleColor(isOutgoing);
@@ -242,11 +346,34 @@ NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
         deviceName = isOutgoing ? CLP_W(CLP_UI_THIS_DEVICE) : CLP_W(CLP_UI_UNKNOWN_HOST);
     }
 
+    MacOSClippPageTarget* target = [[MacOSClippPageTarget alloc] initWithOwner:this itemID:itemID];
+    [activityItemTargets_ addObject:target];
+    NSClickGestureRecognizer* copyGesture = [[NSClickGestureRecognizer alloc] initWithTarget:target
+                                                                                      action:@selector(copyActivityItem:)];
+    [row addGestureRecognizer:copyGesture];
+
     NSString* metaText = [NSString stringWithFormat:@"%@ - %@",
         MacOSToNSString(deviceName),
         FormatActivityTime(display->header.timestamp)];
     NSTextField* meta = MakeActivityLabel(metaText, 12.0, [NSColor secondaryLabelColor]);
-    [content addArrangedSubview:meta];
+
+    NSStackView* header = [[NSStackView alloc] initWithFrame:NSZeroRect];
+    header.translatesAutoresizingMaskIntoConstraints = NO;
+    header.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    header.alignment = NSLayoutAttributeCenterY;
+    header.spacing = 8.0;
+
+    NSButton* copyButton = MacOSMakeIconButton(@"doc.on.doc", CLP_NS(CLP_UI_COPY), target, @selector(copyActivityItem:));
+    copyButton.alphaValue = 0.0;
+    copyButton.enabled = NO;
+    copyButton.refusesFirstResponder = YES;
+    [row setCopyButton:copyButton target:target action:@selector(copyActivityItem:)];
+
+    [header addArrangedSubview:meta];
+    [header addArrangedSubview:copyButton];
+    [meta setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [copyButton setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [content addArrangedSubview:header];
 
     if (display->kind == ClipboardActivityPayloadKind::Image && !display->imageData.empty()) {
         NSData* data = [NSData dataWithBytes:display->imageData.data()
@@ -281,30 +408,9 @@ NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
             : MacOSToNSString(display->previewText);
         NSTextField* preview = MakeActivityPreviewLabel(
             previewText,
-            display->kind != ClipboardActivityPayloadKind::PrivateText);
+            false);
         [content addArrangedSubview:preview];
     }
-
-    MacOSClippPageTarget* target = [[MacOSClippPageTarget alloc] initWithOwner:this itemID:itemID];
-    [activityItemTargets_ addObject:target];
-
-    NSButton* copyButton = [NSButton buttonWithTitle:CLP_NS(CLP_UI_COPY)
-                                             target:target
-                                             action:@selector(copyActivityItem:)];
-    copyButton.translatesAutoresizingMaskIntoConstraints = NO;
-    copyButton.bezelStyle = NSBezelStyleRounded;
-    [copyButton setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
-
-    NSView* buttonRow = [[NSView alloc] initWithFrame:NSZeroRect];
-    buttonRow.translatesAutoresizingMaskIntoConstraints = NO;
-    [buttonRow addSubview:copyButton];
-    [NSLayoutConstraint activateConstraints:@[
-        [copyButton.trailingAnchor constraintEqualToAnchor:buttonRow.trailingAnchor],
-        [copyButton.topAnchor constraintEqualToAnchor:buttonRow.topAnchor],
-        [copyButton.bottomAnchor constraintEqualToAnchor:buttonRow.bottomAnchor],
-        [buttonRow.leadingAnchor constraintLessThanOrEqualToAnchor:copyButton.leadingAnchor],
-    ]];
-    [content addArrangedSubview:buttonRow];
 
     [bubble addSubview:content];
     [row addSubview:bubble];
@@ -338,17 +444,17 @@ void MacOSClippPage::RefreshActivityItems(const std::vector<ClipboardActivityIte
     [activityItemTargets_ removeAllObjects];
     activityItemIDs_.clear();
 
-    for (const auto& item : items) {
-        NSView* row = BuildActivityRow(item.id);
+    for (auto item = items.rbegin(); item != items.rend(); ++item) {
+        NSView* row = BuildActivityRow(item->id);
         if (row == nil) {
             continue;
         }
         [activityItemsPanel_ addArrangedSubview:row];
-        activityItemIDs_.push_back(item.id);
+        activityItemIDs_.push_back(item->id);
     }
 
     SetActivityEmptyMessageVisible(activityItemIDs_.empty());
-    ScrollActivityToBottom();
+    ScrollActivityToTop();
 }
 
 void MacOSClippPage::AddActivityItem(uint64_t itemID) {
@@ -360,18 +466,18 @@ void MacOSClippPage::AddActivityItem(uint64_t itemID) {
         return;
     }
 
-    const bool shouldFollow = IsActivityNearBottom();
+    const bool shouldFollow = IsActivityNearTop();
     NSView* row = BuildActivityRow(itemID);
     if (row == nil) {
         return;
     }
 
-    [activityItemsPanel_ addArrangedSubview:row];
-    activityItemIDs_.push_back(itemID);
+    [activityItemsPanel_ insertArrangedSubview:row atIndex:0];
+    activityItemIDs_.insert(activityItemIDs_.begin(), itemID);
     SetActivityEmptyMessageVisible(false);
 
     if (shouldFollow) {
-        ScrollActivityToBottom();
+        ScrollActivityToTop();
     }
 }
 
@@ -434,7 +540,7 @@ void MacOSClippPage::UpdateActivityEmptyState() {
     activityEmptyNetworkButton_.hidden = haveNetworkKey;
 }
 
-bool MacOSClippPage::IsActivityNearBottom() const {
+bool MacOSClippPage::IsActivityNearTop() const {
     if (activityScroll_ == nil || activityScroll_.documentView == nil) {
         return true;
     }
@@ -448,10 +554,10 @@ bool MacOSClippPage::IsActivityNearBottom() const {
         return true;
     }
 
-    return (documentHeight - NSMaxY(visibleRect)) <= kActivityFollowBottomTolerance;
+    return visibleRect.origin.y <= kActivityFollowTopTolerance;
 }
 
-void MacOSClippPage::ScrollActivityToBottom() const {
+void MacOSClippPage::ScrollActivityToTop() const {
     if (activityScroll_ == nil || activityScroll_.documentView == nil) {
         return;
     }
@@ -459,10 +565,7 @@ void MacOSClippPage::ScrollActivityToBottom() const {
     [activityScroll_ layoutSubtreeIfNeeded];
     [activityScroll_.documentView layoutSubtreeIfNeeded];
 
-    const CGFloat documentHeight = activityScroll_.documentView.bounds.size.height;
-    const CGFloat visibleHeight = activityScroll_.contentView.bounds.size.height;
-    const CGFloat y = (std::max)(static_cast<CGFloat>(0.0), documentHeight - visibleHeight);
-    [activityScroll_.contentView scrollToPoint:NSMakePoint(0.0, y)];
+    [activityScroll_.contentView scrollToPoint:NSMakePoint(0.0, 0.0)];
     [activityScroll_ reflectScrolledClipView:activityScroll_.contentView];
 }
 
