@@ -40,6 +40,7 @@ constexpr NSInteger kClippClipboardActivityErrorBase = 4300;
 constexpr NSInteger kClippOutgoingClipboardErrorBase = 4400;
 constexpr NSInteger kClippSettingsErrorBase = 4500;
 NSString* const kClipboardActivityDidChangeNotification = @"net.clipp.ios.clipboard-activity-did-change";
+NSString* const kNetworkPeersDidChangeNotification = @"net.clipp.ios.network-peers-did-change";
 NSString* const kDiagnosticLogsDidChangeNotification = @"net.clipp.ios.diagnostic-logs-did-change";
 std::mutex g_runtimeBridgeMutex;
 std::mutex g_diagnosticLogMutex;
@@ -47,8 +48,10 @@ bool g_runtimeBridgeStarted = false;
 bool g_diagnosticLogInitializing = false;
 std::once_flag g_clipboardHistoryLimitsOnce;
 std::once_flag g_clipboardActivityWatcherOnce;
+std::once_flag g_networkPeerWatcherOnce;
 std::once_flag g_diagnosticLogReflectorOnce;
 std::size_t g_clipboardActivityWatcherID = 0;
+std::size_t g_networkPeerWatcherID = 0;
 ClipboardActivityStore g_clipboardActivityStore;
 ClipboardHashGuard g_clipboardHashGuard;
 TerminalLogBuffer g_diagnosticLogBuffer;
@@ -207,6 +210,13 @@ void PostClipboardActivityChanged() {
     });
 }
 
+void PostNetworkPeersChanged() {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[NSNotificationCenter defaultCenter] postNotificationName:kNetworkPeersDidChangeNotification
+                                                            object:nil];
+    });
+}
+
 void PostDiagnosticLogsChanged() {
     dispatch_async(dispatch_get_main_queue(), ^{
         [[NSNotificationCenter defaultCenter] postNotificationName:kDiagnosticLogsDidChangeNotification
@@ -216,6 +226,10 @@ void PostDiagnosticLogsChanged() {
 
 void ClipboardActivityWatcher(const ClipboardActivityUpdate&, void*) {
     PostClipboardActivityChanged();
+}
+
+void NetworkPeerWatcher(const PeerDisplayUpdate&, void*) {
+    PostNetworkPeersChanged();
 }
 
 void DiagnosticLogReflector(const std::wstring& line) {
@@ -236,6 +250,14 @@ void EnsureClipboardActivityWatcher() {
         const ClipboardActivityRegistration registration =
             g_clipboardActivityStore.QueryAndRegister(ClipboardActivityWatcher, nullptr);
         g_clipboardActivityWatcherID = registration.watcherID;
+    });
+}
+
+void EnsureNetworkPeerWatcher() {
+    std::call_once(g_networkPeerWatcherOnce, [] {
+        const PeerDisplayRegistration registration =
+            g_peerDisplay.QueryAndRegister(NetworkPeerWatcher, nullptr);
+        g_networkPeerWatcherID = registration.watcherID;
     });
 }
 
@@ -326,6 +348,13 @@ CLPClipboardActivityItem* MakeClipboardActivityItem(const ClipboardActivityItemH
                                                               text:detailText
                                                      imageFormatID:display->imageFormatId
                                                          imageData:DataFromBytes(display->imageData)];
+}
+
+CLPNetworkPeerItem* MakeNetworkPeerItem(const PeerDisplayItem& item) {
+    return [[CLPNetworkPeerItem alloc] initWithIdentifier:ToNSString(item.hostID.ToHexString())
+                                               deviceName:ToNSString(uiClippPage::DisplayHostNameOrUnknown(item.hostName))
+                                    hasIncomingConnection:item.hasIncomingConnection
+                                    hasOutgoingConnection:item.hasOutgoingConnection];
 }
 
 bool ClipboardPayloadFromPasteboard(ClipboardPayload& payload, NSError** error) {
@@ -664,6 +693,24 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const Clipboard
 
 @end
 
+@implementation CLPNetworkPeerItem
+
+- (instancetype)initWithIdentifier:(NSString*)identifier
+                         deviceName:(NSString*)deviceName
+              hasIncomingConnection:(BOOL)hasIncomingConnection
+              hasOutgoingConnection:(BOOL)hasOutgoingConnection {
+    self = [super init];
+    if (self) {
+        _identifier = [identifier copy];
+        _deviceName = [deviceName copy];
+        _hasIncomingConnection = hasIncomingConnection;
+        _hasOutgoingConnection = hasOutgoingConnection;
+    }
+    return self;
+}
+
+@end
+
 @implementation CLPDiagnosticLogRun
 
 - (instancetype)initWithText:(NSString*)text
@@ -838,6 +885,25 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const Clipboard
     MDNSNotifyNetworkKeyChange();
     g_peerManager.ClearPeers();
     return YES;
+}
+
+@end
+
+@implementation CLPNetworkPeerBridge
+
++ (NSString*)didChangeNotificationName {
+    return kNetworkPeersDidChangeNotification;
+}
+
++ (NSArray<CLPNetworkPeerItem*>*)peers {
+    EnsureNetworkPeerWatcher();
+
+    const auto peers = g_peerDisplay.Query();
+    NSMutableArray<CLPNetworkPeerItem*>* items = [NSMutableArray arrayWithCapacity:peers.size()];
+    for (const auto& peer : peers) {
+        [items addObject:MakeNetworkPeerItem(peer)];
+    }
+    return items;
 }
 
 @end

@@ -83,6 +83,7 @@ struct AppPanelSheet: View {
 
 private struct NetworkPanelView: View {
     @StateObject private var model = NetworkKeyViewModel()
+    @StateObject private var peerModel = NetworkPeerListViewModel()
     @State private var confirmingReplacement = false
 
     var body: some View {
@@ -125,9 +126,16 @@ private struct NetworkPanelView: View {
             }
 
             if model.hasNetworkKey {
-                Section("Peer Status") {
-                    PeerStatusRow(deviceName: "MacBook Pro", status: "Nearby", isOnline: true)
-                    PeerStatusRow(deviceName: "Studio PC", status: "Last seen 3 min ago", isOnline: false)
+                Section(CLP_UI_PEERS) {
+                    if peerModel.peers.isEmpty {
+                        Text(CLP_UI_NO_PEERS_HELP)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(peerModel.peers) { peer in
+                            PeerStatusRow(peer: peer)
+                        }
+                    }
                 }
             } else {
                 Section {
@@ -144,6 +152,7 @@ private struct NetworkPanelView: View {
         }
         .task {
             model.loadStatus()
+            peerModel.reload()
         }
     }
 
@@ -157,6 +166,89 @@ private struct NetworkPanelView: View {
         } else {
             model.deriveAndStoreKey()
         }
+    }
+}
+
+private enum PeerConnectionState {
+    case connected
+    case partial
+    case disconnected
+
+    init(hasIncomingConnection: Bool, hasOutgoingConnection: Bool) {
+        switch (hasIncomingConnection, hasOutgoingConnection) {
+        case (true, true):
+            self = .connected
+        case (true, false), (false, true):
+            self = .partial
+        case (false, false):
+            self = .disconnected
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .connected:
+            .green
+        case .partial:
+            .yellow
+        case .disconnected:
+            .red
+        }
+    }
+}
+
+private struct PeerStatusItem: Identifiable {
+    let id: String
+    let deviceName: String
+    let status: String
+    let state: PeerConnectionState
+
+    init(_ peer: NetworkPeerItem) {
+        id = peer.identifier
+        deviceName = peer.deviceName
+        state = PeerConnectionState(
+            hasIncomingConnection: peer.hasIncomingConnection,
+            hasOutgoingConnection: peer.hasOutgoingConnection
+        )
+        status = Self.statusText(
+            hasIncomingConnection: peer.hasIncomingConnection,
+            hasOutgoingConnection: peer.hasOutgoingConnection
+        )
+    }
+
+    private static func statusText(hasIncomingConnection: Bool, hasOutgoingConnection: Bool) -> String {
+        switch (hasIncomingConnection, hasOutgoingConnection) {
+        case (true, true):
+            CLP_UI_CONNECTED
+        case (true, false):
+            "Incoming only"
+        case (false, true):
+            "Outgoing only"
+        case (false, false):
+            CLP_UI_NOT_CONNECTED
+        }
+    }
+}
+
+@MainActor
+private final class NetworkPeerListViewModel: ObservableObject {
+    @Published var peers: [PeerStatusItem] = []
+
+    private var observer: AnyCancellable?
+
+    init() {
+        reload()
+        observer = NotificationCenter.default.publisher(
+            for: Notification.Name(NetworkPeerBridge.didChangeNotificationName())
+        )
+        .receive(on: RunLoop.main)
+        .sink { [weak self] _ in
+            self?.reload()
+        }
+    }
+
+    func reload() {
+        peers = NetworkPeerBridge.peers().map(PeerStatusItem.init)
     }
 }
 
@@ -987,22 +1079,26 @@ private struct AboutPanelView: View {
 }
 
 private struct PeerStatusRow: View {
-    let deviceName: String
-    let status: String
-    let isOnline: Bool
+    let peer: PeerStatusItem
 
     var body: some View {
         HStack(spacing: 12) {
             Circle()
-                .fill(isOnline ? Color.green : Color.secondary.opacity(0.42))
+                .fill(peer.state.color)
                 .frame(width: 10, height: 10)
+                .overlay {
+                    Circle()
+                        .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+                }
+                .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(deviceName)
-                Text(status)
+                Text(peer.deviceName)
+                Text(peer.status)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
+        .accessibilityElement(children: .combine)
     }
 }

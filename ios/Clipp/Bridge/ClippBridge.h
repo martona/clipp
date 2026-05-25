@@ -98,6 +98,30 @@ NS_SWIFT_NAME(NetworkTrafficSnapshot)
 
 @end
 
+NS_SWIFT_NAME(NetworkPeerItem)
+@interface CLPNetworkPeerItem : NSObject
+
+@property(nonatomic, copy, readonly) NSString* identifier;
+@property(nonatomic, copy, readonly) NSString* deviceName;
+@property(nonatomic, assign, readonly) BOOL hasIncomingConnection;
+@property(nonatomic, assign, readonly) BOOL hasOutgoingConnection;
+
+- (instancetype)initWithIdentifier:(NSString*)identifier
+                         deviceName:(NSString*)deviceName
+              hasIncomingConnection:(BOOL)hasIncomingConnection
+              hasOutgoingConnection:(BOOL)hasOutgoingConnection NS_DESIGNATED_INITIALIZER;
+- (instancetype)init NS_UNAVAILABLE;
+
+@end
+
+NS_SWIFT_NAME(NetworkPeerBridge)
+@interface CLPNetworkPeerBridge : NSObject
+
++ (NSString*)didChangeNotificationName;
++ (NSArray<CLPNetworkPeerItem*>*)peers NS_SWIFT_NAME(peers());
+
+@end
+
 NS_SWIFT_NAME(DiagnosticLogRunColor)
 typedef NS_ENUM(NSInteger, CLPDiagnosticLogRunColor) {
     CLPDiagnosticLogRunColorDefault = 0,
