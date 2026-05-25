@@ -27,6 +27,8 @@
 
 extern PeerManager g_peerManager;
 
+static std::atomic<uint64_t> g_nextPeerLogId{ 1 };
+
 static void CullStoppedPeersAsync() {
 	std::thread([]() {
 			g_peerManager.CullPeers();
@@ -40,7 +42,7 @@ static std::chrono::milliseconds NextPingInterval() {
 }
 
 Peer::Peer(const wchar_t* hostName, const HostId* hostID, const wchar_t* ip, u_short port, VerifiedCallback verifiedCallback, TrafficCallback trafficCallback)
-	: hostName_(hostName), ip_(ip), port_(port),
+	: logId_(g_nextPeerLogId.fetch_add(1)), hostName_(hostName), ip_(ip), port_(port),
 	hostID_(*hostID),
 	createdAt_(std::chrono::steady_clock::now()),
 	lastPingReceivedAt_(createdAt_),
@@ -50,7 +52,8 @@ Peer::Peer(const wchar_t* hostName, const HostId* hostID, const wchar_t* ip, u_s
 }
 
 Peer::Peer(SOCKET socket, ClipboardReceivedCallback clipboardReceivedCallback, VerifiedCallback verifiedCallback, TrafficCallback trafficCallback)
-	: ip_(Utf8ToWideString(SocketPeerIp(socket))),
+	: logId_(g_nextPeerLogId.fetch_add(1)),
+	ip_(Utf8ToWideString(SocketPeerIp(socket))),
 	port_(SocketPeerPort(socket)),
 	createdAt_(std::chrono::steady_clock::now()),
 	lastPingReceivedAt_(createdAt_),
@@ -84,7 +87,8 @@ void Peer::logV(const char* function, Logger::Level level, const wchar_t* messag
 	int bufferSize = cntof(formattedMessage);
 	{
 		std::lock_guard<std::mutex> lock(dataMutex_);
-		int prefixlen = snwprintf_truncate(formattedMessage, bufferSize, L"[%ls %ls %ls] ",
+		int prefixlen = snwprintf_truncate(formattedMessage, bufferSize, L"[#%llu %ls %ls %ls] ",
+			static_cast<unsigned long long>(logId_),
 			hostName_.empty() ? L"<unknown>" : hostName_.c_str(),
 			ip_.empty() ? L"<unknown>" : ip_.c_str(),
 			ConnTypeString());
@@ -210,6 +214,7 @@ bool Peer::ConnectSocket() {
 		log(__FUNCTION__, Logger::Level::Error, L"Peer: failed to create socket.");
 		return false;
 	}
+	ConfigureTcpSocket(socket);
 	SetSocket(socket);
 
 	sockaddr_in address{};
@@ -434,6 +439,9 @@ void Peer::ThreadProcRecv() {
 	std::string remoteHostNameUtf8;
 	SOCKET socket = CurrentSocket();
 	const SocketIoContext io{ socket, wakeEvent_, stopRequested_ };
+	if (socket != INVALID_SOCKET) {
+		ConfigureTcpSocket(socket);
+	}
 	if (socket == INVALID_SOCKET || !SetSocketBlockingMode(socket, false) || !channel.ServerHandshake(io, remoteHostId, remoteHostNameUtf8)) {
 		log(__FUNCTION__, Logger::Level::Error, L"Client secure handshake failed.");
 	} else {
@@ -453,9 +461,9 @@ void Peer::ThreadProcRecv() {
 			if (io.socket == INVALID_SOCKET || !channel.RecvTaggedMessage(io, packet)) {
 				break;
 			}
-			ReportTraffic(0, 4);
 
 			if (std::memcmp(packet, "PING", 4) == 0) {
+				ReportTraffic(0, 4);
 				log(__FUNCTION__, Logger::Level::DDebug, L"PING");
 				{
 					std::lock_guard<std::mutex> lock(dataMutex_);
@@ -475,7 +483,6 @@ void Peer::ThreadProcRecv() {
 					log(__FUNCTION__, Logger::Level::Warning, L"Failed to receive clipboard message header.");
 					break;
 				}
-				ReportTraffic(0, headerMsg.size());
 				if (headerMsg.size() != sizeof(NetworkDefs::ClipboardMessage)) {
 					log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard message: header size mismatch (expected %zu bytes, actual %zu bytes)", sizeof(NetworkDefs::ClipboardMessage), headerMsg.size());
 					break;
@@ -487,12 +494,6 @@ void Peer::ThreadProcRecv() {
 				payload.uncompressedDataSize = ntohl(clipMessage->uncompressedDataSize);
 				payload.isCompressed = clipMessage->isCompressed != 0;
 				uint32_t payloadDataSize = ntohl(clipMessage->payloadDataSize);
-				log(__FUNCTION__, Logger::Level::Debug, L"Clipboard message header received: format %ls (%u), compressed=%u, payload size=%u bytes, uncompressed size=%u bytes",
-					ClippClipboardFormatNameW(payload.formatId),
-					payload.formatId,
-					payload.isCompressed ? 1u : 0u,
-					payloadDataSize,
-					payload.uncompressedDataSize);
 
 				if (payloadDataSize > 0) {
 					if (!channel.RecvMessage(io, payload.rawData)) {
@@ -506,7 +507,13 @@ void Peer::ThreadProcRecv() {
 				else {
 					payload.rawData.clear();
 				}
-				ReportTraffic(0, payload.rawData.size());
+				ReportTraffic(0, 4 + headerMsg.size() + payload.rawData.size());
+				log(__FUNCTION__, Logger::Level::Debug, L"Clipboard message received: format %ls (%u), compressed=%u, payload size=%u bytes, uncompressed size=%u bytes",
+					ClippClipboardFormatNameW(payload.formatId),
+					payload.formatId,
+					payload.isCompressed ? 1u : 0u,
+					payloadDataSize,
+					payload.uncompressedDataSize);
 
 				if (payload.rawData.size() != static_cast<size_t>(payloadDataSize)) {
 					log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard message: payload size mismatch (header: %u bytes, body: %zu bytes)", payloadDataSize, payload.rawData.size());

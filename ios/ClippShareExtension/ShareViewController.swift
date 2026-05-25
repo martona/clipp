@@ -107,7 +107,7 @@ final class ShareViewController: UIViewController {
 
         await MainActor.run {
             titleLabel.text = "Sending with Clipp"
-            detailLabel.text = "Looking for trusted devices nearby."
+            detailLabel.text = "Sending to trusted devices nearby."
         }
 
         do {
@@ -116,18 +116,37 @@ final class ShareViewController: UIViewController {
             }.value
 
             let itemText = plural(result.sentItemCount, singular: "item", plural: "items")
-            let deviceText = plural(result.reachedDeviceCount, singular: "device", plural: "devices")
+            let attemptedDeviceCount = result.attemptedDeviceCount
+            let failedDeviceNames = result.failedDeviceNames
+            let hasFailures = !failedDeviceNames.isEmpty || result.reachedDeviceCount < attemptedDeviceCount
+            let deviceText = plural(hasFailures ? attemptedDeviceCount : result.reachedDeviceCount, singular: "device", plural: "devices")
+            let sentDetail: String
+            if hasFailures {
+                sentDetail = "Sent \(result.sentItemCount) \(itemText) to \(result.reachedDeviceCount) of \(attemptedDeviceCount) \(deviceText)."
+            } else {
+                sentDetail = "Sent \(result.sentItemCount) \(itemText) to \(result.reachedDeviceCount) \(deviceText)."
+            }
+            let failureDetail: String?
+            if !failedDeviceNames.isEmpty {
+                failureDetail = "Failed: \(failedDeviceNames.joined(separator: ", "))."
+            } else if hasFailures {
+                let failedCount = attemptedDeviceCount - result.reachedDeviceCount
+                let failedDeviceText = plural(failedCount, singular: "device", plural: "devices")
+                failureDetail = "\(failedCount) \(failedDeviceText) failed."
+            } else {
+                failureDetail = nil
+            }
             let ignored = ignoredText(extraction.unsupportedCount, fallback: nil)
-            let detail = ([ "Sent \(result.sentItemCount) \(itemText) to \(result.reachedDeviceCount) \(deviceText).", ignored ]
+            let detail = ([ sentDetail, failureDetail, ignored ]
                 .compactMap { $0 })
                 .joined(separator: " ")
 
             showResult(
-                symbolName: "checkmark.circle.fill",
-                tintColor: .systemGreen,
-                title: "Shared with Clipp",
+                symbolName: hasFailures ? "exclamationmark.triangle.fill" : "checkmark.circle.fill",
+                tintColor: hasFailures ? .systemOrange : .systemGreen,
+                title: hasFailures ? "Partially Shared" : "Shared with Clipp",
                 detail: detail,
-                feedback: UINotificationFeedbackGenerator.FeedbackType.success
+                feedback: hasFailures ? UINotificationFeedbackGenerator.FeedbackType.warning : UINotificationFeedbackGenerator.FeedbackType.success
             )
         } catch {
             let ignored = ignoredText(extraction.unsupportedCount, fallback: nil)
@@ -181,25 +200,14 @@ final class ShareViewController: UIViewController {
     }
 
     private func payload(from provider: NSItemProvider) async -> SharePayload? {
-        if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier),
-           let url = try? await loadURL(from: provider) {
-            return SharePayload.text(url.absoluteString)
-        }
-
-        if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier),
-           let text = try? await loadText(from: provider),
-           !text.isEmpty {
-            return SharePayload.text(text)
-        }
-
         if provider.hasItemConformingToTypeIdentifier(UTType.jpeg.identifier),
-           let data = try? await loadData(from: provider, type: UTType.jpeg),
+           let data = try? await loadImageData(from: provider, type: UTType.jpeg),
            !data.isEmpty {
             return SharePayload.jpegData(data)
         }
 
         if provider.hasItemConformingToTypeIdentifier(UTType.png.identifier),
-           let data = try? await loadData(from: provider, type: UTType.png),
+           let data = try? await loadImageData(from: provider, type: UTType.png),
            !data.isEmpty {
             return SharePayload.pngData(data)
         }
@@ -208,15 +216,26 @@ final class ShareViewController: UIViewController {
            let fileURL = try? await loadURL(from: provider, type: UTType.fileURL) {
             let pathExtension = fileURL.pathExtension.lowercased()
             if (pathExtension == "jpg" || pathExtension == "jpeg"),
-               let data = try? Data(contentsOf: fileURL, options: [.mappedIfSafe]),
+               let data = try? Data(contentsOf: fileURL),
                !data.isEmpty {
                 return SharePayload.jpegData(data)
             }
             if pathExtension == "png",
-               let data = try? Data(contentsOf: fileURL, options: [.mappedIfSafe]),
+               let data = try? Data(contentsOf: fileURL),
                !data.isEmpty {
                 return SharePayload.pngData(data)
             }
+        }
+
+        if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier),
+           let text = try? await loadText(from: provider),
+           !text.isEmpty {
+            return SharePayload.text(text)
+        }
+
+        if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier),
+           let url = try? await loadURL(from: provider) {
+            return SharePayload.text(url.absoluteString)
         }
 
         return nil
@@ -255,6 +274,36 @@ final class ShareViewController: UIViewController {
             return url
         }
         throw CocoaError(.fileReadCorruptFile)
+    }
+
+    private func loadImageData(from provider: NSItemProvider, type: UTType) async throws -> Data {
+        if let data = try? await loadFileData(from: provider, type: type), !data.isEmpty {
+            return data
+        }
+
+        return try await loadData(from: provider, type: type)
+    }
+
+    private func loadFileData(from provider: NSItemProvider, type: UTType) async throws -> Data {
+        try await withCheckedThrowingContinuation { continuation in
+            provider.loadFileRepresentation(forTypeIdentifier: type.identifier) { fileURL, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+
+                guard let fileURL else {
+                    continuation.resume(throwing: CocoaError(.fileReadCorruptFile))
+                    return
+                }
+
+                do {
+                    continuation.resume(returning: try Data(contentsOf: fileURL))
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
     }
 
     private func loadData(from provider: NSItemProvider, type: UTType) async throws -> Data {

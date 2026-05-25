@@ -169,7 +169,7 @@ bool ProbePeersOnce(std::chrono::milliseconds wait, std::vector<DiscoveredPeer>&
 
     Packet packet = BuildPacket(GetLocalHostName("iPhone"),
                                 localHostID,
-                                static_cast<unsigned short>(g_settings.tcpPort()),
+                                0,
                                 "query",
                                 queryID.data());
     EncryptedPacket encryptedPacket{};

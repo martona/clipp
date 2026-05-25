@@ -29,9 +29,13 @@ NS_SWIFT_NAME(ShareSendResult)
 
 @property(nonatomic, assign, readonly) NSInteger sentItemCount;
 @property(nonatomic, assign, readonly) NSInteger reachedDeviceCount;
+@property(nonatomic, assign, readonly) NSInteger attemptedDeviceCount;
+@property(nonatomic, copy, readonly) NSArray<NSString*>* failedDeviceNames;
 
 - (instancetype)initWithSentItemCount:(NSInteger)sentItemCount
-                   reachedDeviceCount:(NSInteger)reachedDeviceCount NS_DESIGNATED_INITIALIZER;
+                   reachedDeviceCount:(NSInteger)reachedDeviceCount
+                  attemptedDeviceCount:(NSInteger)attemptedDeviceCount
+                     failedDeviceNames:(NSArray<NSString*>*)failedDeviceNames NS_DESIGNATED_INITIALIZER;
 - (instancetype)init NS_UNAVAILABLE;
 
 @end

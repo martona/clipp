@@ -12,6 +12,9 @@
 #ifndef _WIN32
 #include <fcntl.h>
 #endif
+#ifdef __APPLE__
+#include <netinet/tcp.h>
+#endif
 
 class SocketWakeEvent {
 public:
@@ -145,6 +148,17 @@ static inline bool SocketInterrupted(int error) {
 #endif
 }
 
+static inline int SocketSendFlags() {
+	int flags = 0;
+#ifdef MSG_DONTWAIT
+	flags |= MSG_DONTWAIT;
+#endif
+#ifdef MSG_NOSIGNAL
+	flags |= MSG_NOSIGNAL;
+#endif
+	return flags;
+}
+
 static inline bool SetSocketBlockingMode(SOCKET socket, bool blocking) {
 #ifdef _WIN32
 	u_long mode = blocking ? 0 : 1;
@@ -171,11 +185,29 @@ static inline bool GetPendingConnectError(SOCKET socket, int& connectError) {
 	return getsockopt(socket, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&connectError), &optionLength) == 0;
 }
 
+static inline void ConfigureTcpSocket(SOCKET socket) {
+	if (socket == INVALID_SOCKET) {
+		return;
+	}
+
+	int enabled = 1;
+	setsockopt(socket, SOL_SOCKET, SO_KEEPALIVE, reinterpret_cast<const char*>(&enabled), sizeof(enabled));
+#ifdef TCP_NODELAY
+	setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&enabled), sizeof(enabled));
+#endif
+#ifdef SO_NOSIGPIPE
+	int noSigPipe = 1;
+	setsockopt(socket, SOL_SOCKET, SO_NOSIGPIPE, reinterpret_cast<const char*>(&noSigPipe), sizeof(noSigPipe));
+#endif
+}
+
 static inline SOCKET ConnectTcpSocket(const std::string& ip, unsigned short port, std::chrono::milliseconds timeout) {
 	SOCKET socket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (socket == INVALID_SOCKET) {
 		return INVALID_SOCKET;
 	}
+
+	ConfigureTcpSocket(socket);
 
 	if (!SetSocketBlockingMode(socket, false)) {
 		closesocket(socket);
@@ -319,19 +351,19 @@ static inline bool RecvAll(const SocketIoContext& io, char* buffer, int length) 
 		if (waitResult == SocketWaitResult::Woken)
 			continue;
 
-		const int remaining = length - total;
-		const auto received = recv(io.socket, buffer + total, remaining, 0);
+		const auto received = recv(io.socket, buffer + total, length - total, 0);
 		if (received > 0) {
 			total += static_cast<int>(received);
 			continue;
 		}
-		if (received == 0) {
+		if (received == 0)
 			return false;
-		}
 		const int error = LastSocketError();
-		if (SocketWouldBlock(error) || SocketInterrupted(error)) {
+		if (SocketWouldBlock(error)) {
 			continue;
 		}
+		if (SocketInterrupted(error))
+			continue;
 		return false;
 	}
 	return true;
@@ -349,14 +381,13 @@ static inline bool SendAll(const SocketIoContext& io, const char* buffer, int le
 			continue;
 
 		const int chunkLength = (std::min)(length - total, 64 * 1024);
-		const auto sent = send(io.socket, buffer + total, chunkLength, 0);
+		const auto sent = send(io.socket, buffer + total, chunkLength, SocketSendFlags());
 		if (sent > 0) {
 			total += static_cast<int>(sent);
 			continue;
 		}
-		if (sent == 0) {
+		if (sent == 0)
 			return false;
-		}
 		const int error = LastSocketError();
 		if (SocketWouldBlock(error) || SocketInterrupted(error)) {
 			continue;

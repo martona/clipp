@@ -152,6 +152,11 @@ void NetworkRuntime::OnMDNSNotification(const char* hostNameUtf8,
         return;
     }
 
+    if (port == 0) {
+        g_logger.log(__FUNCTION__, Logger::Level::DDebug, "mDNS notification has no TCP listener port; not adding a peer.");
+        return;
+    }
+
     size_t hostNameWLen = utf8_to_utf16(hostNameUtf8, strlen(hostNameUtf8), nullptr, 0);
     std::wstring hostNameW(hostNameWLen, L'\0');
     if (hostNameWLen > 0) {

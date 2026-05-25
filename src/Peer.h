@@ -69,6 +69,7 @@ private:
 	const wchar_t* ConnTypeString() const;
 
 	mutable std::mutex dataMutex_;
+	uint64_t logId_{};
 	std::wstring hostName_;
 	std::wstring ip_;
 	unsigned short port_{};

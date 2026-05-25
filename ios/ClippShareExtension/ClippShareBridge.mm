@@ -16,6 +16,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
+#include <signal.h>
 #include <string>
 #include <thread>
 #include <utility>
@@ -117,13 +118,23 @@ bool PayloadFromSharePayload(CLPSharePayload* sharePayload, ClipboardPayload& pa
 }
 
 bool SendPayloadsToPeer(const MDNSProtocol::DiscoveredPeer& peer, const std::vector<ClipboardPayload>& payloads) {
+    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Share extension connecting to peer %hs at %hs:%hu.",
+        peer.hostName.c_str(),
+        peer.ip.c_str(),
+        peer.port);
+
     SOCKET socket = ConnectTcpSocket(peer.ip, peer.port, kConnectWait);
     if (socket == INVALID_SOCKET) {
+        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Share extension failed to connect to peer %hs at %hs:%hu.",
+            peer.hostName.c_str(),
+            peer.ip.c_str(),
+            peer.port);
         return false;
     }
 
     SocketWakeEvent wakeEvent;
     if (!wakeEvent.Initialize()) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Share extension failed to initialize send wake socket for peer %hs.", peer.hostName.c_str());
         closesocket(socket);
         return false;
     }
@@ -135,6 +146,7 @@ bool SendPayloadsToPeer(const MDNSProtocol::DiscoveredPeer& peer, const std::vec
     std::thread deadlineThread([&]() {
         std::unique_lock<std::mutex> lock(deadlineMutex);
         if (!deadlineCV.wait_for(lock, kSendWait, [&]() { return finished; })) {
+            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Share extension send to peer %hs timed out.", peer.hostName.c_str());
             stopRequested = true;
             wakeEvent.Signal();
         }
@@ -158,16 +170,21 @@ bool SendPayloadsToPeer(const MDNSProtocol::DiscoveredPeer& peer, const std::vec
         HostId remoteHostID;
         std::string remoteHostName;
         if (!channel.ClientHandshake(io, localHostID, localHostName, remoteHostID, remoteHostName)) {
+            g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Share extension handshake failed for peer %hs.", peer.hostName.c_str());
             break;
         }
 
         if (remoteHostID != peer.hostID) {
+            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Share extension peer identity mismatch for %hs.", peer.hostName.c_str());
             break;
         }
 
         bool sentAll = true;
         for (const ClipboardPayload& payload : payloads) {
             if (!ClipboardWire::SendClipboardPayload(channel, io, payload)) {
+                g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Share extension failed to send %ls payload to peer %hs.",
+                    ClippClipboardFormatNameW(payload.formatId),
+                    peer.hostName.c_str());
                 sentAll = false;
                 break;
             }
@@ -188,8 +205,12 @@ bool SendPayloadsToPeer(const MDNSProtocol::DiscoveredPeer& peer, const std::vec
     shutdown(socket, SD_BOTH);
     closesocket(socket);
     wakeEvent.Close();
+    g_logger.log(__FUNCTION__, sent ? Logger::Level::Debug : Logger::Level::Warning, L"Share extension send to peer %hs %ls.",
+        peer.hostName.c_str(),
+        sent ? L"succeeded" : L"failed");
     return sent;
 }
+
 }
 
 @interface CLPSharePayload ()
@@ -246,11 +267,15 @@ bool SendPayloadsToPeer(const MDNSProtocol::DiscoveredPeer& peer, const std::vec
 @implementation CLPShareSendResult
 
 - (instancetype)initWithSentItemCount:(NSInteger)sentItemCount
-                   reachedDeviceCount:(NSInteger)reachedDeviceCount {
+                   reachedDeviceCount:(NSInteger)reachedDeviceCount
+                  attemptedDeviceCount:(NSInteger)attemptedDeviceCount
+                     failedDeviceNames:(NSArray<NSString*>*)failedDeviceNames {
     self = [super init];
     if (self) {
         _sentItemCount = sentItemCount;
         _reachedDeviceCount = reachedDeviceCount;
+        _attemptedDeviceCount = attemptedDeviceCount;
+        _failedDeviceNames = [failedDeviceNames copy];
     }
     return self;
 }
@@ -269,6 +294,8 @@ bool SendPayloadsToPeer(const MDNSProtocol::DiscoveredPeer& peer, const std::vec
     if (!EnsureSodium(error) || !EnsureHostID(error)) {
         return nil;
     }
+
+    signal(SIGPIPE, SIG_IGN);
 
     if (!g_keyManager.HaveNetworkKey()) {
         AssignError(error, kClippShareErrorBase + 3, @"No network key is configured. Open Clipp to finish setup.");
@@ -300,20 +327,51 @@ bool SendPayloadsToPeer(const MDNSProtocol::DiscoveredPeer& peer, const std::vec
         return nil;
     }
 
-    NSInteger reachedDevices = 0;
+    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Share extension discovered %zu peer(s).", peers.size());
+
+    std::atomic<int> reachedDevices{ 0 };
+    std::mutex failedPeersMutex;
+    std::vector<std::string> failedPeerNames;
+    std::vector<std::thread> sendThreads;
+    sendThreads.reserve(peers.size());
     for (const MDNSProtocol::DiscoveredPeer& peer : peers) {
-        if (SendPayloadsToPeer(peer, clipboardPayloads)) {
-            ++reachedDevices;
+        sendThreads.emplace_back([&clipboardPayloads, peer, &reachedDevices, &failedPeersMutex, &failedPeerNames]() {
+            if (SendPayloadsToPeer(peer, clipboardPayloads)) {
+                ++reachedDevices;
+            } else {
+                std::lock_guard<std::mutex> lock(failedPeersMutex);
+                failedPeerNames.push_back(peer.hostName);
+            }
+        });
+    }
+
+    for (std::thread& sendThread : sendThreads) {
+        if (sendThread.joinable()) {
+            sendThread.join();
         }
     }
 
-    if (reachedDevices == 0) {
-        AssignError(error, kClippShareErrorBase + 7, @"Trusted devices were found, but none accepted the shared items.");
+    const int reachedDeviceCount = reachedDevices.load();
+    NSMutableArray<NSString*>* failedDeviceNames = [NSMutableArray arrayWithCapacity:failedPeerNames.size()];
+    for (const std::string& failedPeerName : failedPeerNames) {
+        NSString* name = [NSString stringWithUTF8String:failedPeerName.c_str()];
+        [failedDeviceNames addObject:name ?: @"Unknown device"];
+    }
+
+    if (reachedDeviceCount == 0) {
+        if (failedDeviceNames.count > 0) {
+            NSString* failedList = [failedDeviceNames componentsJoinedByString:@", "];
+            AssignError(error, kClippShareErrorBase + 7, [NSString stringWithFormat:@"No trusted devices accepted the shared items. Failed: %@.", failedList]);
+        } else {
+            AssignError(error, kClippShareErrorBase + 7, @"Trusted devices were found, but none accepted the shared items.");
+        }
         return nil;
     }
 
     return [[CLPShareSendResult alloc] initWithSentItemCount:static_cast<NSInteger>(clipboardPayloads.size())
-                                         reachedDeviceCount:reachedDevices];
+                                         reachedDeviceCount:static_cast<NSInteger>(reachedDeviceCount)
+                                        attemptedDeviceCount:static_cast<NSInteger>(peers.size())
+                                           failedDeviceNames:failedDeviceNames];
 }
 
 @end
