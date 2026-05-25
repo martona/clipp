@@ -71,17 +71,28 @@ extern KeyManager g_keyManager;
 @private
     NSTrackingArea* trackingArea_;
     NSButton* copyButton_;
+    NSBox* feedbackBubble_;
+    NSColor* normalFillColor_;
+    NSImage* copyImage_;
+    NSImage* copiedImage_;
     id copyTarget_;
     SEL copyAction_;
     BOOL mouseInside_;
+    BOOL copiedFeedbackVisible_;
+    NSUInteger copiedFeedbackGeneration_;
 }
-- (void)setCopyButton:(NSButton*)button target:(id)target action:(SEL)action;
+- (void)setCopyButton:(NSButton*)button target:(id)target action:(SEL)action bubble:(NSBox*)bubble normalFillColor:(NSColor*)normalFillColor;
+- (void)copyActivityItem:(id)sender;
 @end
 
 @implementation MacOSActivityRowView
 
-- (void)setCopyButton:(NSButton*)button target:(id)target action:(SEL)action {
+- (void)setCopyButton:(NSButton*)button target:(id)target action:(SEL)action bubble:(NSBox*)bubble normalFillColor:(NSColor*)normalFillColor {
     copyButton_ = button;
+    feedbackBubble_ = bubble;
+    normalFillColor_ = [normalFillColor copy];
+    copyImage_ = [button.image copy];
+    copiedImage_ = [MacOSMakeSymbolImage(@"checkmark", CLP_NS(CLP_UI_COPY), 13.0, [NSColor systemGreenColor]) copy];
     copyTarget_ = target;
     copyAction_ = action;
     [self updateCopyButtonVisibility];
@@ -149,21 +160,58 @@ extern KeyManager g_keyManager;
     (void)event;
     NSMenu* menu = [[NSMenu alloc] initWithTitle:@""];
     NSMenuItem* copyItem = [[NSMenuItem alloc] initWithTitle:CLP_NS(CLP_UI_COPY)
-                                                      action:copyAction_
+                                                      action:@selector(copyActivityItem:)
                                                keyEquivalent:@""];
-    copyItem.target = copyTarget_;
+    copyItem.target = self;
     [menu addItem:copyItem];
     return menu;
 }
 
+- (void)copyActivityItem:(id)sender {
+    [self invokeCopy:sender];
+}
+
 - (void)invokeCopy:(id)sender {
+    BOOL didSend = NO;
     if (copyTarget_ != nil && copyAction_ != nullptr) {
-        [NSApp sendAction:copyAction_ to:copyTarget_ from:sender];
+        didSend = [NSApp sendAction:copyAction_ to:copyTarget_ from:sender];
+    }
+
+    if (didSend) {
+        [self showCopiedFeedback];
     }
 }
 
+- (void)showCopiedFeedback {
+    ++copiedFeedbackGeneration_;
+    const NSUInteger generation = copiedFeedbackGeneration_;
+    copiedFeedbackVisible_ = YES;
+
+    copyButton_.image = copiedImage_ != nil ? copiedImage_ : copyImage_;
+    copyButton_.contentTintColor = [NSColor systemGreenColor];
+    copyButton_.alphaValue = 1.0;
+    copyButton_.enabled = YES;
+    if (feedbackBubble_ != nil) {
+        feedbackBubble_.fillColor = [NSColor colorWithCalibratedRed:0.20 green:0.58 blue:0.34 alpha:0.24];
+    }
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.9 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (generation != copiedFeedbackGeneration_) {
+            return;
+        }
+
+        copiedFeedbackVisible_ = NO;
+        copyButton_.image = copyImage_;
+        copyButton_.contentTintColor = [NSColor secondaryLabelColor];
+        if (feedbackBubble_ != nil && normalFillColor_ != nil) {
+            feedbackBubble_.fillColor = normalFillColor_;
+        }
+        [self updateCopyButtonVisibility];
+    });
+}
+
 - (void)updateCopyButtonVisibility {
-    const BOOL visible = mouseInside_ || self.window.firstResponder == self;
+    const BOOL visible = copiedFeedbackVisible_ || mouseInside_ || self.window.firstResponder == self;
     copyButton_.alphaValue = visible ? 1.0 : 0.0;
     copyButton_.enabled = visible;
 }
@@ -331,7 +379,8 @@ NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
     row.toolTip = CLP_NS(CLP_UI_COPY);
 
     NSBox* bubble = MacOSMakeGroupBox();
-    bubble.fillColor = ActivityBubbleColor(isOutgoing);
+    NSColor* bubbleFillColor = ActivityBubbleColor(isOutgoing);
+    bubble.fillColor = bubbleFillColor;
     bubble.cornerRadius = 8.0;
 
     NSStackView* content = [[NSStackView alloc] initWithFrame:NSZeroRect];
@@ -348,8 +397,8 @@ NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
 
     MacOSClippPageTarget* target = [[MacOSClippPageTarget alloc] initWithOwner:this itemID:itemID];
     [activityItemTargets_ addObject:target];
-    NSClickGestureRecognizer* copyGesture = [[NSClickGestureRecognizer alloc] initWithTarget:target
-                                                                                      action:@selector(copyActivityItem:)];
+    NSClickGestureRecognizer* copyGesture = [[NSClickGestureRecognizer alloc] initWithTarget:row
+                                                                                       action:@selector(copyActivityItem:)];
     [row addGestureRecognizer:copyGesture];
 
     NSString* metaText = [NSString stringWithFormat:@"%@ - %@",
@@ -363,11 +412,11 @@ NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
     header.alignment = NSLayoutAttributeCenterY;
     header.spacing = 8.0;
 
-    NSButton* copyButton = MacOSMakeIconButton(@"doc.on.doc", CLP_NS(CLP_UI_COPY), target, @selector(copyActivityItem:));
+    NSButton* copyButton = MacOSMakeIconButton(@"doc.on.doc", CLP_NS(CLP_UI_COPY), row, @selector(copyActivityItem:));
     copyButton.alphaValue = 0.0;
     copyButton.enabled = NO;
     copyButton.refusesFirstResponder = YES;
-    [row setCopyButton:copyButton target:target action:@selector(copyActivityItem:)];
+    [row setCopyButton:copyButton target:target action:@selector(copyActivityItem:) bubble:bubble normalFillColor:bubbleFillColor];
 
     [header addArrangedSubview:meta];
     [header addArrangedSubview:copyButton];
