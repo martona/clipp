@@ -42,7 +42,7 @@
 		3B7E0A012FD2800000C1A001 /* ClippShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ClippShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		3B7E0A032FD2800000C1A001 /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
 		3B7E0A042FD2800000C1A001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		3B7E0A142FD2800000C1A001 /* Clipp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Clipp/Clipp.entitlements; sourceTree = "<group>"; };
+		3B7E0A142FD2800000C1A001 /* Clipp/Clipp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Clipp/Clipp.entitlements; sourceTree = "<group>"; };
 		3B7E0A152FD2800000C1A001 /* ClippShareExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ClippShareExtension.entitlements; sourceTree = "<group>"; };
 		3B7E0A162FD2800000C1A001 /* ClippShareBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = ClippShareBridge.mm; sourceTree = "<group>"; };
 		3B7E0A172FD2800000C1A001 /* ClippShareCore.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = ClippShareCore.mm; sourceTree = "<group>"; };
@@ -79,7 +79,7 @@
 			isa = PBXGroup;
 			children = (
 				3B1C0BBE2FC1725A00D70FBA /* Clipp */,
-				3B7E0A142FD2800000C1A001 /* Clipp.entitlements */,
+				3B7E0A142FD2800000C1A001 /* Clipp/Clipp.entitlements */,
 				3B7E0A022FD2800000C1A001 /* ClippShareExtension */,
 				3B1C0BBD2FC1725A00D70FBA /* Products */,
 			);

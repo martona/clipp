@@ -203,13 +203,8 @@ static id ReadSettingsObject(NSString* key) {
     return nil;
 }
 
-static bool SynchronizeSettingsStores() {
-    bool ok = [GetSettingsStore() synchronize];
-    NSUserDefaults* legacyStore = GetLegacySettingsStore();
-    if (legacyStore != GetSettingsStore()) {
-        ok = [legacyStore synchronize] && ok;
-    }
-    return ok;
+static bool FinishSettingsWrite() {
+    return true;
 }
 }
 
@@ -270,7 +265,7 @@ bool Settings::WriteStringValue(const wchar_t* valueName, const std::string& val
     if (legacyStore != GetSettingsStore()) {
         [legacyStore setObject:stringValue forKey:key];
     }
-    return SynchronizeSettingsStores();
+    return FinishSettingsWrite();
 }
 
 bool Settings::WriteUint32Value(const wchar_t* valueName, int value) {
@@ -284,7 +279,7 @@ bool Settings::WriteUint32Value(const wchar_t* valueName, int value) {
     if (legacyStore != GetSettingsStore()) {
         [legacyStore setInteger:value forKey:key];
     }
-    return SynchronizeSettingsStores();
+    return FinishSettingsWrite();
 }
 
 bool Settings::WriteUint64Value(const wchar_t* valueName, uint64_t value) {
@@ -299,7 +294,7 @@ bool Settings::WriteUint64Value(const wchar_t* valueName, uint64_t value) {
     if (legacyStore != GetSettingsStore()) {
         [legacyStore setObject:numberValue forKey:key];
     }
-    return SynchronizeSettingsStores();
+    return FinishSettingsWrite();
 }
 
 bool Settings::WriteBinaryValue(const wchar_t* valueName, const unsigned char* data, size_t len) {
@@ -318,7 +313,7 @@ bool Settings::WriteBinaryValue(const wchar_t* valueName, const unsigned char* d
     if (legacyStore != GetSettingsStore()) {
         [legacyStore setObject:blob forKey:key];
     }
-    return SynchronizeSettingsStores();
+    return FinishSettingsWrite();
 }
 
 bool Settings::ReadBinaryValue(const wchar_t* valueName, std::vector<unsigned char>& outValue) {
