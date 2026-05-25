@@ -16,7 +16,6 @@
 #include <winrt/Windows.Storage.Streams.h>
 #include <winrt/Windows.System.h>
 #include <winrt/Windows.UI.h>
-#include <winrt/Windows.UI.Input.h>
 #include <winrt/Windows.UI.Text.h>
 #include <winrt/Windows.UI.Xaml.h>
 #include <winrt/Windows.UI.Xaml.Automation.h>
@@ -31,11 +30,8 @@ extern KeyManager g_keyManager;
 
 namespace {
 namespace Automation = winrt::Windows::UI::Xaml::Automation;
-namespace Input = winrt::Windows::UI::Xaml::Input;
 constexpr double kActivityFollowTopTolerance = 48.0;
 constexpr double kActivityBubbleMaxWidth = 460.0;
-constexpr double kActivityWheelScrollDips = 48.0;
-constexpr int kMouseWheelDelta = 120;
 
 winrt::Windows::UI::Xaml::Media::SolidColorBrush MakeBrush(uint8_t alpha, uint8_t red, uint8_t green, uint8_t blue) {
     return winrt::Windows::UI::Xaml::Media::SolidColorBrush(
@@ -119,10 +115,7 @@ void ClippPage::BuildView() {
     root_.HorizontalAlignment(HorizontalAlignment::Stretch);
     root_.VerticalAlignment(VerticalAlignment::Stretch);
 
-    auto activitySection = BuildActivitySection();
-    activitySection.Margin(ThicknessHelper::FromLengths(24, 16, 24, 24));
-
-    root_.Children().Append(activitySection);
+    root_.Children().Append(BuildActivitySection());
 
     uiDispatcher_ = winrt::Windows::System::DispatcherQueue::GetForCurrentThread();
     RefreshActivityItems(activityStore_.Snapshot());
@@ -136,14 +129,10 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivitySection() {
     section.HorizontalAlignment(HorizontalAlignment::Stretch);
     section.VerticalAlignment(VerticalAlignment::Stretch);
 
-    Grid listHost;
-    listHost.HorizontalAlignment(HorizontalAlignment::Stretch);
-    listHost.VerticalAlignment(VerticalAlignment::Stretch);
-
     activityItemsPanel_ = StackPanel();
     activityItemsPanel_.Orientation(Orientation::Vertical);
     activityItemsPanel_.Spacing(12);
-    activityItemsPanel_.Padding(ThicknessHelper::FromLengths(0, 0, 0, 0));
+    activityItemsPanel_.Padding(ThicknessHelper::FromLengths(24, 16, 24, 24));
 
     activityScroll_ = ScrollViewer();
     activityScroll_.HorizontalAlignment(HorizontalAlignment::Stretch);
@@ -151,33 +140,6 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivitySection() {
     activityScroll_.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);
     activityScroll_.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);
     activityScroll_.Content(activityItemsPanel_);
-
-    const auto scrollActivityByWheel = [this](Input::PointerRoutedEventArgs const& args) {
-        if (!activityScroll_) {
-            return;
-        }
-
-        const int delta = args.GetCurrentPoint(activityScroll_).Properties().MouseWheelDelta();
-        if (delta == 0) {
-            return;
-        }
-
-        const double scrollSteps = static_cast<double>(delta) / static_cast<double>(kMouseWheelDelta);
-        const double targetOffset = std::clamp(
-            activityScroll_.VerticalOffset() - scrollSteps * kActivityWheelScrollDips,
-            0.0,
-            activityScroll_.ScrollableHeight());
-        activityScroll_.ChangeView(nullptr, targetOffset, nullptr, true);
-        args.Handled(true);
-    };
-
-    activityScroll_.PointerWheelChanged([scrollActivityByWheel](auto const&, Input::PointerRoutedEventArgs const& args) {
-        scrollActivityByWheel(args);
-    });
-
-    activityItemsPanel_.PointerWheelChanged([scrollActivityByWheel](auto const&, Input::PointerRoutedEventArgs const& args) {
-        scrollActivityByWheel(args);
-    });
 
     activityEmptyState_ = StackPanel();
     activityEmptyState_.Orientation(Orientation::Vertical);
@@ -205,10 +167,8 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivitySection() {
     activityEmptyState_.Children().Append(activityEmptyMessage_);
     activityEmptyState_.Children().Append(activityEmptyNetworkButton_);
 
-    listHost.Children().Append(activityScroll_);
-    listHost.Children().Append(activityEmptyState_);
-
-    section.Children().Append(listHost);
+    section.Children().Append(activityScroll_);
+    section.Children().Append(activityEmptyState_);
     UpdateActivityEmptyState();
     return section;
 }
