@@ -7,6 +7,7 @@
 #include <thread>
 #include <future>
 #include <chrono>
+#include <cerrno>
 #include <cstring>
 #include <string>
 #include <array>
@@ -36,6 +37,16 @@ static HostId g_hostId;
 
 namespace {
     constexpr auto kBroadcastInterval = std::chrono::minutes(1);
+
+    const char* SocketErrorText(int error) {
+#ifdef _WIN32
+        (void)error;
+        return "";
+#else
+        const char* message = std::strerror(error);
+        return message != nullptr ? message : "";
+#endif
+    }
 }
 
 static void RecordOriginatedQueryID(const unsigned char* queryID) {
@@ -100,12 +111,24 @@ static bool SendDiscoveryPacket(SOCKET sock, const sockaddr_in& targetAddr, cons
     const auto sent = sendto(sock, reinterpret_cast<const char*>(&encryptedPacket), sizeof(encryptedPacket), 0,
         reinterpret_cast<const sockaddr*>(&targetAddr), sizeof(targetAddr));
     const bool sentComplete = sent >= 0 && static_cast<size_t>(sent) == sizeof(encryptedPacket);
-    g_logger.log(__FUNCTION__,
-        sentComplete ? Logger::Level::DDebug : Logger::Level::Warning,
-        "mDNS: sent discovery query for host '%s' (%zu bytes, result=%ld).",
-        hostName.c_str(),
-        sizeof(encryptedPacket),
-        static_cast<long>(sent));
+    if (sentComplete) {
+        g_logger.log(__FUNCTION__,
+            Logger::Level::DDebug,
+            "mDNS: sent discovery query for host '%s' (%zu bytes, result=%ld).",
+            hostName.c_str(),
+            sizeof(encryptedPacket),
+            static_cast<long>(sent));
+    } else {
+        const int error = LastSocketError();
+        g_logger.log(__FUNCTION__,
+            Logger::Level::Warning,
+            "mDNS: failed to send discovery query for host '%s' (%zu bytes, result=%ld, errno=%d %s).",
+            hostName.c_str(),
+            sizeof(encryptedPacket),
+            static_cast<long>(sent),
+            error,
+            SocketErrorText(error));
+    }
     return sentComplete;
 }
 
@@ -155,6 +178,7 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
         initPromise.set_value(false);
         return;
     }
+
     if (!g_settings.getHostID(g_hostId)) {
         g_logger.log(__FUNCTION__, Logger::Level::Error, "mDNS: host ID unavailable.");
         closesocket(sock);
@@ -194,7 +218,12 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
     group.imr_multiaddr.s_addr = multicastAddrn.s_addr;
     group.imr_interface.s_addr = listenerAddrn.s_addr;
     if (setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, reinterpret_cast<const char*>(&group), sizeof(group)) == SOCKET_ERROR) {
-        g_logger.log(__FUNCTION__, Logger::Level::Warning, "mDNS: joining multicast group failed; continuing to listen for direct traffic.");
+        const int error = LastSocketError();
+        g_logger.log(__FUNCTION__,
+            Logger::Level::Warning,
+            "mDNS: joining multicast group failed (errno=%d %s); continuing to listen for direct traffic.",
+            error,
+            SocketErrorText(error));
     }
 
     sockaddr_in multicastAddr{};
@@ -306,9 +335,20 @@ static void MDNSThreadProc(std::promise<bool> initPromise, MDNSCallback callback
                 MDNSProtocol::Packet responsePacket = BuildMDNSPacket(localHostName, "response", parsedPacket.queryID.data());
                 MDNSProtocol::EncryptedPacket encryptedResponse{};
                 if (MDNSProtocol::EncryptPacket(responsePacket, encryptedResponse)) {
-                    sendto(sock, reinterpret_cast<const char*>(&encryptedResponse), sizeof(encryptedResponse), 0,
+                    const auto sent = sendto(sock, reinterpret_cast<const char*>(&encryptedResponse), sizeof(encryptedResponse), 0,
                         reinterpret_cast<const sockaddr*>(&fromAddr), sizeof(fromAddr));
-                    g_logger.log(__FUNCTION__, Logger::Level::DDebug, "mDNS: sent discovery response to %s.", senderIpForLog);
+                    if (sent >= 0 && static_cast<size_t>(sent) == sizeof(encryptedResponse)) {
+                        g_logger.log(__FUNCTION__, Logger::Level::DDebug, "mDNS: sent discovery response to %s.", senderIpForLog);
+                    } else {
+                        const int error = LastSocketError();
+                        g_logger.log(__FUNCTION__,
+                            Logger::Level::Warning,
+                            "mDNS: failed to send discovery response to %s (result=%ld, errno=%d %s).",
+                            senderIpForLog,
+                            static_cast<long>(sent),
+                            error,
+                            SocketErrorText(error));
+                    }
                 }
             }
 
