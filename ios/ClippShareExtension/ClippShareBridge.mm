@@ -6,6 +6,7 @@
 #include "../../src/KeyManager.h"
 #include "../../src/LocalPeerName.h"
 #include "../../src/Logger.h"
+#include "../../src/MDNSDiscovery.h"
 #include "../../src/MDNSProtocol.h"
 #include "../../src/Settings.h"
 #include "../../src/platform.h"
@@ -118,16 +119,16 @@ bool PayloadFromSharePayload(CLPSharePayload* sharePayload, ClipboardPayload& pa
     return false;
 }
 
-bool SendPayloadsToPeer(const MDNSProtocol::DiscoveredPeer& peer, const std::vector<ClipboardPayload>& payloads) {
+bool SendPayloadsToPeer(const MDNSDiscovery::DiscoveredPeer& peer, const std::vector<ClipboardPayload>& payloads) {
     g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Share extension connecting to peer %hs at %hs:%hu.",
-        peer.hostName.c_str(),
+        peer.deviceName.c_str(),
         peer.ip.c_str(),
         peer.port);
 
     SOCKET socket = ConnectTcpSocket(peer.ip, peer.port, kConnectWait);
     if (socket == INVALID_SOCKET) {
         g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Share extension failed to connect to peer %hs at %hs:%hu.",
-            peer.hostName.c_str(),
+            peer.deviceName.c_str(),
             peer.ip.c_str(),
             peer.port);
         return false;
@@ -135,7 +136,7 @@ bool SendPayloadsToPeer(const MDNSProtocol::DiscoveredPeer& peer, const std::vec
 
     SocketWakeEvent wakeEvent;
     if (!wakeEvent.Initialize()) {
-        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Share extension failed to initialize send wake socket for peer %hs.", peer.hostName.c_str());
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Share extension failed to initialize send wake socket for peer %hs.", peer.deviceName.c_str());
         closesocket(socket);
         return false;
     }
@@ -147,7 +148,7 @@ bool SendPayloadsToPeer(const MDNSProtocol::DiscoveredPeer& peer, const std::vec
     std::thread deadlineThread([&]() {
         std::unique_lock<std::mutex> lock(deadlineMutex);
         if (!deadlineCV.wait_for(lock, kSendWait, [&]() { return finished; })) {
-            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Share extension send to peer %hs timed out.", peer.hostName.c_str());
+            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Share extension send to peer %hs timed out.", peer.deviceName.c_str());
             stopRequested = true;
             wakeEvent.Signal();
         }
@@ -168,12 +169,12 @@ bool SendPayloadsToPeer(const MDNSProtocol::DiscoveredPeer& peer, const std::vec
         HostId remoteHostID;
         std::string remoteHostName;
         if (!channel.ClientHandshake(io, localHostID, localHostName, remoteHostID, remoteHostName)) {
-            g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Share extension handshake failed for peer %hs.", peer.hostName.c_str());
+            g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Share extension handshake failed for peer %hs.", peer.deviceName.c_str());
             break;
         }
 
-        if (remoteHostID != peer.hostID) {
-            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Share extension peer identity mismatch for %hs.", peer.hostName.c_str());
+        if (remoteHostID != peer.hostId) {
+            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Share extension peer identity mismatch for %hs.", peer.deviceName.c_str());
             break;
         }
 
@@ -182,7 +183,7 @@ bool SendPayloadsToPeer(const MDNSProtocol::DiscoveredPeer& peer, const std::vec
             if (!ClipboardWire::SendClipboardPayload(channel, io, payload)) {
                 g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Share extension failed to send %ls payload to peer %hs.",
                     ClippClipboardFormatNameW(payload.formatId),
-                    peer.hostName.c_str());
+                    peer.deviceName.c_str());
                 sentAll = false;
                 break;
             }
@@ -204,7 +205,7 @@ bool SendPayloadsToPeer(const MDNSProtocol::DiscoveredPeer& peer, const std::vec
     closesocket(socket);
     wakeEvent.Close();
     g_logger.log(__FUNCTION__, sent ? Logger::Level::Debug : Logger::Level::Warning, L"Share extension send to peer %hs %ls.",
-        peer.hostName.c_str(),
+        peer.deviceName.c_str(),
         sent ? L"succeeded" : L"failed");
     return sent;
 }
@@ -314,8 +315,8 @@ bool SendPayloadsToPeer(const MDNSProtocol::DiscoveredPeer& peer, const std::vec
         return nil;
     }
 
-    std::vector<MDNSProtocol::DiscoveredPeer> peers;
-    if (!MDNSProtocol::ProbePeersOnce(kDiscoveryWait, peers)) {
+    std::vector<MDNSDiscovery::DiscoveredPeer> peers;
+    if (!MDNSDiscovery::BrowseOnce(kDiscoveryWait, peers)) {
         AssignError(error, kClippShareErrorBase + 4, @"Unable to start local network discovery.");
         return nil;
     }
@@ -332,13 +333,13 @@ bool SendPayloadsToPeer(const MDNSProtocol::DiscoveredPeer& peer, const std::vec
     std::vector<std::string> failedPeerNames;
     std::vector<std::thread> sendThreads;
     sendThreads.reserve(peers.size());
-    for (const MDNSProtocol::DiscoveredPeer& peer : peers) {
+    for (const MDNSDiscovery::DiscoveredPeer& peer : peers) {
         sendThreads.emplace_back([&clipboardPayloads, peer, &reachedDevices, &failedPeersMutex, &failedPeerNames]() {
             if (SendPayloadsToPeer(peer, clipboardPayloads)) {
                 ++reachedDevices;
             } else {
                 std::lock_guard<std::mutex> lock(failedPeersMutex);
-                failedPeerNames.push_back(peer.hostName);
+                failedPeerNames.push_back(peer.deviceName);
             }
         });
     }

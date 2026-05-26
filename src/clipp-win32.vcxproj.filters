@@ -33,7 +33,7 @@
     <ClCompile Include="MDNSProtocol.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="MDNSThread.cpp">
+    <ClCompile Include="MDNSDiscovery_Win32.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="KeyManager.cpp">
@@ -107,10 +107,13 @@
     <ClInclude Include="Settings.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="MDNSThread.h">
+    <ClInclude Include="MDNSDiscovery.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="MDNSProtocol.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="OsType.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="KeyManager.h">

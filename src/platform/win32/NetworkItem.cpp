@@ -171,6 +171,7 @@ NetworkItemView::NetworkItemView(const PeerDisplayItem& item) {
     UpdateHostID(item.hostID);
     UpdateIncomingConnection(item.hasIncomingConnection);
     UpdateOutgoingConnection(item.hasOutgoingConnection);
+    UpdateOutgoingConnState(item.outgoingConnState);
     UpdateBytesSent(item.bytesSent);
     UpdateBytesReceived(item.bytesReceived);
     UpdateConnectedSince(item.connectedSince);
@@ -189,13 +190,34 @@ void NetworkItemView::UpdateHostID(const HostId& hostID) {
 }
 
 void NetworkItemView::UpdateIncomingConnection(bool connected) {
+    hasIncoming_ = connected;
     inIcon_.Visibility(connected ? winrt::Windows::UI::Xaml::Visibility::Visible : winrt::Windows::UI::Xaml::Visibility::Collapsed);
     incomingValue_.Text(FormatConnectionState(connected));
+    RefreshConnectedFor();
 }
 
 void NetworkItemView::UpdateOutgoingConnection(bool connected) {
     outIcon_.Visibility(connected ? winrt::Windows::UI::Xaml::Visibility::Visible : winrt::Windows::UI::Xaml::Visibility::Collapsed);
     outgoingValue_.Text(FormatConnectionState(connected));
+}
+
+void NetworkItemView::UpdateOutgoingConnState(PeerConnState state) {
+    outgoingState_ = state;
+    using winrt::Windows::UI::Colors;
+    using winrt::Windows::UI::Xaml::Media::SolidColorBrush;
+    switch (state) {
+    case PeerConnState::Connecting:
+        outIcon_.Foreground(SolidColorBrush(Colors::Gray()));
+        break;
+    case PeerConnState::Connected:
+        outIcon_.Foreground(SolidColorBrush(Colors::DeepSkyBlue()));
+        break;
+    case PeerConnState::Backoff:
+    case PeerConnState::Failed:
+        outIcon_.Foreground(SolidColorBrush(Colors::OrangeRed()));
+        break;
+    }
+    RefreshConnectedFor();
 }
 
 void NetworkItemView::UpdateBytesSent(uint64_t bytesSent) {
@@ -213,7 +235,25 @@ void NetworkItemView::UpdateConnectedSince(std::chrono::steady_clock::time_point
 }
 
 void NetworkItemView::RefreshConnectedFor(std::chrono::steady_clock::time_point now) {
-    const auto text = FormatConnectedFor(connectedSince_, now);
+    std::wstring text;
+    switch (outgoingState_) {
+    case PeerConnState::Connecting:
+        text = L"Connecting…";
+        break;
+    case PeerConnState::Backoff:
+        text = L"Reconnecting…";
+        break;
+    case PeerConnState::Failed:
+        text = L"Connection failed";
+        break;
+    case PeerConnState::Connected:
+        text = FormatConnectedFor(connectedSince_, now);
+        if (!hasIncoming_) {
+            // Outgoing works; inbound doesn't — likely firewall/NAT on our side.
+            text += L"  ·  no inbound";
+        }
+        break;
+    }
     if (text != connectedForText_) {
         connectedForText_ = text;
         subtitle_.Text(text);

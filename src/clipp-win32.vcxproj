@@ -181,10 +181,10 @@
     <ClCompile Include="CryptoChannel.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="MDNSProtocol.cpp" />
+    <ClCompile Include="MDNSDiscovery_Win32.cpp" />
     <ClCompile Include="NetworkRuntime.cpp" />
     <ClCompile Include="platform\win32\Clipboard.cpp" />
     <ClCompile Include="platform\win32\AutoStart.cpp" />
-    <ClCompile Include="MDNSThread.cpp" />
     <ClCompile Include="KeyManager.cpp" />
     <ClCompile Include="Logger.cpp" />
     <ClCompile Include="Peer.cpp" />
@@ -226,8 +226,9 @@
     <ClInclude Include="platform\win32\LogsPage.h" />
     <ClInclude Include="platform\win32\AboutPage.h" />
     <ClInclude Include="platform\win32\xaml_dialog.h" />
-    <ClInclude Include="MDNSThread.h" />
+    <ClInclude Include="MDNSDiscovery.h" />
     <ClInclude Include="MDNSProtocol.h" />
+    <ClInclude Include="OsType.h" />
     <ClInclude Include="KeyManager.h" />
     <ClInclude Include="Logger.h" />
     <ClInclude Include="NetworkDefs.h" />

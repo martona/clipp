@@ -1,68 +1,57 @@
 #pragma once
 
 #include "HostId.h"
+#include "OsType.h"
 #include "platform.h"
 
-#include <sodium.h>
-
 #include <array>
-#include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
+#include <map>
 #include <string>
-#include <vector>
 
 namespace MDNSProtocol {
 
-static constexpr std::size_t QueryIDSize = 32;
+constexpr uint32_t kPacketMagic = 0x434C4950; // 'CLIP'
+constexpr uint16_t kPacketVersion = 1;
 
-struct Packet {
-    Packet() {
-        std::memset(this, 0, sizeof(*this));
-    }
-
-    char selector[16];
-    u_short version;
-    char hostName[256];
-    unsigned char hostID[HostId::kSize];
-    u_short port;
-    char verb[16];
-    unsigned char queryID[QueryIDSize];
-    unsigned char nonce[32];
+// Plaintext payload that goes inside the encrypted TXT blob.
+// 100 bytes; secretbox-wrapped to 140 (24 nonce + 16 MAC + 100 cipher); base64 to 188 chars.
+// Comfortably fits in a single DNS TXT key=value sub-string.
+#pragma pack(push, 1)
+struct PacketV1 {
+    uint32_t magic;             // host-order kPacketMagic; sanity-check after decrypt
+    uint16_t version;           // network-order kPacketVersion
+    uint16_t flags;             // network-order; reserved (0)
+    uint16_t osType;            // network-order OsType
+    uint16_t pad;               // alignment
+    uint8_t  hostId[HostId::kSize];
+    uint8_t  caps[8];           // capability bits (currently unused; ship populated as 0)
+    char     deviceName[64];    // UTF-8, zero-padded
 };
+#pragma pack(pop)
 
-struct EncryptedPacket {
-    unsigned char nonce[crypto_secretbox_NONCEBYTES];
-    unsigned char ciphertext[sizeof(Packet) + crypto_secretbox_MACBYTES];
-};
+static_assert(sizeof(PacketV1) == 100, "PacketV1 must be 100 bytes for wire compat");
 
-struct ParsedPacket {
-    std::string hostName;
-    std::string verb;
-    std::string queryIDHex;
-    std::string nonceHex;
-    std::array<unsigned char, QueryIDSize> queryID{};
-    HostId remoteHostID;
-    unsigned short port = 0;
-};
+// Builds a freshly-populated packet describing the local host.
+PacketV1 BuildLocalPacket(const std::string& deviceName, const HostId& hostId, OsType osType);
 
-struct DiscoveredPeer {
-    std::string hostName;
-    std::string ip;
-    HostId hostID;
-    unsigned short port = 0;
-};
+// TXT record key/value pairs.
+//   "v" -> "1"                  plaintext protocol version (lets peers skip unknown versions cheaply)
+//   "d" -> base64(nonce||MAC||cipher)   encrypted PacketV1
+constexpr const char* kTxtKeyVersion = "v";
+constexpr const char* kTxtKeyData = "d";
 
-Packet BuildPacket(const std::string& hostName,
-                   const HostId& hostID,
-                   unsigned short port,
-                   const char* verb,
-                   const unsigned char* queryID = nullptr);
-bool EncryptPacket(const Packet& packet, EncryptedPacket& encryptedPacket);
-bool DecryptPacket(const char* packet, size_t packetLen, Packet& decryptedPacket);
-bool ParsePacket(Packet& packet, ParsedPacket& parsedPacket);
-std::string GetLocalHostName(const char* fallback = "unknown");
-bool AddUniquePeer(std::vector<DiscoveredPeer>& peers, DiscoveredPeer peer);
-bool ProbePeersOnce(std::chrono::milliseconds wait, std::vector<DiscoveredPeer>& peers);
+// Encode: encrypts packet under the discovery network key and writes v/d into outTxt.
+// Returns false if the network key is unavailable or encryption fails.
+bool EncodeTxt(const PacketV1& packet, std::map<std::string, std::string>& outTxt);
 
-}
+// Decode: looks up v/d in txt, validates v == 1, base64-decodes d, decrypts under the
+// network key, validates magic + version inside the plaintext. Returns false on any failure.
+bool DecodeTxt(const std::map<std::string, std::string>& txt, PacketV1& outPacket);
+
+// Returns the local device name, suitable for the deviceName field.
+std::string GetLocalDeviceName();
+
+} // namespace MDNSProtocol

@@ -123,6 +123,9 @@ void NetworkView::UpdateEntry(Entry& entry, const PeerDisplayItem& item, std::ch
     if (entry.item.hasOutgoingConnection != item.hasOutgoingConnection) {
         entry.view->UpdateOutgoingConnection(item.hasOutgoingConnection);
     }
+    if (entry.item.outgoingConnState != item.outgoingConnState) {
+        entry.view->UpdateOutgoingConnState(item.outgoingConnState);
+    }
     if (entry.item.bytesSent != item.bytesSent) {
         entry.view->UpdateBytesSent(item.bytesSent);
     }

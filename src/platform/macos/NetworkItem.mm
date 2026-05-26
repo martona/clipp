@@ -39,6 +39,7 @@ MacOSNetworkItemView::MacOSNetworkItemView(const PeerDisplayItem& item)
     UpdateHostName(item.hostName);
     UpdateIncomingConnection(item.hasIncomingConnection);
     UpdateOutgoingConnection(item.hasOutgoingConnection);
+    UpdateOutgoingConnState(item.outgoingConnState);
     UpdateBytesSent(item.bytesSent);
     UpdateBytesReceived(item.bytesReceived);
     UpdateConnectedSince(item.connectedSince);
@@ -66,13 +67,34 @@ void MacOSNetworkItemView::UpdateHostID(const HostId&) {
 }
 
 void MacOSNetworkItemView::UpdateIncomingConnection(bool connected) {
+    hasIncoming_ = connected;
     incomingIcon_.hidden = !connected;
     MacOSSetFieldText(incomingValue_, FormatConnectionState(connected));
+    RefreshConnectedFor();
 }
 
 void MacOSNetworkItemView::UpdateOutgoingConnection(bool connected) {
     outgoingIcon_.hidden = !connected;
     MacOSSetFieldText(outgoingValue_, FormatConnectionState(connected));
+}
+
+void MacOSNetworkItemView::UpdateOutgoingConnState(PeerConnState state) {
+    outgoingState_ = state;
+    NSColor* tint = nil;
+    switch (state) {
+    case PeerConnState::Connecting:
+        tint = [NSColor secondaryLabelColor];
+        break;
+    case PeerConnState::Connected:
+        tint = [NSColor systemBlueColor];
+        break;
+    case PeerConnState::Backoff:
+    case PeerConnState::Failed:
+        tint = [NSColor systemRedColor];
+        break;
+    }
+    outgoingIcon_.contentTintColor = tint;
+    RefreshConnectedFor();
 }
 
 void MacOSNetworkItemView::UpdateBytesSent(uint64_t bytesSent) {
@@ -90,7 +112,24 @@ void MacOSNetworkItemView::UpdateConnectedSince(std::chrono::steady_clock::time_
 }
 
 void MacOSNetworkItemView::RefreshConnectedFor(std::chrono::steady_clock::time_point now) {
-    const std::string text = uiClippPage::FormatConnectedFor(connectedSince_, now);
+    std::string text;
+    switch (outgoingState_) {
+    case PeerConnState::Connecting:
+        text = "Connecting\xE2\x80\xA6"; // ellipsis
+        break;
+    case PeerConnState::Backoff:
+        text = "Reconnecting\xE2\x80\xA6";
+        break;
+    case PeerConnState::Failed:
+        text = "Connection failed";
+        break;
+    case PeerConnState::Connected:
+        text = uiClippPage::FormatConnectedFor(connectedSince_, now);
+        if (!hasIncoming_) {
+            text += "  \xC2\xB7  no inbound";
+        }
+        break;
+    }
     if (connectedForText_ != text) {
         connectedForText_ = text;
         MacOSSetFieldText(subtitle_, MacOSToNSString(text));

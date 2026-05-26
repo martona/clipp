@@ -1,7 +1,7 @@
 #include "NetworkRuntime.h"
 
 #include "Logger.h"
-#include "MDNSThread.h"
+#include "MDNSDiscovery.h"
 #include "PeerManager.h"
 #include "Settings.h"
 #include "utils.h"
@@ -76,10 +76,10 @@ void NetworkRuntime::ThreadProc() {
     bool mdnsStarted = false;
     bool listenerStarted = false;
 
-    if (StartMDNS(&NetworkRuntime::OnMDNSNotification)) {
+    if (MDNSDiscovery::Start(&NetworkRuntime::OnDiscoveryEvent)) {
         mdnsStarted = true;
     } else {
-        g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to start mDNS thread!");
+        g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to start DNS-SD discovery!");
     }
 
     if (listener_.Start()) {
@@ -102,8 +102,8 @@ void NetworkRuntime::ThreadProc() {
     }
 
     if (mdnsStarted) {
-        StopMDNS();
-        g_logger.log(__FUNCTION__, Logger::Level::Info, "mDNS stopped.");
+        MDNSDiscovery::Stop();
+        g_logger.log(__FUNCTION__, Logger::Level::Info, "DNS-SD discovery stopped.");
     }
 
     g_peerManager.ClearPeers();
@@ -129,38 +129,29 @@ void NetworkRuntime::OnClipboardReceived(const std::wstring& hostName, const Hos
 #endif
 }
 
-void NetworkRuntime::OnMDNSNotification(const char* hostNameUtf8,
-                                        const char* senderIp,
-                                        const char* queryID,
-                                        const char* nonce,
-                                        const char* verb,
-                                        unsigned short port,
-                                        const HostId& remoteHostId)
-{
-    HostId ourHostId;
-    if (!g_settings.getHostID(ourHostId)) {
-        g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to get host ID from settings during mDNS notification handling.");
+void NetworkRuntime::OnDiscoveryEvent(MDNSDiscovery::Event event, const MDNSDiscovery::DiscoveredPeer& peer) {
+    if (event == MDNSDiscovery::Event::Removed) {
+        g_logger.log(__FUNCTION__, Logger::Level::Debug,
+            "DNS-SD: peer removed (%s).", peer.deviceName.c_str());
+        g_peerManager.RemoveOutgoingPeer(peer.hostId);
         return;
     }
 
-    g_logger.log(__FUNCTION__, Logger::Level::DDebug,
-        "mDNS notification received for host: %s / %s\n  from: %s:%hu\n  verb:    %s\n  queryID: %s\n  nonce:   %s",
-        hostNameUtf8, remoteHostId.ToHexString().c_str(), senderIp, port, verb, queryID, nonce);
+    // Added.
+    g_logger.log(__FUNCTION__, Logger::Level::Debug,
+        "DNS-SD: peer added '%s' / %s at %s:%hu (osType=%u).",
+        peer.deviceName.c_str(),
+        peer.hostId.ToHexString().c_str(),
+        peer.ip.c_str(),
+        peer.port,
+        static_cast<unsigned>(peer.osType));
 
-    if (ourHostId == remoteHostId) {
-        g_logger.log(__FUNCTION__, Logger::Level::DDebug, "mDNS notification is from self; ignoring");
+    if (peer.port == 0) {
+        g_logger.log(__FUNCTION__, Logger::Level::DDebug, "DNS-SD: peer advertises no TCP port; skipping.");
         return;
     }
 
-    if (port == 0) {
-        g_logger.log(__FUNCTION__, Logger::Level::DDebug, "mDNS notification has no TCP listener port; not adding a peer.");
-        return;
-    }
-
-    size_t hostNameWLen = utf8_to_utf16(hostNameUtf8, strlen(hostNameUtf8), nullptr, 0);
-    std::wstring hostNameW(hostNameWLen, L'\0');
-    if (hostNameWLen > 0) {
-        utf8_to_utf16(hostNameUtf8, strlen(hostNameUtf8), hostNameW.data(), hostNameW.size());
-    }
-    g_peerManager.AddPeer(hostNameW.c_str(), remoteHostId, Utf8ToWideString(senderIp).c_str(), port);
+    const std::wstring hostNameW = Utf8ToWideString(peer.deviceName);
+    const std::wstring ipW = Utf8ToWideString(peer.ip);
+    g_peerManager.AddPeer(hostNameW.c_str(), peer.hostId, ipW.c_str(), peer.port);
 }

@@ -7,7 +7,7 @@
 #include "../../../src/ClipboardHashGuard.h"
 #include "../../../src/KeyManager.h"
 #include "../../../src/Logger.h"
-#include "../../../src/MDNSThread.h"
+#include "../../../src/MDNSDiscovery.h"
 #include "../../../src/NetworkRuntime.h"
 #include "../../../src/PeerDisplay.h"
 #include "../../../src/PeerManager.h"

@@ -6,6 +6,7 @@
 #include <thread>
 
 #include "Listener.h"
+#include "MDNSDiscovery.h"
 
 class NetworkRuntime {
 public:
@@ -23,13 +24,7 @@ private:
     void ThreadProc();
     void OnClipboardReceived(const std::wstring& hostName, const HostId& hostID, ClipboardPayload& payload);
 
-    static void OnMDNSNotification(const char* hostNameUtf8,
-                                   const char* senderIp,
-                                   const char* queryID,
-                                   const char* nonce,
-                                   const char* verb,
-                                   unsigned short port,
-                                   const HostId& remoteHostId);
+    static void OnDiscoveryEvent(MDNSDiscovery::Event event, const MDNSDiscovery::DiscoveredPeer& peer);
 
     Listener listener_;
     std::thread thread_;
