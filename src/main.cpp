@@ -203,7 +203,7 @@ void OnClipboardNotification(PlatformWindowHandle hwnd) {
     }
     HostId localHostId;
     g_settings.getHostID(localHostId);  // zero-init HostId on failure is fine for the activity record
-    ClipboardWire::FinalizeOutgoingPayload(clipboardData, localHostId);
+    clipboardData.StampOrigin(localHostId, g_settings.nextOriginSequenceNumber());
     auto payload = std::make_shared<const ClipboardPayload>(std::move(clipboardData));
     g_clipboardActivityStore.AddOutgoing(CLP_W(CLP_UI_THIS_DEVICE), payload);
     g_peerManager.BroadcastClipboard(payload);

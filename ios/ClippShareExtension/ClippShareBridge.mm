@@ -311,7 +311,7 @@ bool SendPayloadsToPeer(const MDNSDiscovery::DiscoveredPeer& peer, const std::ve
     for (CLPSharePayload* payload in payloads) {
         ClipboardPayload clipboardPayload{};
         if (PayloadFromSharePayload(payload, clipboardPayload)) {
-            ClipboardWire::FinalizeOutgoingPayload(clipboardPayload, localHostId);
+            clipboardPayload.StampOrigin(localHostId, g_settings.nextOriginSequenceNumber());
             clipboardPayloads.push_back(std::move(clipboardPayload));
         }
     }

@@ -17,15 +17,6 @@ constexpr size_t kFrameLimitBytes = 64u * 1024u * 1024u;
 constexpr size_t kMaxEncodedPayloadBytes = kFrameLimitBytes - kFrameOverhead;
 }
 
-void FinalizeOutgoingPayload(ClipboardPayload& payload, const HostId& originHostId) {
-    // Hash / hashAlg / sizes / isCompressed are filled by SetUncompressedBytes.
-    // This call only stamps the origin identity — and later, timestamp /
-    // sequence number when those go live.
-    std::memcpy(payload.meta.originHostId,
-                originHostId.data().data(),
-                sizeof(payload.meta.originHostId));
-}
-
 bool SendClipboardPayload(CryptoChannel& channel,
                           const SocketIoContext& io,
                           const ClipboardPayload& payload,

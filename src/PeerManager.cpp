@@ -122,3 +122,17 @@ void PeerManager::BroadcastClipboard(std::shared_ptr<const ClipboardPayload> pay
 		peer->PushMessage(payload);
 	}
 }
+
+bool PeerManager::OnIncomingPeerEstablished() {
+	std::lock_guard<std::mutex> lock(incomingCountMutex_);
+	const bool isFirst = (establishedIncomingCount_ == 0);
+	++establishedIncomingCount_;
+	return isFirst;
+}
+
+void PeerManager::OnIncomingPeerLeft() {
+	std::lock_guard<std::mutex> lock(incomingCountMutex_);
+	if (establishedIncomingCount_ > 0) {
+		--establishedIncomingCount_;
+	}
+}

@@ -13,6 +13,8 @@ namespace {
     constexpr wchar_t kClipboardHistoryMemoryLimitBytesName[] = L"ClipboardHistoryMemoryLimitBytes";
     constexpr wchar_t kClipboardHistoryMaxAgeSecondsName[] = L"ClipboardHistoryMaxAgeSeconds";
     constexpr wchar_t kClipboardHistoryMaxItemsName[] = L"ClipboardHistoryMaxItems";
+    constexpr wchar_t kClipboardSyncMaxItemsName[] = L"ClipboardSyncMaxItems";
+    constexpr wchar_t kOriginSequenceFloorName[] = L"OriginSequenceFloor";
     constexpr wchar_t kEncryptedNetworkKeyName[] = L"EncryptedNetworkKey";
     constexpr wchar_t kHostIDName[] = L"HostID";
 
@@ -56,7 +58,8 @@ Settings::Settings()
       networkName_(GetDefaultNetworkName()),
       clipboardHistoryMemoryLimitBytes_(DefaultClipboardHistoryMemoryLimitBytes),
       clipboardHistoryMaxAgeSeconds_(DefaultClipboardHistoryMaxAgeSeconds),
-      clipboardHistoryMaxItems_(DefaultClipboardHistoryMaxItems) {
+      clipboardHistoryMaxItems_(DefaultClipboardHistoryMaxItems),
+      clipboardSyncMaxItems_(DefaultClipboardSyncMaxItems) {
     LoadCache();
 }
 
@@ -98,6 +101,11 @@ uint64_t Settings::clipboardHistoryMaxAgeSeconds() const {
 uint64_t Settings::clipboardHistoryMaxItems() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return clipboardHistoryMaxItems_;
+}
+
+uint64_t Settings::clipboardSyncMaxItems() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return clipboardSyncMaxItems_;
 }
 
 bool Settings::set_multicastIp(const std::string& value) {
@@ -184,6 +192,28 @@ bool Settings::set_clipboardHistoryMaxItems(uint64_t value) {
     return true;
 }
 
+bool Settings::set_clipboardSyncMaxItems(uint64_t value) {
+    if (!WriteUint64Value(kClipboardSyncMaxItemsName, value)) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    clipboardSyncMaxItems_ = value;
+    return true;
+}
+
+uint64_t Settings::nextOriginSequenceNumber() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const uint64_t next = ++originSequenceCounter_;
+    if (next >= originSequencePersistedFloor_) {
+        // Burn through one batch and persist the new ceiling. If we crash before
+        // the next batch boundary we lose the unused tail, but the next session
+        // starts above it — no collision.
+        originSequencePersistedFloor_ = next + OriginSequenceBatchSize;
+        WriteUint64Value(kOriginSequenceFloorName, originSequencePersistedFloor_);
+    }
+    return next;
+}
+
 bool Settings::setEncryptedNetworkKey(const std::vector<unsigned char>& value) {
     return WriteBinaryValue(kEncryptedNetworkKeyName, value.data(), value.size());
 }
@@ -225,6 +255,8 @@ bool Settings::LoadCache() {
     uint64_t clipboardHistoryMemoryLimitBytes = DefaultClipboardHistoryMemoryLimitBytes;
     uint64_t clipboardHistoryMaxAgeSeconds = DefaultClipboardHistoryMaxAgeSeconds;
     uint64_t clipboardHistoryMaxItems = DefaultClipboardHistoryMaxItems;
+    uint64_t clipboardSyncMaxItems = DefaultClipboardSyncMaxItems;
+    uint64_t originSequenceFloor = 0;
 
     if (ReadStringValue(kListenerIpName, ip) && IsValidListenerIp(ip)) {
         listenerIp_ = ip;
@@ -250,6 +282,16 @@ bool Settings::LoadCache() {
     if (ReadUint64Value(kClipboardHistoryMaxItemsName, clipboardHistoryMaxItems)) {
         clipboardHistoryMaxItems_ = clipboardHistoryMaxItems;
     }
+    if (ReadUint64Value(kClipboardSyncMaxItemsName, clipboardSyncMaxItems)) {
+        clipboardSyncMaxItems_ = clipboardSyncMaxItems;
+    }
+
+    // Origin sequence counter: load the persisted floor (the value the previous
+    // session reserved through). Start the in-memory counter from there so we
+    // never reissue numbers from a crashed session.
+    ReadUint64Value(kOriginSequenceFloorName, originSequenceFloor);
+    originSequenceCounter_ = originSequenceFloor;
+    originSequencePersistedFloor_ = originSequenceFloor;
 
     return true;
 }

@@ -3,6 +3,7 @@
 #include "platform.h"
 #include "ClipboardPayload.h"
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -76,6 +77,19 @@ public:
     std::vector<ClipboardActivityItemHeader> Snapshot();
     std::optional<ClipboardActivityDisplayItem> DisplayItem(uint64_t itemID) const;
     std::shared_ptr<const ClipboardPayload> PayloadReference(uint64_t itemID) const;
+
+    // The eventGuid of the most recent (highest meta.timestamp) item, or all
+    // zeros if empty. Used by the sync-recovery requester to say "send me
+    // everything you have after this point."
+    std::array<uint8_t, 16> TailEventGuid() const;
+
+    // Returns up to maxItems payloads strictly after the item identified by
+    // fromGuid, in chronological order (oldest first), ready to be replayed as
+    // sync items. If fromGuid is all zeros or not present in the store, returns
+    // the most recent maxItems items instead (treating the requester as having
+    // no anchor and falling back to "send me whatever you have").
+    std::vector<std::shared_ptr<const ClipboardPayload>> ItemsSince(
+        const std::array<uint8_t, 16>& fromGuid, uint64_t maxItems) const;
     bool Remove(uint64_t itemID);
     void Clear();
 
@@ -116,3 +130,5 @@ private:
     uint64_t nextItemID_{ 1 };
     std::size_t nextWatcherID_{ 1 };
 };
+
+extern ClipboardActivityStore g_clipboardActivityStore;

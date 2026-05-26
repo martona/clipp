@@ -4,6 +4,8 @@
 #include "utils.h"
 
 #include <algorithm>
+#include <array>
+#include <cstring>
 #include <cwctype>
 #include <limits>
 #include <memory>
@@ -333,6 +335,22 @@ uint64_t ClipboardActivityStore::AddItem(ClipboardActivityDirection direction, c
     {
         std::lock_guard<std::mutex> lock(mutex_);
 
+        // Dedup by eventGuid. Same content from two peers, or our own event
+        // bouncing back via sync, should result in a single stored item. An
+        // all-zero GUID means "no GUID was assigned" (legacy / unstamped) —
+        // skip dedup in that case since all such items would falsely collide.
+        const auto& guid = payload->meta.eventGuid;
+        const bool guidIsZero = std::all_of(std::begin(guid), std::end(guid),
+            [](uint8_t b) { return b == 0; });
+        if (!guidIsZero) {
+            for (const auto& existing : items_) {
+                if (existing.payload &&
+                    std::memcmp(existing.payload->meta.eventGuid, guid, sizeof(guid)) == 0) {
+                    return existing.header.id;
+                }
+            }
+        }
+
         Item item;
         item.header.id = nextItemID_++;
         item.header.direction = direction;
@@ -346,7 +364,15 @@ uint64_t ClipboardActivityStore::AddItem(ClipboardActivityDirection direction, c
             itemID,
         });
 
-        items_.push_back(std::move(item));
+        // Insert in ascending order of meta.timestamp so the stream reads
+        // chronologically without the UI having to sort. Live items sit at the
+        // tail (newest first in display), sync-replayed historical items slot
+        // into their true position.
+        const auto pos = std::lower_bound(items_.begin(), items_.end(), item,
+            [](const Item& a, const Item& b) {
+                return a.payload->meta.timestamp < b.payload->meta.timestamp;
+            });
+        items_.insert(pos, std::move(item));
         ApplyLimitsLocked(std::chrono::system_clock::now(), updates);
         watchers = watchers_;
     }
@@ -354,6 +380,65 @@ uint64_t ClipboardActivityStore::AddItem(ClipboardActivityDirection direction, c
     NotifyWatchers(watchers, updates);
 
     return itemID;
+}
+
+std::array<uint8_t, 16> ClipboardActivityStore::TailEventGuid() const {
+    std::array<uint8_t, 16> result{};
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (items_.empty() || !items_.back().payload) {
+        return result;
+    }
+    std::memcpy(result.data(), items_.back().payload->meta.eventGuid, result.size());
+    return result;
+}
+
+std::vector<std::shared_ptr<const ClipboardPayload>> ClipboardActivityStore::ItemsSince(
+    const std::array<uint8_t, 16>& fromGuid, uint64_t maxItems) const
+{
+    std::vector<std::shared_ptr<const ClipboardPayload>> result;
+    if (maxItems == 0) {
+        return result;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (items_.empty()) {
+        return result;
+    }
+
+    const bool guidIsZero = std::all_of(fromGuid.begin(), fromGuid.end(),
+        [](uint8_t b) { return b == 0; });
+
+    // Default starting index — used when fromGuid is zero/missing. Return the
+    // most recent maxItems items (the tail of the store).
+    size_t startIndex = 0;
+    if (items_.size() > maxItems) {
+        startIndex = items_.size() - static_cast<size_t>(maxItems);
+    }
+
+    if (!guidIsZero) {
+        // Find fromGuid in the store. If present, start just after it. If not
+        // present (peer's tail isn't in our window — maybe we evicted it, or we
+        // never had it), fall through to "most recent N" behavior.
+        for (size_t i = 0; i < items_.size(); ++i) {
+            const auto& existing = items_[i];
+            if (existing.payload &&
+                std::memcmp(existing.payload->meta.eventGuid,
+                            fromGuid.data(), fromGuid.size()) == 0) {
+                startIndex = i + 1;
+                break;
+            }
+        }
+    }
+
+    result.reserve(items_.size() - startIndex);
+    for (size_t i = startIndex;
+         i < items_.size() && result.size() < static_cast<size_t>(maxItems);
+         ++i) {
+        if (items_[i].payload) {
+            result.push_back(items_[i].payload);
+        }
+    }
+    return result;
 }
 
 void ClipboardActivityStore::ApplyLimitsLocked(

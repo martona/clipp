@@ -56,10 +56,17 @@ std::once_flag g_foregroundObserverOnce;
 id g_foregroundObserver = nil;
 std::size_t g_clipboardActivityWatcherID = 0;
 std::size_t g_networkPeerWatcherID = 0;
-ClipboardActivityStore g_clipboardActivityStore;
 ClipboardHashGuard g_clipboardHashGuard;
 TerminalLogBuffer g_diagnosticLogBuffer;
 std::vector<std::wstring> g_diagnosticLogPendingLines;
+}
+
+// File-scope definition — must match the extern declaration in
+// ClipboardActivityStore.h so Peer.cpp / NetworkRuntime.cpp on iOS link
+// against the same symbol we define here, not an anonymous-namespace duplicate.
+ClipboardActivityStore g_clipboardActivityStore;
+
+namespace {
 
 NSError* MakeError(NSInteger code, NSString* message) {
     return [NSError errorWithDomain:@"net.clipp.ios.network-key"
@@ -346,13 +353,6 @@ NSString* ActivityIdentifier(uint64_t itemID) {
     return [NSString stringWithFormat:@"%llu", static_cast<unsigned long long>(itemID)];
 }
 
-NSData* DataFromBytes(const std::vector<unsigned char>& bytes) {
-    if (bytes.empty()) {
-        return nil;
-    }
-    return [NSData dataWithBytes:bytes.data() length:bytes.size()];
-}
-
 NSData* DataFromImageBytes(const std::shared_ptr<const std::vector<unsigned char>>& bytes) {
     if (!bytes || bytes->empty()) {
         return nil;
@@ -549,7 +549,10 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, std::shared_ptr
             return;
         }
 
-        if (!g_clipboardHashGuard.AcceptCurrent(*payload)) {
+        const bool isReplay = (payload->meta.flags & NetworkDefs::CLPM_FLAG_SYNC_REPLAY) != 0;
+        // Sync-replay events are historical; they shouldn't update the "current
+        // clipboard" guard. Live events keep their dedup behavior.
+        if (!isReplay && !g_clipboardHashGuard.AcceptCurrent(*payload)) {
             g_logger.log("iOS", Logger::Level::Debug, L"Ignoring duplicate incoming clipboard payload.");
             return;
         }
@@ -708,7 +711,7 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, std::shared_ptr
     g_clipboardHashGuard.RememberCurrent(payload);
     HostId localHostId;
     g_settings.getHostID(localHostId);
-    ClipboardWire::FinalizeOutgoingPayload(payload, localHostId);
+    payload.StampOrigin(localHostId, g_settings.nextOriginSequenceNumber());
     auto sharedPayload = std::make_shared<const ClipboardPayload>(std::move(payload));
     const uint64_t activityItemID = g_clipboardActivityStore.AddOutgoing(L"This iPhone", sharedPayload);
     g_peerManager.BroadcastClipboard(sharedPayload);

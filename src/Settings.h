@@ -18,6 +18,11 @@ public:
     static constexpr uint64_t DefaultClipboardHistoryMemoryLimitBytes = 256ull * 1024ull * 1024ull;
     static constexpr uint64_t DefaultClipboardHistoryMaxAgeSeconds = 24ull * 60ull * 60ull;
     static constexpr uint64_t DefaultClipboardHistoryMaxItems = 1000;
+    static constexpr uint64_t DefaultClipboardSyncMaxItems = 30;
+    // How many sequence numbers to reserve ahead of the in-memory counter and
+    // persist on every flush. A crash loses at most this many numbers; the next
+    // session resumes above them, avoiding any collision with the prior session.
+    static constexpr uint64_t OriginSequenceBatchSize = 500;
 
     Settings();
 
@@ -33,6 +38,7 @@ public:
     uint64_t clipboardHistoryMemoryLimitBytes() const;
     uint64_t clipboardHistoryMaxAgeSeconds() const;
     uint64_t clipboardHistoryMaxItems() const;
+    uint64_t clipboardSyncMaxItems() const;
 
     bool set_multicastIp(const std::string& value);
 	bool set_listenerIp(const std::string& value);
@@ -42,6 +48,13 @@ public:
     bool set_clipboardHistoryMemoryLimitBytes(uint64_t value);
     bool set_clipboardHistoryMaxAgeSeconds(uint64_t value);
     bool set_clipboardHistoryMaxItems(uint64_t value);
+    bool set_clipboardSyncMaxItems(uint64_t value);
+
+    // Atomically increments the per-origin sequence counter and returns the next
+    // value. Persists every OriginSequenceBatchSize calls. On startup the counter
+    // is pre-bumped by one batch so an unclean shutdown never collides with the
+    // next session. Counter is per-origin (this device), monotonic across restarts.
+    uint64_t nextOriginSequenceNumber();
 
     bool setEncryptedNetworkKey(const std::vector<unsigned char>& value);
     bool getEncryptedNetworkKey(std::vector<unsigned char>& value) const;
@@ -69,6 +82,13 @@ private:
     uint64_t clipboardHistoryMemoryLimitBytes_;
     uint64_t clipboardHistoryMaxAgeSeconds_;
     uint64_t clipboardHistoryMaxItems_;
+    uint64_t clipboardSyncMaxItems_;
+    // In-memory origin sequence counter. Highest value yielded so far.
+    uint64_t originSequenceCounter_{ 0 };
+    // The next persisted floor — counter values up to (but not including) this
+    // are safe to mint without a write. When counter reaches this, we bump the
+    // floor by OriginSequenceBatchSize and persist.
+    uint64_t originSequencePersistedFloor_{ 0 };
     mutable std::mutex mutex_;
 };
 

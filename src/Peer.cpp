@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "Settings.h"
+#include "ClipboardActivityStore.h"
 #include "ClipboardWire.h"
 #include "CryptoChannel.h"
 #include "LocalPeerName.h"
@@ -465,6 +466,55 @@ void Peer::ThreadProcSend() {
 						break;
 					}
 					ReportTraffic(4 + crypto_secretstream_xchacha20poly1305_ABYTES + sizeof(uint32_t), 0);
+				} else if (std::memcmp(frame.data(), "SYNC", 4) == 0) {
+					// Activity-stream sync request from the peer we're connected
+					// to. Body is a 16-byte anchor GUID; respond with each item
+					// after that anchor as a CLIP frame with FLAG_SYNC_REPLAY,
+					// then an EOSY marker. Capped at clipboardSyncMaxItems.
+					if (frame.size() != 4 + 16) {
+						log(__FUNCTION__, Logger::Level::Warning,
+							L"Rejecting SYNC frame: expected 20 bytes, got %zu.", frame.size());
+						break;
+					}
+					std::array<uint8_t, 16> fromGuid{};
+					std::memcpy(fromGuid.data(), frame.data() + 4, 16);
+
+					const uint64_t maxItems = g_settings.clipboardSyncMaxItems();
+					const auto replayItems = g_clipboardActivityStore.ItemsSince(fromGuid, maxItems);
+					log(__FUNCTION__, Logger::Level::Info,
+						L"Activity-stream sync requested; replaying %zu item(s).",
+						replayItems.size());
+
+					bool replayOk = true;
+					for (const auto& replay : replayItems) {
+						if (!replay) continue;
+						NetworkDefs::ClipboardMessage netMsg = replay->meta;
+						netMsg.flags |= NetworkDefs::CLPM_FLAG_SYNC_REPLAY;
+						NetworkDefs::HostToNetworkClipboardMessage(netMsg);
+						const auto& body = replay->EncodedBytes();
+						if (!channel.SendFrame(io, "CLIP",
+								reinterpret_cast<const unsigned char*>(&netMsg), sizeof(netMsg),
+								body.data(), static_cast<uint32_t>(body.size()))) {
+							replayOk = false;
+							break;
+						}
+						ReportTraffic(4 + sizeof(netMsg) + body.size()
+							+ crypto_secretstream_xchacha20poly1305_ABYTES + sizeof(uint32_t), 0);
+					}
+					if (!replayOk) {
+						log(__FUNCTION__, Logger::Level::Warning, L"Activity-stream sync send failed mid-stream.");
+						break;
+					}
+					if (!channel.SendFrame(io, "EOSY")) {
+						log(__FUNCTION__, Logger::Level::Warning, L"Activity-stream sync EOSY send failed.");
+						break;
+					}
+					ReportTraffic(4 + crypto_secretstream_xchacha20poly1305_ABYTES + sizeof(uint32_t), 0);
+				} else if (std::memcmp(frame.data(), "EOSY", 4) == 0) {
+					// Defensive: EOSY shouldn't normally arrive here (we're the
+					// outgoing-direction peer; the requester is on the incoming
+					// side). Tolerate it without breaking the connection.
+					log(__FUNCTION__, Logger::Level::Debug, L"Unexpected EOSY received on outgoing connection; ignoring.");
 				} else {
 					// Forward-compat: unknown tags from a peer with caps we don't recognize
 					// are logged and ignored rather than treated as fatal.
@@ -512,6 +562,22 @@ void Peer::ThreadProcRecv() {
 		}
 
 		log(__FUNCTION__, Logger::Level::Info, L"Client connected");
+
+		// Activity-stream sync trigger. If this is the first established incoming
+		// peer, ask them for everything we don't have. Tail GUID anchors the
+		// query; all-zero GUID (empty store) means "send me everything you have."
+		const bool firstIncoming = g_peerManager.OnIncomingPeerEstablished();
+		const bool incomingEstablished = true;
+		if (firstIncoming) {
+			const auto tail = g_clipboardActivityStore.TailEventGuid();
+			if (channel.SendFrame(io, "SYNC", tail.data(), static_cast<uint32_t>(tail.size()))) {
+				log(__FUNCTION__, Logger::Level::Info,
+					L"Requested activity-stream sync from this peer (tail GUID supplied).");
+				ReportTraffic(4 + tail.size() + crypto_secretstream_xchacha20poly1305_ABYTES + sizeof(uint32_t), 0);
+			} else {
+				log(__FUNCTION__, Logger::Level::Debug, L"Peer: failed to send initial SYNC request.");
+			}
+		}
 
 		// Idle deadline: if no traffic arrives for this long, assume the peer is gone (e.g.,
 		// iOS backgrounded the app — the kernel keeps the TCP state alive but the process
@@ -653,6 +719,15 @@ void Peer::ThreadProcRecv() {
 				continue;
 			}
 
+			if (std::memcmp(frame.data(), "EOSY", 4) == 0) {
+				// End-of-sync marker from the peer that fulfilled our SYNC
+				// request. Nothing structural to do — each replayed CLIP has
+				// already been folded into the activity store via dedup-aware
+				// insert. Logged for diagnostics.
+				log(__FUNCTION__, Logger::Level::Info, L"Activity-stream sync from this peer complete.");
+				continue;
+			}
+
 			// Forward-compat: unknown tag from a peer that may speak future caps.
 			// Log and keep the connection alive — the frame body has already been
 			// consumed by RecvFrame so the stream stays in sync.
@@ -661,6 +736,9 @@ void Peer::ThreadProcRecv() {
 				static_cast<wchar_t>(frame[0]), static_cast<wchar_t>(frame[1]),
 				static_cast<wchar_t>(frame[2]), static_cast<wchar_t>(frame[3]),
 				frame.size() - 4);
+		}
+		if (incomingEstablished) {
+			g_peerManager.OnIncomingPeerLeft();
 		}
 		log(__FUNCTION__, Logger::Level::Info, L"Client disconnected");
 	}

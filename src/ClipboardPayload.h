@@ -1,14 +1,17 @@
 #pragma once
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
 #include <vector>
 
+#include <sodium.h>
 #include <xxhash.h>
 #include <zstd.h>
 
 #include "ClipboardFormat.h"
 #include "ClipboardLimits.h"
+#include "HostId.h"
 #include "Logger.h"
 #include "NetworkDefs.h"
 
@@ -111,6 +114,24 @@ public:
     void SetEncodedBytes(std::vector<unsigned char> bytes) {
         encoded_ = std::move(bytes);
         ResetScratch();
+    }
+
+    // Stamps origin-side metadata onto meta: originHostId, a fresh random
+    // eventGuid, wall-clock timestamp (ms since Unix epoch), and the caller-
+    // provided originSequenceNumber. Call this on locally-originated payloads
+    // BEFORE wrapping in shared_ptr<const> and broadcasting. Receivers do NOT
+    // call this — they inherit the origin's stamps from the wire.
+    //
+    // The eventGuid is what makes activity-stream dedup and "give me everything
+    // since X" sync queries possible — identical content copied twice gets
+    // distinct GUIDs, where the hash alone would collide.
+    void StampOrigin(const HostId& originHostId, uint64_t originSequenceNumber) {
+        std::memcpy(meta.originHostId, originHostId.data().data(), sizeof(meta.originHostId));
+        randombytes_buf(meta.eventGuid, sizeof(meta.eventGuid));
+        meta.originSequenceNumber = originSequenceNumber;
+        const auto now = std::chrono::system_clock::now();
+        meta.timestamp = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count());
     }
 
     // Bytes as stored. For wire send and any "I want the storage form" caller.

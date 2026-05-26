@@ -26,9 +26,17 @@ inline uint64_t ntoh64(uint64_t v) {
     return hton64(v);
 }
 
+// Bits for ClipboardMessage::flags.
+// CLPM_FLAG_SYNC_REPLAY marks a clipboard message that's being replayed as part
+// of activity-stream catch-up after a peer reconnects. Receivers insert it into
+// the activity store but do NOT write it to the OS clipboard and do NOT update
+// the per-origin "is current" hash guard — these are historical events, not the
+// current clipboard contents.
+constexpr uint32_t CLPM_FLAG_SYNC_REPLAY = 0x00000001u;
+
 #pragma pack(push, 1)
 struct ClipboardMessage {
-    // Reserved for per-message metadata flags. Zero today.
+    // Per-message metadata flags (CLPM_FLAG_*).
     uint32_t flags;
     // Origin device's wall-clock at copy time, ms since Unix epoch. 0 = unset.
     // Advisory only — clock drift means it isn't a security primitive.
@@ -41,9 +49,13 @@ struct ClipboardMessage {
     // The device that originally copied the payload. Distinguished from the immediate
     // sender, in anticipation of relayed/multi-hop transport. Today they match.
     uint8_t  originHostId[16];
-    // Sender-assigned counter, monotonic per origin. Zero today; reserved for dedup.
+    // Sender-assigned counter, monotonic per origin, persisted across restarts.
     uint64_t originSequenceNumber;
-    uint8_t  reserved1[32];
+    // Random 128-bit per-event identifier. Used for dedup in the activity stream
+    // and for "give me everything since X" sync replay queries. A hash isn't
+    // enough because identical content copied twice collides; this is unique.
+    uint8_t  eventGuid[16];
+    uint8_t  reserved1[16];
     // CLIPP_FORMAT_* value. Older peers use the same numeric IDs for UTF-8 and PNG,
     // so these values must remain stable.
     uint32_t formatId;
@@ -66,7 +78,7 @@ inline void SwapClipboardMessageByteOrder(ClipboardMessage& msg) {
     msg.timestamp = hton64(msg.timestamp);
     // hashAlg, reserved0, hashBytes, originHostId — byte sequences, no swap.
     msg.originSequenceNumber = hton64(msg.originSequenceNumber);
-    // reserved1 — byte sequence, no swap.
+    // eventGuid, reserved1 — byte sequences, no swap.
     msg.formatId = htonl(msg.formatId);
     // isCompressed — single byte, no swap.
     msg.payloadDataSize = hton64(msg.payloadDataSize);
