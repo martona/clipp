@@ -50,6 +50,8 @@ std::once_flag g_clipboardHistoryLimitsOnce;
 std::once_flag g_clipboardActivityWatcherOnce;
 std::once_flag g_networkPeerWatcherOnce;
 std::once_flag g_diagnosticLogReflectorOnce;
+std::once_flag g_foregroundObserverOnce;
+id g_foregroundObserver = nil;
 std::size_t g_clipboardActivityWatcherID = 0;
 std::size_t g_networkPeerWatcherID = 0;
 ClipboardActivityStore g_clipboardActivityStore;
@@ -107,6 +109,32 @@ void LogNetworkStartupState() {
     }
 }
 
+void EnsureForegroundObserver() {
+    // iOS suspends NSNetServiceBrowser callbacks and may invalidate the listener socket while
+    // backgrounded. When we re-foreground, the OS does not auto-resume — explicitly restart
+    // the runtime so discovery and the listener come back clean.
+    std::call_once(g_foregroundObserverOnce, [] {
+        g_foregroundObserver = [[NSNotificationCenter defaultCenter]
+            addObserverForName:UIApplicationWillEnterForegroundNotification
+                        object:nil
+                         queue:nil
+                    usingBlock:^(NSNotification* _Nonnull) {
+                dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+                    std::lock_guard<std::mutex> lock(g_runtimeBridgeMutex);
+                    if (!g_runtimeBridgeStarted) {
+                        return;
+                    }
+                    g_logger.log("iOS", Logger::Level::Info, "App entering foreground; restarting network runtime.");
+                    if (g_networkRuntime.Restart()) {
+                        g_logger.log("iOS", Logger::Level::Info, "Network runtime restarted after foreground.");
+                    } else {
+                        g_logger.log("iOS", Logger::Level::Warning, "Failed to restart network runtime on foreground.");
+                    }
+                });
+            }];
+    });
+}
+
 bool StartNetworkRuntimeIfNeeded(NSError** error) {
     if (!EnsureSodium(error) || !EnsureHostID(error)) {
         return false;
@@ -126,6 +154,7 @@ bool StartNetworkRuntimeIfNeeded(NSError** error) {
     }
 
     g_runtimeBridgeStarted = true;
+    EnsureForegroundObserver();
     g_logger.log("iOS", Logger::Level::Info, "Network runtime start requested.");
     return true;
 }
