@@ -505,8 +505,50 @@ void Peer::ThreadProcRecv() {
 
 		log(__FUNCTION__, Logger::Level::Info, L"Client connected");
 
+		// Idle deadline: if no traffic arrives for this long, assume the peer is gone (e.g.,
+		// iOS backgrounded the app — the kernel keeps the TCP state alive but the process
+		// can't respond, so the inner RecvTaggedMessage would otherwise block indefinitely).
+		// Send-side picks up dead peers within one ping interval (~35s); recv-side mirrors
+		// that with some headroom for jitter and slow networks.
+		constexpr auto kRecvIdleTimeout = std::chrono::seconds(90);
+
 		char packet[4] = {};
 		while (!stopRequested_.load()) {
+			// Wrap the recv with a select() that wakes periodically so we can enforce the idle
+			// deadline. RecvTaggedMessage's internal RecvAll uses an untimed select(), so
+			// without this wrapper a stale-but-not-closed socket parks the thread forever.
+			fd_set readSet;
+			FD_ZERO(&readSet);
+			FD_SET(io.socket, &readSet);
+			FD_SET(wakeEvent_.Socket(), &readSet);
+
+			timeval tv{};
+			tv.tv_sec = 5;
+			const SOCKET maxSock = (std::max)(io.socket, wakeEvent_.Socket());
+			const int ready = select(static_cast<int>(maxSock) + 1, &readSet, nullptr, nullptr, &tv);
+			if (ready == SOCKET_ERROR) {
+				break;
+			}
+			if (stopRequested_.load()) {
+				break;
+			}
+			if (ready > 0 && FD_ISSET(wakeEvent_.Socket(), &readSet)) {
+				wakeEvent_.Drain();
+				if (stopRequested_.load()) {
+					break;
+				}
+			}
+			if (ready == 0 || !FD_ISSET(io.socket, &readSet)) {
+				const auto silence = std::chrono::steady_clock::now() - lastPingReceivedAt();
+				if (silence >= kRecvIdleTimeout) {
+					log(__FUNCTION__, Logger::Level::Info,
+						L"Incoming peer idle for %lld s; closing connection.",
+						static_cast<long long>(std::chrono::duration_cast<std::chrono::seconds>(silence).count()));
+					break;
+				}
+				continue;
+			}
+
 			if (io.socket == INVALID_SOCKET || !channel.RecvTaggedMessage(io, packet)) {
 				break;
 			}
@@ -527,6 +569,10 @@ void Peer::ThreadProcRecv() {
 			}
 
 			if (std::memcmp(packet, "CLIP", 4) == 0) {
+				{
+					std::lock_guard<std::mutex> lock(dataMutex_);
+					lastPingReceivedAt_ = std::chrono::steady_clock::now();
+				}
 				std::vector<unsigned char> headerMsg;
 				if (!channel.RecvMessage(io, headerMsg)) {
 					log(__FUNCTION__, Logger::Level::Warning, L"Failed to receive clipboard message header.");
