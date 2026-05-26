@@ -69,7 +69,8 @@ struct ContentView: View {
                     } label: {
                         NetworkToolbarIndicator(
                             mode: networkIndicatorMode,
-                            traffic: networkTrafficState.activity
+                            sendingUntil: networkTrafficState.sendingUntil,
+                            receivingUntil: networkTrafficState.receivingUntil
                         )
                     }
                     .foregroundStyle(.secondary)
@@ -305,23 +306,19 @@ private enum NetworkIndicatorMode: Sendable {
     case needsSetup
 }
 
-private struct NetworkTrafficActivity: Equatable, Sendable {
-    var isSending = false
-    var isReceiving = false
-}
-
 private struct NetworkTrafficState {
     private static let significantByteDelta: UInt64 = 16 * 1024
     private static let activeHoldTime: TimeInterval = 1.2
 
     private var previousBytesSent: UInt64?
     private var previousBytesReceived: UInt64?
-    private var sendingUntil = Date.distantPast
-    private var receivingUntil = Date.distantPast
-
-    var activity: NetworkTrafficActivity {
-        activity(at: Date())
-    }
+    // Public deadlines — the indicator compares these against its TimelineView's
+    // own context.date each frame, so liveness no longer depends on the parent
+    // view re-evaluating its body. Snapshot semantics: if the parent doesn't
+    // re-render, these stay at their last-set values, and the indicator
+    // correctly stops drawing once Date() crosses them.
+    var sendingUntil = Date.distantPast
+    var receivingUntil = Date.distantPast
 
     mutating func observe(bytesSent: UInt64, bytesReceived: UInt64, now: Date) {
         defer {
@@ -343,129 +340,91 @@ private struct NetworkTrafficState {
             receivingUntil = now.addingTimeInterval(Self.activeHoldTime)
         }
     }
-
-    private func activity(at date: Date) -> NetworkTrafficActivity {
-        NetworkTrafficActivity(
-            isSending: sendingUntil > date,
-            isReceiving: receivingUntil > date
-        )
-    }
 }
 
 private struct NetworkToolbarIndicator: View {
     let mode: NetworkIndicatorMode
-    let traffic: NetworkTrafficActivity
+    // The traffic-active deadlines, pushed in from the parent's NetworkTrafficState.
+    // Each frame's body re-checks `<until> > context.date`, so the indicator drops
+    // the glyph the moment the deadline expires — independent of whether the
+    // parent view re-evaluates. This is the actual fix for the simulator quirk
+    // where a stale parent-side `isReceiving` snapshot kept the glyph lit until
+    // some unrelated state change finally retriggered ContentView's body.
+    let sendingUntil: Date
+    let receivingUntil: Date
 
-    @State private var sweepRotation = 0.0
-    @State private var setupBadgeScale = 1.0
-    @State private var sendLift = false
-    @State private var receiveDrop = false
+    // Animation periods (seconds, full cycle).
+    private static let sweepPeriod: Double = 1.4   // radar sweep, linear rotation
+    private static let badgePeriod: Double = 1.7   // setup-needed badge pulse (autoreverse 0.85s)
+    private static let glyphPeriod: Double = 1.12  // send/receive arrow bob (autoreverse 0.56s)
 
     var body: some View {
-        ZStack {
-            Image(systemName: "antenna.radiowaves.left.and.right")
-                .symbolRenderingMode(.hierarchical)
+        // Single TimelineView for the whole indicator. Its body is the source of
+        // truth for liveness and animation phase; both come from context.date.
+        TimelineView(.animation) { context in
+            let now = context.date
+            let t = now.timeIntervalSinceReferenceDate
+            let isSending = sendingUntil > now
+            let isReceiving = receivingUntil > now
 
-            if mode == .searching {
-                Circle()
-                    .trim(from: 0.08, to: 0.28)
-                    .stroke(
-                        .secondary,
-                        style: StrokeStyle(lineWidth: 1.5, lineCap: .round)
-                    )
-                    .frame(width: 24, height: 24)
-                    .rotationEffect(.degrees(sweepRotation))
-                    .transition(.opacity)
-            }
+            ZStack {
+                Image(systemName: "antenna.radiowaves.left.and.right")
+                    .symbolRenderingMode(.hierarchical)
 
-            if mode == .needsSetup {
-                Image(systemName: "exclamationmark.circle.fill")
-                    .symbolRenderingMode(.palette)
-                    .foregroundStyle(.white, .orange)
-                    .font(.system(size: 12, weight: .semibold))
-                    .background(
-                        Circle()
-                            .fill(.background)
-                            .frame(width: 13, height: 13)
-                    )
-                    .scaleEffect(setupBadgeScale)
-                    .offset(x: 9, y: -9)
-                    .transition(.scale.combined(with: .opacity))
-            }
-
-            if mode != .needsSetup {
-                if traffic.isSending {
-                    NetworkTrafficGlyph(
-                        symbolName: "arrow.up.circle.fill",
-                        color: .blue,
-                        yOffset: sendLift ? -14 : -8,
-                        opacity: sendLift ? 0.56 : 1
-                    )
-                    .transition(.scale.combined(with: .opacity))
+                if mode == .searching {
+                    let angle = t.truncatingRemainder(dividingBy: Self.sweepPeriod) / Self.sweepPeriod * 360.0
+                    Circle()
+                        .trim(from: 0.08, to: 0.28)
+                        .stroke(
+                            .secondary,
+                            style: StrokeStyle(lineWidth: 1.5, lineCap: .round)
+                        )
+                        .frame(width: 24, height: 24)
+                        .rotationEffect(.degrees(angle))
+                        .transition(.opacity)
                 }
 
-                if traffic.isReceiving {
-                    NetworkTrafficGlyph(
-                        symbolName: "arrow.down.circle.fill",
-                        color: .green,
-                        yOffset: receiveDrop ? 14 : 8,
-                        opacity: receiveDrop ? 0.56 : 1
-                    )
-                    .transition(.scale.combined(with: .opacity))
+                if mode == .needsSetup {
+                    let phase = (sin(t * 2.0 * .pi / Self.badgePeriod) + 1.0) / 2.0
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, .orange)
+                        .font(.system(size: 12, weight: .semibold))
+                        .background(
+                            Circle()
+                                .fill(.background)
+                                .frame(width: 13, height: 13)
+                        )
+                        .scaleEffect(1.0 + phase * 0.18)
+                        .offset(x: 9, y: -9)
+                        .transition(.scale.combined(with: .opacity))
+                }
+
+                if mode != .needsSetup {
+                    if isSending {
+                        let phase = (sin(t * 2.0 * .pi / Self.glyphPeriod) + 1.0) / 2.0
+                        NetworkTrafficGlyph(
+                            symbolName: "arrow.up.circle.fill",
+                            color: .blue,
+                            yOffset: -8 + CGFloat(phase) * -6,
+                            opacity: 1.0 - phase * 0.44
+                        )
+                        .transition(.scale.combined(with: .opacity))
+                    }
+
+                    if isReceiving {
+                        let phase = (sin(t * 2.0 * .pi / Self.glyphPeriod) + 1.0) / 2.0
+                        NetworkTrafficGlyph(
+                            symbolName: "arrow.down.circle.fill",
+                            color: .green,
+                            yOffset: 8 + CGFloat(phase) * 6,
+                            opacity: 1.0 - phase * 0.44
+                        )
+                        .transition(.scale.combined(with: .opacity))
+                    }
                 }
             }
-        }
-        .frame(width: 28, height: 28)
-        .onAppear(perform: updateAnimation)
-        .onChange(of: mode) {
-            updateAnimation()
-        }
-        .onChange(of: traffic) {
-            updateAnimation()
-        }
-    }
-
-    private func updateAnimation() {
-        switch mode {
-        case .searching:
-            setupBadgeScale = 1
-            sweepRotation = 0
-            withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
-                sweepRotation = 360
-            }
-        case .needsSetup:
-            sweepRotation = 0
-            setupBadgeScale = 1
-            withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) {
-                setupBadgeScale = 1.18
-            }
-        case .ok:
-            withAnimation(.easeOut(duration: 0.18)) {
-                sweepRotation = 0
-                setupBadgeScale = 1
-            }
-        }
-
-        if mode == .needsSetup || !traffic.isSending {
-            withAnimation(.easeOut(duration: 0.16)) {
-                sendLift = false
-            }
-        } else {
-            sendLift = false
-            withAnimation(.easeInOut(duration: 0.56).repeatForever(autoreverses: true)) {
-                sendLift = true
-            }
-        }
-
-        if mode == .needsSetup || !traffic.isReceiving {
-            withAnimation(.easeOut(duration: 0.16)) {
-                receiveDrop = false
-            }
-        } else {
-            receiveDrop = false
-            withAnimation(.easeInOut(duration: 0.56).repeatForever(autoreverses: true)) {
-                receiveDrop = true
-            }
+            .frame(width: 28, height: 28)
         }
     }
 }
