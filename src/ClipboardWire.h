@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ClipboardData.h"
+#include "ClipboardPayload.h"
 #include "CryptoChannel.h"
 #include "HostId.h"
 #include "utils_socket.h"

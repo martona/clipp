@@ -318,7 +318,7 @@ bool Peer::DrainOutboundMessages(CryptoChannel& channel, const SocketIoContext& 
 		log(__FUNCTION__, Logger::Level::Debug, L"Clipboard payload to be sent: format %ls (%u), payload size %zu bytes, uncompressed size %llu bytes",
 			ClippClipboardFormatNameW(payload->meta.formatId),
 			payload->meta.formatId,
-			payload->rawData.size(),
+			payload->EncodedBytes().size(),
 			static_cast<unsigned long long>(payload->meta.uncompressedDataSize));
 		if (!SendClipboardData(channel, io, *payload)) {
 			log(__FUNCTION__, Logger::Level::Debug, L"Peer failed to send clipboard payload.");
@@ -623,11 +623,13 @@ void Peer::ThreadProcRecv() {
 					break;
 				}
 
+				std::vector<unsigned char> body;
 				if (expectedBodyBytes > 0) {
-					payload.rawData.assign(
+					body.assign(
 						frame.data() + 4 + kClipHeaderSize,
 						frame.data() + 4 + kClipHeaderSize + expectedBodyBytes);
 				}
+				payload.SetEncodedBytes(std::move(body));
 
 				log(__FUNCTION__, Logger::Level::Debug,
 					L"Clipboard message received: format %ls (%u), compressed=%u, payload size=%llu bytes, uncompressed size=%llu bytes",
@@ -637,10 +639,6 @@ void Peer::ThreadProcRecv() {
 					static_cast<unsigned long long>(payload.meta.payloadDataSize),
 					static_cast<unsigned long long>(payload.meta.uncompressedDataSize));
 
-				if (!payload.ZstdDecompress()) {
-					break;
-				}
-
 				if (clipboardReceivedCallback_) {
 					HostId remoteHostId;
 					std::wstring remoteHostName;
@@ -649,7 +647,8 @@ void Peer::ThreadProcRecv() {
 						remoteHostId = hostID_;
 						remoteHostName = hostName_;
 					}
-					clipboardReceivedCallback_(remoteHostName, remoteHostId, payload);
+					clipboardReceivedCallback_(remoteHostName, remoteHostId,
+						std::make_shared<const ClipboardPayload>(std::move(payload)));
 				}
 				continue;
 			}

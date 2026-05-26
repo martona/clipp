@@ -53,12 +53,13 @@ ClipboardPayload MakeTextClipboardPayload(NSString* text) {
 
     NSString* value = text != nil ? text : @"";
     NSData* data = [value dataUsingEncoding:NSUTF8StringEncoding];
+    std::vector<unsigned char> bytes;
     if (data != nil && data.length > 0) {
-        const unsigned char* bytes = static_cast<const unsigned char*>(data.bytes);
-        payload.rawData.assign(bytes, bytes + data.length);
+        const unsigned char* src = static_cast<const unsigned char*>(data.bytes);
+        bytes.assign(src, src + data.length);
     }
-    payload.rawData.push_back('\0');
-
+    bytes.push_back('\0');
+    payload.SetUncompressedBytes(std::move(bytes));
     return payload;
 }
 }
@@ -542,7 +543,7 @@ void RequestMacOSShowMainWindow(bool showNetworkPage) {
         }
     }
 
-    ClipboardPayload payload = MakeTextClipboardPayload(text);
+    auto payload = std::make_shared<const ClipboardPayload>(MakeTextClipboardPayload(text));
     SetClipboardData(payload, false);
 }
 

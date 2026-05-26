@@ -96,7 +96,12 @@ std::optional<std::wstring> TextFromPayload(const ClipboardPayload& payload) {
         return std::nullopt;
     }
 
-    std::string textUtf8(payload.rawData.begin(), payload.rawData.end());
+    const std::vector<unsigned char>* bytes = payload.TryGetUncompressedBytes();
+    if (bytes == nullptr) {
+        return std::nullopt;
+    }
+
+    std::string textUtf8(bytes->begin(), bytes->end());
     while (!textUtf8.empty() && textUtf8.back() == '\0') {
         textUtf8.pop_back();
     }
@@ -105,12 +110,12 @@ std::optional<std::wstring> TextFromPayload(const ClipboardPayload& payload) {
 }
 }
 
-uint64_t ClipboardActivityStore::AddIncoming(const std::wstring& deviceName, const ClipboardPayload& payload) {
-    return AddItem(ClipboardActivityDirection::Incoming, deviceName, payload);
+uint64_t ClipboardActivityStore::AddIncoming(const std::wstring& deviceName, std::shared_ptr<const ClipboardPayload> payload) {
+    return AddItem(ClipboardActivityDirection::Incoming, deviceName, std::move(payload));
 }
 
-uint64_t ClipboardActivityStore::AddOutgoing(const std::wstring& deviceName, const ClipboardPayload& payload) {
-    return AddItem(ClipboardActivityDirection::Outgoing, deviceName, payload);
+uint64_t ClipboardActivityStore::AddOutgoing(const std::wstring& deviceName, std::shared_ptr<const ClipboardPayload> payload) {
+    return AddItem(ClipboardActivityDirection::Outgoing, deviceName, std::move(payload));
 }
 
 void ClipboardActivityStore::SetLimits(uint64_t memoryLimitBytes, uint64_t maxAgeSeconds, uint64_t maxItems) {
@@ -152,19 +157,6 @@ std::optional<ClipboardActivityDisplayItem> ClipboardActivityStore::DisplayItem(
     }
 
     return BuildDisplayItem(*item);
-}
-
-std::optional<ClipboardPayload> ClipboardActivityStore::PayloadForClipboard(uint64_t itemID) const {
-    const auto item = FindItem(itemID);
-    if (!item || !item->payload) {
-        return std::nullopt;
-    }
-
-    ClipboardPayload payload = *item->payload;
-    if (!payload.ZstdDecompress()) {
-        return std::nullopt;
-    }
-    return payload;
 }
 
 std::shared_ptr<const ClipboardPayload> ClipboardActivityStore::PayloadReference(uint64_t itemID) const {
@@ -253,14 +245,6 @@ void ClipboardActivityStore::Unregister(std::size_t watcherID) {
     }), watchers_.end());
 }
 
-std::shared_ptr<const ClipboardPayload> ClipboardActivityStore::MakeStoredPayload(const ClipboardPayload& payload) {
-    ClipboardPayload stored = payload;
-    if (stored.meta.isCompressed == 0) {
-        stored.ZstdCompress();
-    }
-    return std::make_shared<const ClipboardPayload>(std::move(stored));
-}
-
 std::optional<ClipboardActivityDisplayItem> ClipboardActivityStore::BuildDisplayItem(const Item& item) {
     if (!item.payload) {
         return std::nullopt;
@@ -270,22 +254,18 @@ std::optional<ClipboardActivityDisplayItem> ClipboardActivityStore::BuildDisplay
     display.header = item.header;
 
     if (IsClippImageFormat(item.payload->meta.formatId)) {
-        // Image payloads aren't zstd-compressed (see ClipboardPayload::ZstdCompress); expose
-        // the bytes via an aliasing shared_ptr so the UI shares them without a copy.
+        // Image payloads aren't zstd-compressed, so EncodedBytes() IS the image —
+        // expose it via an aliasing shared_ptr so the UI shares the buffer
+        // without copying. The aliasing keeps the underlying payload alive.
         display.kind = ClipboardActivityPayloadKind::Image;
         display.imageFormatId = item.payload->meta.formatId;
         display.imageData = std::shared_ptr<const std::vector<unsigned char>>(
-            item.payload, &item.payload->rawData);
+            item.payload, &item.payload->EncodedBytes());
         return display;
     }
 
-    ClipboardPayload payload = *item.payload;
-    if (!payload.ZstdDecompress()) {
-        return std::nullopt;
-    }
-
-    if (payload.meta.formatId == CLIPP_FORMAT_UTF8) {
-        auto text = TextFromPayload(payload);
+    if (item.payload->meta.formatId == CLIPP_FORMAT_UTF8) {
+        auto text = TextFromPayload(*item.payload);
         if (!text) {
             return std::nullopt;
         }
@@ -322,7 +302,7 @@ std::vector<ClipboardActivityItemHeader> ClipboardActivityStore::SnapshotLocked(
 uint64_t ClipboardActivityStore::EstimateItemBytes(const Item& item) {
     constexpr uint64_t kMetadataEstimateBytes = 256;
     const uint64_t payloadBytes = item.payload != nullptr
-        ? static_cast<uint64_t>(item.payload->rawData.size())
+        ? static_cast<uint64_t>(item.payload->EncodedBytes().size())
         : 0;
     const uint64_t deviceNameBytes = static_cast<uint64_t>(item.header.deviceName.size() * sizeof(wchar_t));
     return kMetadataEstimateBytes + payloadBytes + deviceNameBytes;
@@ -341,8 +321,8 @@ void ClipboardActivityStore::NotifyWatchers(
     }
 }
 
-uint64_t ClipboardActivityStore::AddItem(ClipboardActivityDirection direction, const std::wstring& deviceName, const ClipboardPayload& payload) {
-    if (payload.meta.formatId == CLIPP_FORMAT_NONE) {
+uint64_t ClipboardActivityStore::AddItem(ClipboardActivityDirection direction, const std::wstring& deviceName, std::shared_ptr<const ClipboardPayload> payload) {
+    if (!payload || payload->meta.formatId == CLIPP_FORMAT_NONE) {
         return 0;
     }
 
@@ -358,7 +338,7 @@ uint64_t ClipboardActivityStore::AddItem(ClipboardActivityDirection direction, c
         item.header.direction = direction;
         item.header.deviceName = deviceName;
         item.header.timestamp = std::chrono::system_clock::now();
-        item.payload = MakeStoredPayload(payload);
+        item.payload = std::move(payload);
 
         itemID = item.header.id;
         updates.push_back({

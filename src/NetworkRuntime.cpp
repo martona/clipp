@@ -8,7 +8,7 @@
 
 #if defined(__APPLE__) && (TARGET_OS_IPHONE || TARGET_OS_SIMULATOR)
 #define CLIPP_IOS_CLIPBOARD_RECEIVE_STUB 1
-void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const ClipboardPayload& payload);
+void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, std::shared_ptr<const ClipboardPayload> payload);
 #else
 #include "ClipboardActivityStore.h"
 #include "Clipboard.h"
@@ -22,8 +22,8 @@ extern ClipboardActivityStore g_clipboardActivityStore;
 #endif
 
 NetworkRuntime::NetworkRuntime()
-    : listener_([this](const std::wstring& hostName, const HostId& hostID, ClipboardPayload& payload) {
-        OnClipboardReceived(hostName, hostID, payload);
+    : listener_([this](const std::wstring& hostName, const HostId& hostID, std::shared_ptr<const ClipboardPayload> payload) {
+        OnClipboardReceived(hostName, hostID, std::move(payload));
     }) {
 }
 
@@ -110,22 +110,22 @@ void NetworkRuntime::ThreadProc() {
     g_logger.log(__FUNCTION__, Logger::Level::Info, "Peer manager cleared.");
 }
 
-void NetworkRuntime::OnClipboardReceived(const std::wstring& hostName, const HostId&, ClipboardPayload& payload) {
-    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Received clipboard data from client %ls (format: %ls, ID: %u, size: %zu bytes)",
+void NetworkRuntime::OnClipboardReceived(const std::wstring& hostName, const HostId&, std::shared_ptr<const ClipboardPayload> payload) {
+    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Received clipboard data from client %ls (format: %ls, ID: %u, encoded size: %zu bytes)",
         hostName.c_str(),
-        ClippClipboardFormatNameW(payload.meta.formatId),
-        payload.meta.formatId,
-        payload.rawData.size());
+        ClippClipboardFormatNameW(payload->meta.formatId),
+        payload->meta.formatId,
+        payload->EncodedBytes().size());
 #if CLIPP_IOS_CLIPBOARD_RECEIVE_STUB
-    CLPIOSReceiveClipboardPayload(hostName, payload);
+    CLPIOSReceiveClipboardPayload(hostName, std::move(payload));
 #else
-    if (IsClipboardDataCurrent(payload)) {
+    if (IsClipboardDataCurrent(*payload)) {
         g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Ignoring clipboard data from client %ls because the same contents are already current.", hostName.c_str());
         return;
     }
 
-    const uint64_t itemID = g_clipboardActivityStore.AddIncoming(hostName, payload);
-    SetClipboardData(payload, true, g_clipboardActivityStore.PayloadReference(itemID));
+    g_clipboardActivityStore.AddIncoming(hostName, payload);
+    SetClipboardData(payload, true);
 #endif
 }
 

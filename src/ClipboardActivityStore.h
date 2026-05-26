@@ -1,7 +1,7 @@
 #pragma once
 
 #include "platform.h"
-#include "ClipboardData.h"
+#include "ClipboardPayload.h"
 
 #include <chrono>
 #include <cstddef>
@@ -68,14 +68,13 @@ class ClipboardActivityStore {
 public:
     using Watcher = std::function<void(const ClipboardActivityUpdate&, void*)>;
 
-    uint64_t AddIncoming(const std::wstring& deviceName, const ClipboardPayload& payload);
-    uint64_t AddOutgoing(const std::wstring& deviceName, const ClipboardPayload& payload);
+    uint64_t AddIncoming(const std::wstring& deviceName, std::shared_ptr<const ClipboardPayload> payload);
+    uint64_t AddOutgoing(const std::wstring& deviceName, std::shared_ptr<const ClipboardPayload> payload);
 
     void SetLimits(uint64_t memoryLimitBytes, uint64_t maxAgeSeconds, uint64_t maxItems);
 
     std::vector<ClipboardActivityItemHeader> Snapshot();
     std::optional<ClipboardActivityDisplayItem> DisplayItem(uint64_t itemID) const;
-    std::optional<ClipboardPayload> PayloadForClipboard(uint64_t itemID) const;
     std::shared_ptr<const ClipboardPayload> PayloadReference(uint64_t itemID) const;
     bool Remove(uint64_t itemID);
     void Clear();
@@ -101,13 +100,12 @@ private:
         void* userData{};
     };
 
-    static std::shared_ptr<const ClipboardPayload> MakeStoredPayload(const ClipboardPayload& payload);
     static std::optional<ClipboardActivityDisplayItem> BuildDisplayItem(const Item& item);
     static std::vector<ClipboardActivityItemHeader> SnapshotLocked(const std::vector<Item>& items);
     static uint64_t EstimateItemBytes(const Item& item);
     static void NotifyWatchers(const std::vector<WatcherRegistration>& watchers, const std::vector<ClipboardActivityUpdate>& updates);
 
-    uint64_t AddItem(ClipboardActivityDirection direction, const std::wstring& deviceName, const ClipboardPayload& payload);
+    uint64_t AddItem(ClipboardActivityDirection direction, const std::wstring& deviceName, std::shared_ptr<const ClipboardPayload> payload);
     void ApplyLimitsLocked(std::chrono::system_clock::time_point now, std::vector<ClipboardActivityUpdate>& updates);
     std::optional<Item> FindItem(uint64_t itemID) const;
 

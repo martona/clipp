@@ -16,7 +16,7 @@
 #include "platform.h"
 #include "utils_socket.h"
 #include "BlockingQueue.h"
-#include "ClipboardData.h"
+#include "ClipboardPayload.h"
 #include "Logger.h"
 #include "HostId.h"
 
@@ -30,7 +30,7 @@ public:
 	} ConnType;
 	ConnType connType_;
 
-	using ClipboardReceivedCallback = std::function<void(const std::wstring&, const HostId&, ClipboardPayload&)>;
+	using ClipboardReceivedCallback = std::function<void(const std::wstring&, const HostId&, std::shared_ptr<const ClipboardPayload>)>;
 	using VerifiedCallback = std::function<void(const std::wstring&, const HostId&, ConnType, std::chrono::steady_clock::time_point)>;
 	using TrafficCallback = std::function<void(const HostId&, uint64_t, uint64_t)>;
 

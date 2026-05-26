@@ -66,6 +66,7 @@ void StopClipboardNotification() {
 ClipboardPayload ReadClipboardData(PlatformWindowHandle hwnd) {
     ClipboardPayload payload{};
     payload.meta.formatId = CLIPP_FORMAT_NONE;
+    std::vector<unsigned char> bytes;
 
     @autoreleasepool {
         NSPasteboard* pb = [NSPasteboard generalPasteboard];
@@ -76,9 +77,9 @@ ClipboardPayload ReadClipboardData(PlatformWindowHandle hwnd) {
             NSData* data = [text dataUsingEncoding:NSUTF8StringEncoding];
             if (data) {
                 payload.meta.formatId = CLIPP_FORMAT_UTF8;
-                const unsigned char* bytes = static_cast<const unsigned char*>([data bytes]);
-                payload.rawData.assign(bytes, bytes + [data length]);
-                payload.rawData.push_back('\0');
+                const unsigned char* src = static_cast<const unsigned char*>([data bytes]);
+                bytes.assign(src, src + [data length]);
+                bytes.push_back('\0');
             }
         }
 
@@ -86,28 +87,36 @@ ClipboardPayload ReadClipboardData(PlatformWindowHandle hwnd) {
             NSData* imageData = [pb dataForType:@"public.jpeg"];
             if (imageData != nil && [imageData length] > 0) {
                 payload.meta.formatId = CLIPP_FORMAT_JPEG;
-                const unsigned char* bytes = static_cast<const unsigned char*>([imageData bytes]);
-                payload.rawData.assign(bytes, bytes + [imageData length]);
-                g_logger.log(__FUNCTION__, Logger::Level::Info, L"Read JPEG image from system clipboard (JPEG payload: %zu bytes)", payload.rawData.size());
+                const unsigned char* src = static_cast<const unsigned char*>([imageData bytes]);
+                bytes.assign(src, src + [imageData length]);
+                g_logger.log(__FUNCTION__, Logger::Level::Info, L"Read JPEG image from system clipboard (JPEG payload: %zu bytes)", bytes.size());
             }
             else {
                 imageData = [pb dataForType:NSPasteboardTypePNG];
                 if (imageData != nil && [imageData length] > 0) {
                     payload.meta.formatId = CLIPP_FORMAT_PNG;
-                    const unsigned char* bytes = static_cast<const unsigned char*>([imageData bytes]);
-                    payload.rawData.assign(bytes, bytes + [imageData length]);
-                    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Read PNG image from system clipboard (PNG payload: %zu bytes)", payload.rawData.size());
+                    const unsigned char* src = static_cast<const unsigned char*>([imageData bytes]);
+                    bytes.assign(src, src + [imageData length]);
+                    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Read PNG image from system clipboard (PNG payload: %zu bytes)", bytes.size());
                 }
             }
         }
     }
 
-    if (payload.meta.formatId != CLIPP_FORMAT_NONE) {
-        if (!g_clipboardHashGuard.AcceptCurrent(payload)) {
-            g_logger.log(__FUNCTION__, Logger::Level::Debug, "Ignoring clipboard notification for already-current clipboard contents.");
-            payload.meta.formatId = CLIPP_FORMAT_NONE;
-            payload.rawData.clear();
-        }
+    if (payload.meta.formatId == CLIPP_FORMAT_NONE) {
+        return payload;
+    }
+
+    if (!payload.SetUncompressedBytes(std::move(bytes))) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, "Failed to encode clipboard payload; dropping.");
+        payload.meta.formatId = CLIPP_FORMAT_NONE;
+        return payload;
+    }
+
+    if (!g_clipboardHashGuard.AcceptCurrent(payload)) {
+        g_logger.log(__FUNCTION__, Logger::Level::Debug, "Ignoring clipboard notification for already-current clipboard contents.");
+        payload.meta.formatId = CLIPP_FORMAT_NONE;
+        payload.SetEncodedBytes({});
     }
 
     return payload;
@@ -118,12 +127,13 @@ bool IsClipboardDataCurrent(const ClipboardPayload& payload) {
 }
 
 void SetClipboardData(
-    ClipboardPayload& payload,
-    bool markAsClippOriginated,
-    std::shared_ptr<const ClipboardPayload> delayedRenderPayloadReference) {
-    (void)delayedRenderPayloadReference;
+    std::shared_ptr<const ClipboardPayload> payload,
+    bool markAsClippOriginated) {
+    if (!payload) {
+        return;
+    }
 
-    if (markAsClippOriginated && g_clipboardHashGuard.IsCurrent(payload)) {
+    if (markAsClippOriginated && g_clipboardHashGuard.IsCurrent(*payload)) {
         g_logger.log(__FUNCTION__, Logger::Level::Info, "Clipboard contents already current; not setting clipboard data");
         return;
     }
@@ -134,44 +144,51 @@ void SetClipboardData(
 
         bool wroteClipboard = false;
 
-        if (payload.meta.formatId == CLIPP_FORMAT_UTF8) {
-            size_t textLen = payload.rawData.size();
-            if (textLen > 0 && payload.rawData.back() == '\0') {
-                textLen--;
+        if (payload->meta.formatId == CLIPP_FORMAT_UTF8) {
+            const std::vector<unsigned char>* utf8 = payload->TryGetUncompressedBytes();
+            if (utf8 == nullptr) {
+                g_logger.log(__FUNCTION__, Logger::Level::Warning, "Failed to obtain plaintext for clipboard text payload; nothing written.");
+            } else {
+                size_t textLen = utf8->size();
+                if (textLen > 0 && utf8->back() == '\0') {
+                    textLen--;
+                }
+                NSString* str = [[NSString alloc] initWithBytes:utf8->data()
+                                                         length:textLen
+                                                       encoding:NSUTF8StringEncoding];
+                if (str) {
+                    wroteClipboard = [pb setString:str forType:NSPasteboardTypeString];
+                }
             }
-            NSString* str = [[NSString alloc] initWithBytes:payload.rawData.data()
-                                                   length:textLen
-                                                   encoding:NSUTF8StringEncoding];
-            if (str) {
-                wroteClipboard = [pb setString:str forType:NSPasteboardTypeString];
-            }
-        } else if (IsClippImageFormat(payload.meta.formatId)) {
-            NSString* pasteboardType = payload.meta.formatId == CLIPP_FORMAT_JPEG ? @"public.jpeg" : NSPasteboardTypePNG;
-            NSData* imageData = [NSData dataWithBytes:payload.rawData.data() length:payload.rawData.size()];
+        } else if (IsClippImageFormat(payload->meta.formatId)) {
+            // Images are never zstd-compressed; EncodedBytes() is the image data.
+            NSString* pasteboardType = payload->meta.formatId == CLIPP_FORMAT_JPEG ? @"public.jpeg" : NSPasteboardTypePNG;
+            const std::vector<unsigned char>& imageBytes = payload->EncodedBytes();
+            NSData* imageData = [NSData dataWithBytes:imageBytes.data() length:imageBytes.size()];
             wroteClipboard = [pb setData:imageData forType:pasteboardType];
             if (wroteClipboard) {
                 g_logger.log(__FUNCTION__, Logger::Level::Info, L"Wrote %ls image to system clipboard (payload: %zu bytes)",
-                             ClippClipboardFormatNameW(payload.meta.formatId),
-                             payload.rawData.size());
+                             ClippClipboardFormatNameW(payload->meta.formatId),
+                             imageBytes.size());
             }
         }
         else {
             g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Unsupported clipboard payload format %ls (%u); nothing written",
-                         ClippClipboardFormatNameW(payload.meta.formatId),
-                         payload.meta.formatId);
+                         ClippClipboardFormatNameW(payload->meta.formatId),
+                         payload->meta.formatId);
         }
 
         if (wroteClipboard && markAsClippOriginated) {
             // Fast-forward our known changeCount so we don't trigger a recursive network broadcast of our own change
             g_lastChangeCount.store([pb changeCount]);
 
-            g_clipboardHashGuard.RememberCurrent(payload);
+            g_clipboardHashGuard.RememberCurrent(*payload);
         }
         else {
             g_logger.log(__FUNCTION__, Logger::Level::Warning, L"System clipboard write did not complete (format: %ls, ID: %u, payload size: %zu bytes)",
-                         ClippClipboardFormatNameW(payload.meta.formatId),
-                         payload.meta.formatId,
-                         payload.rawData.size());
+                         ClippClipboardFormatNameW(payload->meta.formatId),
+                         payload->meta.formatId,
+                         payload->EncodedBytes().size());
         }
     }
 }

@@ -1,7 +1,7 @@
 #import "ClippShareBridge.h"
 
 #include "../../src/ClipboardWire.h"
-#include "../../src/ClipboardData.h"
+#include "../../src/ClipboardPayload.h"
 #include "../../src/CryptoChannel.h"
 #include "../../src/KeyManager.h"
 #include "../../src/LocalPeerName.h"
@@ -78,7 +78,7 @@ std::string ToStdString(NSString* value) {
 }
 
 bool PayloadFromSharePayload(CLPSharePayload* sharePayload, ClipboardPayload& payload) {
-    payload = {};
+    payload = ClipboardPayload{};
 
     if (sharePayload.kind == CLPSharePayloadKindText) {
         const std::string text = ToStdString(sharePayload.text);
@@ -87,9 +87,9 @@ bool PayloadFromSharePayload(CLPSharePayload* sharePayload, ClipboardPayload& pa
         }
 
         payload.meta.formatId = CLIPP_FORMAT_UTF8;
-        payload.rawData.assign(text.begin(), text.end());
-        payload.rawData.push_back('\0');
-        return payload.ZstdCompress();
+        std::vector<unsigned char> bytes(text.begin(), text.end());
+        bytes.push_back('\0');
+        return payload.SetUncompressedBytes(std::move(bytes));
     }
 
     if (sharePayload.kind == CLPSharePayloadKindJPEG) {
@@ -99,9 +99,10 @@ bool PayloadFromSharePayload(CLPSharePayload* sharePayload, ClipboardPayload& pa
         }
 
         payload.meta.formatId = CLIPP_FORMAT_JPEG;
-        const auto* bytes = static_cast<const unsigned char*>(jpegData.bytes);
-        payload.rawData.assign(bytes, bytes + jpegData.length);
-        return payload.ZstdCompress();
+        std::vector<unsigned char> bytes;
+        const auto* src = static_cast<const unsigned char*>(jpegData.bytes);
+        bytes.assign(src, src + jpegData.length);
+        return payload.SetUncompressedBytes(std::move(bytes));
     }
 
     if (sharePayload.kind == CLPSharePayloadKindPNG) {
@@ -111,9 +112,10 @@ bool PayloadFromSharePayload(CLPSharePayload* sharePayload, ClipboardPayload& pa
         }
 
         payload.meta.formatId = CLIPP_FORMAT_PNG;
-        const auto* bytes = static_cast<const unsigned char*>(pngData.bytes);
-        payload.rawData.assign(bytes, bytes + pngData.length);
-        return payload.ZstdCompress();
+        std::vector<unsigned char> bytes;
+        const auto* src = static_cast<const unsigned char*>(pngData.bytes);
+        bytes.assign(src, src + pngData.length);
+        return payload.SetUncompressedBytes(std::move(bytes));
     }
 
     return false;

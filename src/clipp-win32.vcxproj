@@ -207,7 +207,7 @@
     <ClInclude Include="BlockingQueue.h" />
     <ClInclude Include="ClipboardActivityStore.h" />
     <ClInclude Include="ClipboardHashGuard.h" />
-    <ClInclude Include="ClipboardData.h" />
+    <ClInclude Include="ClipboardPayload.h" />
     <ClInclude Include="ClipboardFormat.h" />
     <ClInclude Include="ClipboardWire.h" />
     <ClInclude Include="HostId.h" />

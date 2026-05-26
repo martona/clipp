@@ -1,10 +1,12 @@
 #pragma once
 
 #include <condition_variable>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
 
+#include "ClipboardPayload.h"
 #include "Listener.h"
 #include "MDNSDiscovery.h"
 
@@ -22,7 +24,7 @@ public:
 
 private:
     void ThreadProc();
-    void OnClipboardReceived(const std::wstring& hostName, const HostId& hostID, ClipboardPayload& payload);
+    void OnClipboardReceived(const std::wstring& hostName, const HostId& hostID, std::shared_ptr<const ClipboardPayload> payload);
 
     static void OnDiscoveryEvent(MDNSDiscovery::Event event, const MDNSDiscovery::DiscoveredPeer& peer);
 

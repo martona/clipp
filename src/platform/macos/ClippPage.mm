@@ -662,12 +662,12 @@ void MacOSClippPage::ScrollActivityToTop() const {
 }
 
 void MacOSClippPage::CopyActivityItem(uint64_t itemID) {
-    auto payload = activityStore_.PayloadForClipboard(itemID);
+    auto payload = activityStore_.PayloadReference(itemID);
     if (!payload) {
         return;
     }
 
-    SetClipboardData(*payload);
+    SetClipboardData(std::move(payload));
 }
 
 void MacOSClippPage::ShowNetworkPage() {

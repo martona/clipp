@@ -1,6 +1,6 @@
 #pragma once
 #include "platform.h"
-#include "ClipboardData.h"
+#include "ClipboardPayload.h"
 
 #include <memory>
 
@@ -16,10 +16,13 @@ bool StartClipboardNotification(ClipboardCallback callback);
 // Stops the clipboard notification thread. Blocks until the thread exits.
 void StopClipboardNotification();
 
-// Reads the clipboard data and returns it as packet
+// Reads the clipboard data and returns it as packet. The returned payload is
+// fully populated via SetUncompressedBytes — hash is computed, compressed iff
+// profitable. Format CLIPP_FORMAT_NONE means "nothing to send" (empty or echo).
 ClipboardPayload ReadClipboardData(PlatformWindowHandle hwnd);
 bool IsClipboardDataCurrent(const ClipboardPayload& payload);
+// Writes the payload to the OS clipboard. The shared_ptr doubles as the
+// delayed-render reference (Win32 needs it alive across CF_DIB rendering).
 void SetClipboardData(
-    ClipboardPayload& payload,
-    bool markAsClippOriginated = true,
-    std::shared_ptr<const ClipboardPayload> delayedRenderPayloadReference = nullptr);
+    std::shared_ptr<const ClipboardPayload> payload,
+    bool markAsClippOriginated = true);

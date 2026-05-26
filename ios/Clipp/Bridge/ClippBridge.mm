@@ -3,7 +3,7 @@
 #import <UIKit/UIKit.h>
 
 #include "../../../src/ClipboardActivityStore.h"
-#include "../../../src/ClipboardData.h"
+#include "../../../src/ClipboardPayload.h"
 #include "../../../src/ClipboardHashGuard.h"
 #include "../../../src/ClipboardWire.h"
 #include "../../../src/KeyManager.h"
@@ -221,15 +221,18 @@ NSString* ToNSString(const std::wstring& value) {
 }
 
 NSString* ClipboardTextFromPayload(const ClipboardPayload& payload) {
-    size_t textLength = payload.rawData.size();
-    if (textLength > 0 && payload.rawData.back() == '\0') {
+    const std::vector<unsigned char>* utf8 = payload.TryGetUncompressedBytes();
+    if (utf8 == nullptr) {
+        return @"";
+    }
+    size_t textLength = utf8->size();
+    if (textLength > 0 && utf8->back() == '\0') {
         --textLength;
     }
     if (textLength == 0) {
         return @"";
     }
-
-    return [[NSString alloc] initWithBytes:payload.rawData.data()
+    return [[NSString alloc] initWithBytes:utf8->data()
                                     length:textLength
                                   encoding:NSUTF8StringEncoding];
 }
@@ -404,7 +407,7 @@ CLPNetworkPeerItem* MakeNetworkPeerItem(const PeerDisplayItem& item) {
 }
 
 bool ClipboardPayloadFromPasteboard(ClipboardPayload& payload, NSError** error) {
-    payload = {};
+    payload = ClipboardPayload{};
     UIPasteboard* pasteboard = UIPasteboard.generalPasteboard;
 
     NSString* text = pasteboard.string;
@@ -420,18 +423,20 @@ bool ClipboardPayloadFromPasteboard(ClipboardPayload& payload, NSError** error) 
         }
 
         payload.meta.formatId = CLIPP_FORMAT_UTF8;
-        const auto* bytes = static_cast<const unsigned char*>(textData.bytes);
-        payload.rawData.assign(bytes, bytes + textData.length);
-        payload.rawData.push_back('\0');
-        return true;
+        std::vector<unsigned char> bytes;
+        const auto* src = static_cast<const unsigned char*>(textData.bytes);
+        bytes.assign(src, src + textData.length);
+        bytes.push_back('\0');
+        return payload.SetUncompressedBytes(std::move(bytes));
     }
 
     NSData* jpegData = [pasteboard dataForPasteboardType:@"public.jpeg"];
     if (jpegData.length > 0) {
         payload.meta.formatId = CLIPP_FORMAT_JPEG;
-        const auto* bytes = static_cast<const unsigned char*>(jpegData.bytes);
-        payload.rawData.assign(bytes, bytes + jpegData.length);
-        return true;
+        std::vector<unsigned char> bytes;
+        const auto* src = static_cast<const unsigned char*>(jpegData.bytes);
+        bytes.assign(src, src + jpegData.length);
+        return payload.SetUncompressedBytes(std::move(bytes));
     }
 
     NSData* pngData = [pasteboard dataForPasteboardType:@"public.png"];
@@ -441,9 +446,10 @@ bool ClipboardPayloadFromPasteboard(ClipboardPayload& payload, NSError** error) 
 
     if (pngData.length > 0) {
         payload.meta.formatId = CLIPP_FORMAT_PNG;
-        const auto* bytes = static_cast<const unsigned char*>(pngData.bytes);
-        payload.rawData.assign(bytes, bytes + pngData.length);
-        return true;
+        std::vector<unsigned char> bytes;
+        const auto* src = static_cast<const unsigned char*>(pngData.bytes);
+        bytes.assign(src, src + pngData.length);
+        return payload.SetUncompressedBytes(std::move(bytes));
     }
 
     AssignError(error, kClippOutgoingClipboardErrorBase + 3, @"The clipboard does not contain sendable text or image data.");
@@ -524,29 +530,32 @@ CLPDiagnosticLogLine* MakeDiagnosticLogLine(const TerminalLogBuffer::Line& line)
 }
 }
 
-void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const ClipboardPayload& payload) {
+void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, std::shared_ptr<const ClipboardPayload> payload) {
+    if (!payload) {
+        return;
+    }
     @autoreleasepool {
-        if (payload.meta.formatId == CLIPP_FORMAT_UTF8) {
-            NSString* text = ClipboardTextFromPayload(payload);
-            if (text.length == 0 && payload.rawData.size() != 0) {
+        if (payload->meta.formatId == CLIPP_FORMAT_UTF8) {
+            NSString* text = ClipboardTextFromPayload(*payload);
+            if (text.length == 0 && payload->meta.uncompressedDataSize != 0) {
                 g_logger.log("iOS", Logger::Level::Warning, L"Incoming text clipboard payload could not be decoded as UTF-8.");
                 return;
             }
-        } else if (IsClippImageFormat(payload.meta.formatId)) {
+        } else if (IsClippImageFormat(payload->meta.formatId)) {
         } else {
             g_logger.log("iOS", Logger::Level::Warning, L"Unsupported incoming clipboard format %ls (%u); payload ignored.",
-                         ClippClipboardFormatNameW(payload.meta.formatId),
-                         payload.meta.formatId);
+                         ClippClipboardFormatNameW(payload->meta.formatId),
+                         payload->meta.formatId);
             return;
         }
 
-        if (!g_clipboardHashGuard.AcceptCurrent(payload)) {
+        if (!g_clipboardHashGuard.AcceptCurrent(*payload)) {
             g_logger.log("iOS", Logger::Level::Debug, L"Ignoring duplicate incoming clipboard payload.");
             return;
         }
 
         EnsureClipboardActivityWatcher();
-        g_clipboardActivityStore.AddIncoming(hostName, payload);
+        g_clipboardActivityStore.AddIncoming(hostName, std::move(payload));
     }
 }
 
@@ -629,7 +638,7 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const Clipboard
         return NO;
     }
 
-    std::optional<ClipboardPayload> payload = g_clipboardActivityStore.PayloadForClipboard(item.activityItemID);
+    auto payload = g_clipboardActivityStore.PayloadReference(item.activityItemID);
     if (!payload) {
         AssignError(error, kClippClipboardActivityErrorBase + 2, @"The clipboard item is no longer available.");
         return NO;
@@ -649,7 +658,9 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const Clipboard
 
     if (item.hasImagePayload) {
         NSString* pasteboardType = PasteboardTypeForClippImageFormat(payload->meta.formatId);
-        NSData* imageData = DataFromBytes(payload->rawData);
+        // Images are uncompressed in storage; share the bytes without a copy.
+        NSData* imageData = DataFromImageBytes(std::shared_ptr<const std::vector<unsigned char>>(
+            payload, &payload->EncodedBytes()));
         if (pasteboardType == nil || imageData.length == 0) {
             AssignError(error, kClippClipboardActivityErrorBase + 4, @"Unable to copy clipboard image.");
             return NO;
@@ -688,13 +699,6 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const Clipboard
         return nil;
     }
 
-    ClipboardPayload payloadToSend = payload;
-    const size_t uncompressedDataSize = payloadToSend.rawData.size();
-    if (!payloadToSend.ZstdCompress()) {
-        AssignError(error, kClippOutgoingClipboardErrorBase + 5, @"Unable to prepare clipboard data for sending.");
-        return nil;
-    }
-
     if (payload.meta.formatId != CLIPP_FORMAT_UTF8 && !IsClippImageFormat(payload.meta.formatId)) {
         AssignError(error, kClippOutgoingClipboardErrorBase + 6, @"Unsupported clipboard data.");
         return nil;
@@ -704,17 +708,17 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, const Clipboard
     g_clipboardHashGuard.RememberCurrent(payload);
     HostId localHostId;
     g_settings.getHostID(localHostId);
-    ClipboardWire::FinalizeOutgoingPayload(payloadToSend, localHostId);
-    auto sharedPayload = std::make_shared<const ClipboardPayload>(std::move(payloadToSend));
-    const uint64_t activityItemID = g_clipboardActivityStore.AddOutgoing(L"This iPhone", *sharedPayload);
+    ClipboardWire::FinalizeOutgoingPayload(payload, localHostId);
+    auto sharedPayload = std::make_shared<const ClipboardPayload>(std::move(payload));
+    const uint64_t activityItemID = g_clipboardActivityStore.AddOutgoing(L"This iPhone", sharedPayload);
     g_peerManager.BroadcastClipboard(sharedPayload);
     g_logger.log("iOS",
                  Logger::Level::Info,
-                 L"Broadcast current iOS pasteboard (format: %ls, ID: %u, payload size: %zu bytes, uncompressed size: %zu bytes)",
+                 L"Broadcast current iOS pasteboard (format: %ls, ID: %u, encoded size: %zu bytes, uncompressed size: %llu bytes)",
                  ClippClipboardFormatNameW(sharedPayload->meta.formatId),
                  sharedPayload->meta.formatId,
-                 sharedPayload->rawData.size(),
-                 uncompressedDataSize);
+                 sharedPayload->EncodedBytes().size(),
+                 static_cast<unsigned long long>(sharedPayload->meta.uncompressedDataSize));
 
     ClipboardActivityItemHeader header{};
     header.id = activityItemID;

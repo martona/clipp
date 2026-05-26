@@ -134,7 +134,7 @@
     <ClInclude Include="ClipboardHashGuard.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="ClipboardData.h">
+    <ClInclude Include="ClipboardPayload.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="ClipboardFormat.h">

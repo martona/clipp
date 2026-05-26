@@ -23,12 +23,12 @@ ClipboardPayload MakeTextClipboardPayload(const std::wstring& text) {
     payload.meta.formatId = CLIPP_FORMAT_UTF8;
 
     const size_t utf8Bytes = utf16_to_utf8(text.c_str(), text.size(), nullptr, 0);
-    payload.rawData.resize(utf8Bytes + 1);
+    std::vector<unsigned char> bytes(utf8Bytes + 1);
     if (utf8Bytes > 0) {
-        utf16_to_utf8(text.c_str(), text.size(), reinterpret_cast<char*>(payload.rawData.data()), utf8Bytes);
+        utf16_to_utf8(text.c_str(), text.size(), reinterpret_cast<char*>(bytes.data()), utf8Bytes);
     }
-    payload.rawData[utf8Bytes] = '\0';
-
+    bytes[utf8Bytes] = '\0';
+    payload.SetUncompressedBytes(std::move(bytes));
     return payload;
 }
 }
@@ -177,7 +177,7 @@ void LogsPage::CopyLogsToClipboard() {
         }
     }
 
-    ClipboardPayload payload = MakeTextClipboardPayload(text);
+    auto payload = std::make_shared<const ClipboardPayload>(MakeTextClipboardPayload(text));
     SetClipboardData(payload, false);
 }
 

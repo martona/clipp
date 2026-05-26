@@ -1,113 +1,208 @@
 #pragma once
 #include <cstdint>
-#include <cstdlib>
+#include <cstring>
+#include <mutex>
 #include <vector>
+
+#include <xxhash.h>
 #include <zstd.h>
+
 #include "ClipboardFormat.h"
 #include "ClipboardLimits.h"
 #include "Logger.h"
 #include "NetworkDefs.h"
 
-// One in-memory representation of a clipboard item, end to end.
-// `meta` is the same struct that travels on the wire (NetworkDefs::ClipboardMessage),
-// so format/compression/sizes/hash/origin all live in one place. `rawData` is the
-// payload bytes — compressed iff `meta.isCompressed != 0`. The store, the wire layer,
-// and the platform clipboard adapters all operate on this single struct.
-struct ClipboardPayload {
-	NetworkDefs::ClipboardMessage meta{};
-	std::vector<unsigned char> rawData;
+// One in-memory representation of a clipboard item, end to end. `meta` is the
+// same struct that travels on the wire (NetworkDefs::ClipboardMessage), so
+// format / compression / sizes / hash / origin all live in one place.
+//
+// Bytes are private. Callers go through SetUncompressedBytes (when they have
+// plaintext to send/store) or SetEncodedBytes (when they've parsed bytes off
+// the wire). On the read side, EncodedBytes() returns the bytes as stored,
+// and TryGetUncompressedBytes() returns plaintext — either the same storage
+// (no copy, when the payload wasn't compressed in the first place) or a
+// lazily-decompressed scratch buffer.
+//
+// Move-only. Typical lifecycle: build, wrap in shared_ptr<const>, share.
+class ClipboardPayload {
+public:
+    NetworkDefs::ClipboardMessage meta{};
 
-	// Compresses rawData with zstd when it's worth it (text-only, ≥ 512 bytes).
-	// Updates meta.isCompressed, meta.uncompressedDataSize, meta.payloadDataSize.
-	bool ZstdCompress() {
-		meta.uncompressedDataSize = static_cast<uint64_t>(rawData.size());
+    ClipboardPayload() = default;
+    ClipboardPayload(const ClipboardPayload&) = delete;
+    ClipboardPayload& operator=(const ClipboardPayload&) = delete;
+    ClipboardPayload(ClipboardPayload&& other) noexcept {
+        meta = other.meta;
+        encoded_ = std::move(other.encoded_);
+        // Mutex / scratch / flags are NOT moved; this is a fresh instance.
+        // The decompressed cache will be re-populated lazily on first read.
+    }
+    ClipboardPayload& operator=(ClipboardPayload&& other) noexcept {
+        if (this == &other) return *this;
+        meta = other.meta;
+        encoded_ = std::move(other.encoded_);
+        std::lock_guard<std::mutex> lock(scratchMutex_);
+        decompressedScratch_.clear();
+        decompressedScratch_.shrink_to_fit();
+        scratchAttempted_ = false;
+        scratchOk_ = false;
+        return *this;
+    }
 
-		if (rawData.size() < 512 || meta.formatId != CLIPP_FORMAT_UTF8) {
-			meta.isCompressed = 0;
-			meta.payloadDataSize = static_cast<uint64_t>(rawData.size());
-			return true;
-		}
+    // Outgoing entry point: hand over plaintext bytes. Computes the hash over
+    // the plaintext, compresses if profitable (text ≥ 512 bytes), and fills
+    // meta.{hashAlg, hashBytes, isCompressed, uncompressedDataSize,
+    // payloadDataSize}. meta.formatId must be set before this call. Returns
+    // false on compression failure.
+    bool SetUncompressedBytes(std::vector<unsigned char> bytes) {
+        // Hash over plaintext (content identity, stable across compression).
+        const XXH128_hash_t hash = XXH3_128bits_withSeed(
+            bytes.data(),
+            bytes.size(),
+            static_cast<XXH64_hash_t>(meta.formatId));
+        XXH128_canonical_t canonical{};
+        XXH128_canonicalFromHash(&canonical, hash);
+        static_assert(sizeof(canonical.digest) == 16, "XXH128 canonical digest must be 16 bytes");
+        meta.hashAlg = 1;
+        std::memset(meta.hashBytes, 0, sizeof(meta.hashBytes));
+        std::memcpy(meta.hashBytes, canonical.digest, sizeof(canonical.digest));
 
-		const size_t bound = ZSTD_compressBound(rawData.size());
-		std::vector<unsigned char> compressedData(bound);
-		const size_t compressedSize = ZSTD_compress(
-			compressedData.data(),
-			compressedData.size(),
-			rawData.data(),
-			rawData.size(),
-			ZSTD_fast);
+        meta.uncompressedDataSize = static_cast<uint64_t>(bytes.size());
 
-		if (ZSTD_isError(compressedSize) != 0) {
-			return false;
-		}
+        const bool worthCompressing =
+            bytes.size() >= 512 && meta.formatId == CLIPP_FORMAT_UTF8;
 
-		g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Compressed data from %zu bytes to %zu bytes", rawData.size(), compressedSize);
-		compressedData.resize(compressedSize);
-		rawData = std::move(compressedData);
-		meta.isCompressed = 1;
-		meta.payloadDataSize = static_cast<uint64_t>(rawData.size());
-		return true;
-	}
+        if (!worthCompressing) {
+            encoded_ = std::move(bytes);
+            meta.isCompressed = 0;
+            meta.payloadDataSize = static_cast<uint64_t>(encoded_.size());
+            ResetScratch();
+            return true;
+        }
 
-	// Decompresses rawData if meta.isCompressed; verifies sizes against meta.
-	// Updates meta.isCompressed, meta.payloadDataSize on success.
-	bool ZstdDecompress() {
-		const uint64_t expectedUncompressedSize = meta.uncompressedDataSize;
-		if (expectedUncompressedSize > ClipboardLimits::kMaxDecompressedClipboardBytes) {
-			g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard payload: uncompressed size %llu bytes exceeds limit %llu bytes",
-				static_cast<unsigned long long>(expectedUncompressedSize),
-				ClipboardLimits::kMaxDecompressedClipboardBytes);
-			return false;
-		}
+        const size_t bound = ZSTD_compressBound(bytes.size());
+        std::vector<unsigned char> compressed(bound);
+        const size_t compressedSize = ZSTD_compress(
+            compressed.data(),
+            compressed.size(),
+            bytes.data(),
+            bytes.size(),
+            ZSTD_fast);
+        if (ZSTD_isError(compressedSize) != 0) {
+            return false;
+        }
 
-		if (meta.isCompressed == 0) {
-			if (rawData.size() != expectedUncompressedSize) {
-				g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting uncompressed clipboard payload: size mismatch (expected %llu bytes, actual %zu bytes)",
-					static_cast<unsigned long long>(expectedUncompressedSize), rawData.size());
-				return false;
-			}
-			return true;
-		}
+        g_logger.log(__FUNCTION__, Logger::Level::Debug,
+            L"Compressed data from %zu bytes to %zu bytes",
+            bytes.size(), compressedSize);
 
-		const unsigned long long decompressedSize = ZSTD_getFrameContentSize(rawData.data(), rawData.size());
-		if (decompressedSize == ZSTD_CONTENTSIZE_ERROR) {
-			g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting compressed clipboard payload: invalid zstd frame (compressed size: %zu bytes)", rawData.size());
-			return false;
-		}
+        compressed.resize(compressedSize);
+        encoded_ = std::move(compressed);
+        meta.isCompressed = 1;
+        meta.payloadDataSize = static_cast<uint64_t>(encoded_.size());
+        ResetScratch();
+        return true;
+    }
 
-		if (decompressedSize == ZSTD_CONTENTSIZE_UNKNOWN) {
-			g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting compressed clipboard payload: unknown decompressed size (compressed size: %zu bytes)", rawData.size());
-			return false;
-		}
+    // Wire receive entry point: caller has parsed meta from the wire and now
+    // hands over the body bytes exactly as received. meta describes what's in
+    // `bytes`; no recompression, no hash recompute. Caller is responsible for
+    // having validated meta.payloadDataSize against bytes.size().
+    void SetEncodedBytes(std::vector<unsigned char> bytes) {
+        encoded_ = std::move(bytes);
+        ResetScratch();
+    }
 
-		if (decompressedSize != expectedUncompressedSize) {
-			g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting compressed clipboard payload: frame uncompressed size mismatch (expected %llu bytes, frame reports %llu bytes)",
-				static_cast<unsigned long long>(expectedUncompressedSize), decompressedSize);
-			return false;
-		}
+    // Bytes as stored. For wire send and any "I want the storage form" caller.
+    const std::vector<unsigned char>& EncodedBytes() const { return encoded_; }
 
-		std::vector<unsigned char> decompressedData(static_cast<size_t>(expectedUncompressedSize));
-		const size_t actualSize = ZSTD_decompress(
-			decompressedData.data(),
-			decompressedData.size(),
-			rawData.data(),
-			rawData.size());
+    // Plaintext access. Fast path (meta.isCompressed == 0): returns &encoded_
+    // with no copy and no lock. Slow path: lazy-fills an internal scratch
+    // buffer on first call, returns a pointer to that. nullptr on
+    // decompression failure or malformed data.
+    const std::vector<unsigned char>* TryGetUncompressedBytes() const {
+        if (meta.isCompressed == 0) {
+            return &encoded_;
+        }
 
-		if (ZSTD_isError(actualSize) != 0) {
-			g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting compressed clipboard payload: zstd decompression failed (%hs)", ZSTD_getErrorName(actualSize));
-			return false;
-		}
+        std::lock_guard<std::mutex> lock(scratchMutex_);
+        if (scratchAttempted_) {
+            return scratchOk_ ? &decompressedScratch_ : nullptr;
+        }
+        scratchAttempted_ = true;
 
-		if (actualSize != expectedUncompressedSize) {
-			g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Rejecting compressed clipboard payload: decompressed size mismatch (expected %llu bytes, actual %zu bytes)",
-				static_cast<unsigned long long>(expectedUncompressedSize), actualSize);
-			return false;
-		}
+        const uint64_t expectedUncompressedSize = meta.uncompressedDataSize;
+        if (expectedUncompressedSize > ClipboardLimits::kMaxDecompressedClipboardBytes) {
+            g_logger.log(__FUNCTION__, Logger::Level::Warning,
+                L"Rejecting clipboard payload: uncompressed size %llu bytes exceeds limit %llu bytes",
+                static_cast<unsigned long long>(expectedUncompressedSize),
+                ClipboardLimits::kMaxDecompressedClipboardBytes);
+            return nullptr;
+        }
 
-		g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Decompressed data from %zu bytes to %zu bytes", rawData.size(), actualSize);
-		rawData = std::move(decompressedData);
-		meta.isCompressed = 0;
-		meta.payloadDataSize = static_cast<uint64_t>(rawData.size());
-		return true;
-	}
+        const unsigned long long frameSize = ZSTD_getFrameContentSize(encoded_.data(), encoded_.size());
+        if (frameSize == ZSTD_CONTENTSIZE_ERROR || frameSize == ZSTD_CONTENTSIZE_UNKNOWN) {
+            g_logger.log(__FUNCTION__, Logger::Level::Warning,
+                L"Rejecting clipboard payload: invalid or unknown zstd frame (compressed size: %zu bytes)",
+                encoded_.size());
+            return nullptr;
+        }
+
+        if (frameSize != expectedUncompressedSize) {
+            g_logger.log(__FUNCTION__, Logger::Level::Warning,
+                L"Rejecting clipboard payload: frame size %llu bytes does not match meta %llu bytes",
+                frameSize,
+                static_cast<unsigned long long>(expectedUncompressedSize));
+            return nullptr;
+        }
+
+        decompressedScratch_.assign(static_cast<size_t>(expectedUncompressedSize), 0);
+        const size_t actualSize = ZSTD_decompress(
+            decompressedScratch_.data(),
+            decompressedScratch_.size(),
+            encoded_.data(),
+            encoded_.size());
+        if (ZSTD_isError(actualSize) != 0) {
+            g_logger.log(__FUNCTION__, Logger::Level::Warning,
+                L"Rejecting clipboard payload: zstd decompression failed (%hs)",
+                ZSTD_getErrorName(actualSize));
+            decompressedScratch_.clear();
+            decompressedScratch_.shrink_to_fit();
+            return nullptr;
+        }
+        if (actualSize != expectedUncompressedSize) {
+            g_logger.log(__FUNCTION__, Logger::Level::Warning,
+                L"Rejecting clipboard payload: decompressed size mismatch (expected %llu, got %zu)",
+                static_cast<unsigned long long>(expectedUncompressedSize),
+                actualSize);
+            decompressedScratch_.clear();
+            decompressedScratch_.shrink_to_fit();
+            return nullptr;
+        }
+
+        g_logger.log(__FUNCTION__, Logger::Level::Debug,
+            L"Decompressed data from %zu bytes to %zu bytes",
+            encoded_.size(), actualSize);
+
+        scratchOk_ = true;
+        return &decompressedScratch_;
+    }
+
+    bool Empty() const { return encoded_.empty(); }
+
+private:
+    void ResetScratch() {
+        std::lock_guard<std::mutex> lock(scratchMutex_);
+        decompressedScratch_.clear();
+        decompressedScratch_.shrink_to_fit();
+        scratchAttempted_ = false;
+        scratchOk_ = false;
+    }
+
+    std::vector<unsigned char> encoded_;
+
+    mutable std::mutex scratchMutex_;
+    mutable std::vector<unsigned char> decompressedScratch_;
+    mutable bool scratchAttempted_{false};
+    mutable bool scratchOk_{false};
 };

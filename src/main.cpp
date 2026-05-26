@@ -200,23 +200,18 @@ void OnClipboardNotification(PlatformWindowHandle hwnd) {
     if (clipboardData.meta.formatId == CLIPP_FORMAT_NONE) {
         g_logger.log(__FUNCTION__, Logger::Level::Debug, "Clipboard is empty, contains unsupported format, or came from us");
         return;
-	}
-	const size_t uncompressedDataSize = clipboardData.rawData.size();
-	if (!clipboardData.ZstdCompress()) {
-		g_logger.log(__FUNCTION__, Logger::Level::Warning, "Failed to compress clipboard data; skipping broadcast");
-		return;
-	}
+    }
     HostId localHostId;
     g_settings.getHostID(localHostId);  // zero-init HostId on failure is fine for the activity record
     ClipboardWire::FinalizeOutgoingPayload(clipboardData, localHostId);
-	auto payload = std::make_shared<const ClipboardPayload>(std::move(clipboardData));
-    g_clipboardActivityStore.AddOutgoing(CLP_W(CLP_UI_THIS_DEVICE), *payload);
+    auto payload = std::make_shared<const ClipboardPayload>(std::move(clipboardData));
+    g_clipboardActivityStore.AddOutgoing(CLP_W(CLP_UI_THIS_DEVICE), payload);
     g_peerManager.BroadcastClipboard(payload);
-	g_logger.log(__FUNCTION__, Logger::Level::Debug, "Broadcast clipboard data to peers (format: %s, ID: %u, payload size: %zu bytes, uncompressed size: %zu bytes)",
+    g_logger.log(__FUNCTION__, Logger::Level::Debug, "Broadcast clipboard data to peers (format: %s, ID: %u, encoded size: %zu bytes, uncompressed size: %llu bytes)",
         ClippClipboardFormatName(payload->meta.formatId),
         payload->meta.formatId,
-        payload->rawData.size(),
-        uncompressedDataSize);
+        payload->EncodedBytes().size(),
+        static_cast<unsigned long long>(payload->meta.uncompressedDataSize));
 }
 
 void PrintNetworkFingerprint(const std::array<unsigned char, KeyManager::NetworkKeySize>& networkKey) {

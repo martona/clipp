@@ -443,12 +443,12 @@ void ClippPage::ScrollActivityToTop() const {
 }
 
 void ClippPage::CopyActivityItem(uint64_t itemID) {
-    auto payload = activityStore_.PayloadForClipboard(itemID);
+    auto payload = activityStore_.PayloadReference(itemID);
     if (!payload) {
         return;
     }
 
-    SetClipboardData(*payload, true, activityStore_.PayloadReference(itemID));
+    SetClipboardData(std::move(payload), true);
 }
 
 void ClippPage::OnShown() {
