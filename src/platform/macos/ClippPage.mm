@@ -223,7 +223,7 @@ namespace {
 constexpr CGFloat kPageInset = 28.0;
 constexpr CGFloat kActivityFollowTopTolerance = 48.0;
 constexpr CGFloat kActivityBubbleMaxWidth = 460.0;
-constexpr size_t kActivityThumbnailMaxPixelSize = 1024;
+constexpr size_t kActivityThumbnailMaxPixelSize = 768;
 
 NSImage* ThumbnailImageFromBytes(const std::shared_ptr<const std::vector<unsigned char>>& bytes) {
     if (!bytes || bytes->empty()) {
@@ -242,7 +242,10 @@ NSImage* ThumbnailImageFromBytes(const std::shared_ptr<const std::vector<unsigne
         return nil;
     }
 
-    CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)data, NULL);
+    NSDictionary* sourceOptions = @{
+        (id)kCGImageSourceShouldCache: @NO,
+    };
+    CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)data, (__bridge CFDictionaryRef)sourceOptions);
     if (source == nullptr) {
         return nil;
     }

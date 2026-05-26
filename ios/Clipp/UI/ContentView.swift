@@ -754,7 +754,7 @@ private struct ClipboardPayloadView: View {
 private struct ClipboardImagePreview: View {
     let data: Data
 
-    private static let thumbnailMaxPixelSize: CGFloat = 1024
+    private static let thumbnailMaxPixelSize: CGFloat = 768
 
     var body: some View {
         if let thumb = Self.thumbnail(from: data, maxPixelSize: Self.thumbnailMaxPixelSize) {
@@ -771,7 +771,10 @@ private struct ClipboardImagePreview: View {
     }
 
     private static func thumbnail(from data: Data, maxPixelSize: CGFloat) -> UIImage? {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
+        let sourceOptions: [CFString: Any] = [
+            kCGImageSourceShouldCache: false,
+        ]
+        guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions as CFDictionary) else {
             return nil
         }
 
