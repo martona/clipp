@@ -49,7 +49,7 @@ void ConnectKeyViewSequence(NSArray<NSView*>* views) {
 
 ClipboardPayload MakeTextClipboardPayload(NSString* text) {
     ClipboardPayload payload{};
-    payload.formatId = CLIPP_FORMAT_UTF8;
+    payload.meta.formatId = CLIPP_FORMAT_UTF8;
 
     NSString* value = text != nil ? text : @"";
     NSData* data = [value dataUsingEncoding:NSUTF8StringEncoding];

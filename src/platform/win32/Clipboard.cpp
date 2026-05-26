@@ -801,7 +801,7 @@ static std::shared_ptr<const ClipboardPayload> MakeDelayedClipboardRenderPayload
     }
 
     ClipboardPayload stored = payload;
-    if (!stored.isCompressed) {
+    if (stored.meta.isCompressed == 0) {
         if (!stored.ZstdCompress()) {
             return nullptr;
         }
@@ -848,10 +848,10 @@ static bool RenderDelayedClipboardFormat(UINT format) {
     }
 
     ClipboardPayload payload = *renderPayload;
-    if (!IsClippImageFormat(payload.formatId)) {
+    if (!IsClippImageFormat(payload.meta.formatId)) {
         g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Ignoring delayed CF_DIB render request because retained payload format is %ls (%u).",
-            ClippClipboardFormatNameW(payload.formatId),
-            payload.formatId);
+            ClippClipboardFormatNameW(payload.meta.formatId),
+            payload.meta.formatId);
         return false;
     }
 
@@ -863,11 +863,11 @@ static bool RenderDelayedClipboardFormat(UINT format) {
     std::vector<unsigned char> dibData;
     {
         g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Rendering delayed CF_DIB from %ls payload (%zu bytes).",
-            ClippClipboardFormatNameW(payload.formatId),
+            ClippClipboardFormatNameW(payload.meta.formatId),
             payload.rawData.size());
         ScopedTimer timer(L"Delayed clipboard image to CF_DIB rendering");
-        if (!EncodedImageToDIB(payload.rawData, payload.formatId, dibData)) {
-            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to render delayed %ls clipboard payload as CF_DIB.", ClippClipboardFormatNameW(payload.formatId));
+        if (!EncodedImageToDIB(payload.rawData, payload.meta.formatId, dibData)) {
+            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to render delayed %ls clipboard payload as CF_DIB.", ClippClipboardFormatNameW(payload.meta.formatId));
             return false;
         }
     }
@@ -884,7 +884,7 @@ static bool RenderDelayedClipboardFormat(UINT format) {
     }
 
     g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Rendered delayed CF_DIB clipboard data from %ls payload (encoded: %zu bytes, DIB: %zu bytes)",
-        ClippClipboardFormatNameW(payload.formatId),
+        ClippClipboardFormatNameW(payload.meta.formatId),
         payload.rawData.size(),
         dibData.size());
     return true;
@@ -995,7 +995,7 @@ void StopClipboardNotification() {
 
 ClipboardPayload ReadClipboardData(HWND hwnd) {
     ClipboardPayload payload{};
-    payload.formatId = CLIPP_FORMAT_NONE;
+    payload.meta.formatId = CLIPP_FORMAT_NONE;
 
     bool opened = false;
     for (int i = 0; i < 5; ++i) {
@@ -1016,7 +1016,7 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
                         // Calculate required buffer size for UTF-8 (including null terminator)
                         int utf8Size = WideCharToMultiByte(CP_UTF8, 0, utf16Str, -1, nullptr, 0, nullptr, nullptr);
                         if (utf8Size > 0) {
-                            payload.formatId = CLIPP_FORMAT_UTF8;
+                            payload.meta.formatId = CLIPP_FORMAT_UTF8;
                             payload.rawData.resize(utf8Size);
                             // Perform the actual conversion straight into the vector
                             if (WideCharToMultiByte(CP_UTF8, 0, utf16Str, -1,
@@ -1024,7 +1024,7 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
                                 g_logger.log(__FUNCTION__, Logger::Level::Info, L"Read CF_UNICODETEXT from system clipboard (UTF-8 payload: %zu bytes)", payload.rawData.size());
                             }
                             else {
-                                payload.formatId = CLIPP_FORMAT_NONE;
+                                payload.meta.formatId = CLIPP_FORMAT_NONE;
                                 payload.rawData.clear();
                                 LogLastError(__FUNCTION__, L"Failed to convert CF_UNICODETEXT clipboard data to UTF-8");
                             }
@@ -1055,7 +1055,7 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
                             std::vector<unsigned char> pngData;
 							ScopedTimer timer(L"Clipboard DIB to PNG encoding");
                             if (DIBToPNG(dibData, static_cast<size_t>(dataSize), pngData)) {
-                                payload.formatId = CLIPP_FORMAT_PNG;
+                                payload.meta.formatId = CLIPP_FORMAT_PNG;
                                 payload.rawData = std::move(pngData);
                                 g_logger.log(__FUNCTION__, Logger::Level::Info, L"Read CF_DIB from system clipboard and encoded PNG payload (DIB: %zu bytes, PNG: %zu bytes)", static_cast<size_t>(dataSize), payload.rawData.size());
                             } else {
@@ -1086,10 +1086,10 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
         g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to open system clipboard for reading after retries");
     }
 
-    if (payload.formatId != CLIPP_FORMAT_NONE) {
+    if (payload.meta.formatId != CLIPP_FORMAT_NONE) {
         if (!g_clipboardHashGuard.AcceptCurrent(payload)) {
             g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Ignoring clipboard notification for already-current clipboard contents.");
-            payload.formatId = CLIPP_FORMAT_NONE;
+            payload.meta.formatId = CLIPP_FORMAT_NONE;
             payload.rawData.clear();
         }
     }
@@ -1098,7 +1098,7 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
 }
 
 bool IsClipboardDataCurrent(const ClipboardPayload& payload) {
-    return payload.formatId != CLIPP_FORMAT_NONE && g_clipboardHashGuard.IsCurrent(payload);
+    return payload.meta.formatId != CLIPP_FORMAT_NONE && g_clipboardHashGuard.IsCurrent(payload);
 }
 
 void SetClipboardData(
@@ -1123,7 +1123,7 @@ void SetClipboardData(
             }
             ClearDelayedClipboardRenderState();
 
-            if (payload.formatId == CLIPP_FORMAT_UTF8) {
+            if (payload.meta.formatId == CLIPP_FORMAT_UTF8) {
                 char* utf8Data = reinterpret_cast<char*>(payload.rawData.data());
                 int utf8Bytes = static_cast<int>(payload.rawData.size());
                 if (utf8Bytes > 0) utf8Data[utf8Bytes - 1] = '\0';
@@ -1164,9 +1164,9 @@ void SetClipboardData(
                     LogLastError(__FUNCTION__, L"Failed to measure UTF-8 payload as CF_UNICODETEXT");
                 }
             }
-            else if (IsClippImageFormat(payload.formatId)) {
+            else if (IsClippImageFormat(payload.meta.formatId)) {
                 g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Preparing delayed CF_DIB clipboard rendering for %ls payload (%zu bytes).",
-                    ClippClipboardFormatNameW(payload.formatId),
+                    ClippClipboardFormatNameW(payload.meta.formatId),
                     payload.rawData.size());
                 auto renderPayload = MakeDelayedClipboardRenderPayload(payload, std::move(delayedRenderPayloadReference));
                 if (!renderPayload) {
@@ -1181,7 +1181,7 @@ void SetClipboardData(
                     if (delayedHandle != nullptr || delayedError == ERROR_SUCCESS) {
                         wroteClipboard = true;
                         g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Advertised delayed CF_DIB clipboard rendering from %ls payload (encoded: %zu bytes)",
-                            ClippClipboardFormatNameW(payload.formatId),
+                            ClippClipboardFormatNameW(payload.meta.formatId),
                             payload.rawData.size());
                     }
                     else {
@@ -1192,8 +1192,8 @@ void SetClipboardData(
             }
             else {
                 g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Unsupported clipboard payload format %ls (%u); nothing written",
-                    ClippClipboardFormatNameW(payload.formatId),
-                    payload.formatId);
+                    ClippClipboardFormatNameW(payload.meta.formatId),
+                    payload.meta.formatId);
             }
 
             if (wroteClipboard && markAsClippOriginated && !SetClippOriginClipboardMarker()) {
@@ -1216,8 +1216,8 @@ void SetClipboardData(
     }
     else if (!wroteClipboard) {
         g_logger.log(__FUNCTION__, Logger::Level::Warning, L"System clipboard write did not complete (format: %ls, ID: %u, payload size: %zu bytes)",
-            ClippClipboardFormatNameW(payload.formatId),
-            payload.formatId,
+            ClippClipboardFormatNameW(payload.meta.formatId),
+            payload.meta.formatId,
             payload.rawData.size());
     }
 }

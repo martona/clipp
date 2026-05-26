@@ -315,11 +315,11 @@ bool Peer::DrainOutboundMessages(CryptoChannel& channel, const SocketIoContext& 
 		}
 
 		const std::shared_ptr<const ClipboardPayload>& payload = msg.value();
-		log(__FUNCTION__, Logger::Level::Debug, L"Clipboard payload to be sent: format %ls (%u), payload size %zu bytes, uncompressed size %u bytes",
-			ClippClipboardFormatNameW(payload->formatId),
-			payload->formatId,
+		log(__FUNCTION__, Logger::Level::Debug, L"Clipboard payload to be sent: format %ls (%u), payload size %zu bytes, uncompressed size %llu bytes",
+			ClippClipboardFormatNameW(payload->meta.formatId),
+			payload->meta.formatId,
 			payload->rawData.size(),
-			payload->uncompressedDataSize);
+			static_cast<unsigned long long>(payload->meta.uncompressedDataSize));
 		if (!SendClipboardData(channel, io, *payload)) {
 			log(__FUNCTION__, Logger::Level::Debug, L"Peer failed to send clipboard payload.");
 			return false;
@@ -395,14 +395,16 @@ void Peer::ThreadProcSend() {
 		backoffIdx = 0;
 		g_peerDisplay.NotifyPeerConnState(hostName(), hostID(), PeerConnState::Connected);
 		auto nextPingTime = std::chrono::steady_clock::now();
+		std::vector<unsigned char> frame;
 		while (!stopRequested_.load()) {
 			const auto now = std::chrono::steady_clock::now();
 			if (now >= nextPingTime) {
-				if (io.socket == INVALID_SOCKET || !channel.SendTaggedMessage(io, "PING")) {
+				if (io.socket == INVALID_SOCKET || !channel.SendFrame(io, "PING")) {
 					log(__FUNCTION__, Logger::Level::Debug, L"Peer failed secure send");
 					break;
 				}
-				ReportTraffic(4, 0);
+				// 4-byte tag + AEAD tag + length prefix; matches what the recv side counts.
+				ReportTraffic(4 + crypto_secretstream_xchacha20poly1305_ABYTES + sizeof(uint32_t), 0);
 				log(__FUNCTION__, Logger::Level::DDebug, L"PING?");
 				nextPingTime = now + NextPingInterval();
 			}
@@ -442,27 +444,33 @@ void Peer::ThreadProcSend() {
 			}
 
 			if (FD_ISSET(socket, &readSet)) {
-				char packet[4] = {};
-				if (!channel.RecvTaggedMessage(io, packet)) {
+				if (!channel.RecvFrame(io, frame)) {
 					log(__FUNCTION__, Logger::Level::Debug, L"Peer failed secure recv");
 					break;
 				}
-				ReportTraffic(0, 4);
+				if (frame.size() < 4) {
+					log(__FUNCTION__, Logger::Level::Warning, L"Peer: undersized frame; dropping connection.");
+					break;
+				}
+				ReportTraffic(0, frame.size() + crypto_secretstream_xchacha20poly1305_ABYTES + sizeof(uint32_t));
 
-				if (std::memcmp(packet, "PONG", 4) == 0) {
+				if (std::memcmp(frame.data(), "PONG", 4) == 0) {
 					{
 						std::lock_guard<std::mutex> lock(dataMutex_);
 						lastPingReceivedAt_ = std::chrono::steady_clock::now();
 					}
 					log(__FUNCTION__, Logger::Level::DDebug, L"PONG");
-				} else if (std::memcmp(packet, "PING", 4) == 0) {
-					if (!channel.SendTaggedMessage(io, "PONG")) {
+				} else if (std::memcmp(frame.data(), "PING", 4) == 0) {
+					if (!channel.SendFrame(io, "PONG")) {
 						break;
 					}
-					ReportTraffic(4, 0);
+					ReportTraffic(4 + crypto_secretstream_xchacha20poly1305_ABYTES + sizeof(uint32_t), 0);
 				} else {
-					log(__FUNCTION__, Logger::Level::Error, L"Peer: unexpected packet received.");
-					break;
+					// Forward-compat: unknown tags from a peer with caps we don't recognize
+					// are logged and ignored rather than treated as fatal.
+					log(__FUNCTION__, Logger::Level::Warning, L"Peer: unknown frame tag '%c%c%c%c'; ignoring.",
+						static_cast<wchar_t>(frame[0]), static_cast<wchar_t>(frame[1]),
+						static_cast<wchar_t>(frame[2]), static_cast<wchar_t>(frame[3]));
 				}
 			}
 		}
@@ -507,15 +515,15 @@ void Peer::ThreadProcRecv() {
 
 		// Idle deadline: if no traffic arrives for this long, assume the peer is gone (e.g.,
 		// iOS backgrounded the app — the kernel keeps the TCP state alive but the process
-		// can't respond, so the inner RecvTaggedMessage would otherwise block indefinitely).
+		// can't respond, so the inner RecvFrame would otherwise block indefinitely).
 		// Send-side picks up dead peers within one ping interval (~35s); recv-side mirrors
 		// that with some headroom for jitter and slow networks.
 		constexpr auto kRecvIdleTimeout = std::chrono::seconds(90);
 
-		char packet[4] = {};
+		std::vector<unsigned char> frame;
 		while (!stopRequested_.load()) {
 			// Wrap the recv with a select() that wakes periodically so we can enforce the idle
-			// deadline. RecvTaggedMessage's internal RecvAll uses an untimed select(), so
+			// deadline. RecvFrame's internal RecvAll uses an untimed select(), so
 			// without this wrapper a stale-but-not-closed socket parks the thread forever.
 			fd_set readSet;
 			FD_ZERO(&readSet);
@@ -549,81 +557,85 @@ void Peer::ThreadProcRecv() {
 				continue;
 			}
 
-			if (io.socket == INVALID_SOCKET || !channel.RecvTaggedMessage(io, packet)) {
+			if (io.socket == INVALID_SOCKET || !channel.RecvFrame(io, frame)) {
 				break;
 			}
+			if (frame.size() < 4) {
+				log(__FUNCTION__, Logger::Level::Warning, L"Rejecting undersized frame (%zu bytes).", frame.size());
+				break;
+			}
+			ReportTraffic(0, frame.size() + crypto_secretstream_xchacha20poly1305_ABYTES + sizeof(uint32_t));
 
-			if (std::memcmp(packet, "PING", 4) == 0) {
-				ReportTraffic(0, 4);
+			if (std::memcmp(frame.data(), "PING", 4) == 0) {
 				log(__FUNCTION__, Logger::Level::DDebug, L"PING");
 				{
 					std::lock_guard<std::mutex> lock(dataMutex_);
 					lastPingReceivedAt_ = std::chrono::steady_clock::now();
 				}
-				if (!channel.SendTaggedMessage(io, "PONG")) {
+				if (!channel.SendFrame(io, "PONG")) {
 					break;
 				}
 				log(__FUNCTION__, Logger::Level::DDebug, L"PONG!");
-				ReportTraffic(4, 0);
+				ReportTraffic(4 + crypto_secretstream_xchacha20poly1305_ABYTES + sizeof(uint32_t), 0);
 				continue;
 			}
 
-			if (std::memcmp(packet, "CLIP", 4) == 0) {
+			if (std::memcmp(frame.data(), "CLIP", 4) == 0) {
 				{
 					std::lock_guard<std::mutex> lock(dataMutex_);
 					lastPingReceivedAt_ = std::chrono::steady_clock::now();
 				}
-				std::vector<unsigned char> headerMsg;
-				if (!channel.RecvMessage(io, headerMsg)) {
-					log(__FUNCTION__, Logger::Level::Warning, L"Failed to receive clipboard message header.");
-					break;
-				}
-				if (headerMsg.size() != sizeof(NetworkDefs::ClipboardMessage)) {
-					log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard message: header size mismatch (expected %zu bytes, actual %zu bytes)", sizeof(NetworkDefs::ClipboardMessage), headerMsg.size());
+
+				constexpr size_t kClipHeaderSize = sizeof(NetworkDefs::ClipboardMessage);
+				if (frame.size() < 4 + kClipHeaderSize) {
+					log(__FUNCTION__, Logger::Level::Warning,
+						L"Rejecting CLIP frame: too small for header (frame: %zu bytes, header: %zu bytes).",
+						frame.size(), kClipHeaderSize);
 					break;
 				}
 
-				auto* clipMessage = reinterpret_cast<NetworkDefs::ClipboardMessage*>(headerMsg.data());
 				ClipboardPayload payload{};
-				payload.formatId = ntohl(clipMessage->formatId);
-				payload.uncompressedDataSize = ntohl(clipMessage->uncompressedDataSize);
-				payload.isCompressed = clipMessage->isCompressed != 0;
-				uint32_t payloadDataSize = ntohl(clipMessage->payloadDataSize);
+				std::memcpy(&payload.meta, frame.data() + 4, kClipHeaderSize);
+				NetworkDefs::NetworkToHostClipboardMessage(payload.meta);
 
-				if (payloadDataSize > 0) {
-					if (!channel.RecvMessage(io, payload.rawData)) {
-						log(__FUNCTION__, Logger::Level::Warning, L"Failed to receive clipboard payload body: format %ls (%u), expected payload size=%u bytes",
-							ClippClipboardFormatNameW(payload.formatId),
-							payload.formatId,
-							payloadDataSize);
-						break;
-					}
-				}
-				else {
-					payload.rawData.clear();
-				}
-				ReportTraffic(0, 4 + headerMsg.size() + payload.rawData.size());
-				log(__FUNCTION__, Logger::Level::Debug, L"Clipboard message received: format %ls (%u), compressed=%u, payload size=%u bytes, uncompressed size=%u bytes",
-					ClippClipboardFormatNameW(payload.formatId),
-					payload.formatId,
-					payload.isCompressed ? 1u : 0u,
-					payloadDataSize,
-					payload.uncompressedDataSize);
-
-				if (payload.rawData.size() != static_cast<size_t>(payloadDataSize)) {
-					log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard message: payload size mismatch (header: %u bytes, body: %zu bytes)", payloadDataSize, payload.rawData.size());
+				const size_t expectedBodyBytes = frame.size() - 4 - kClipHeaderSize;
+				if (payload.meta.payloadDataSize != static_cast<uint64_t>(expectedBodyBytes)) {
+					log(__FUNCTION__, Logger::Level::Warning,
+						L"Rejecting CLIP frame: payload size mismatch (header: %llu bytes, body: %zu bytes).",
+						static_cast<unsigned long long>(payload.meta.payloadDataSize), expectedBodyBytes);
 					break;
 				}
 
-				if (payload.uncompressedDataSize > ClipboardLimits::kMaxDecompressedClipboardBytes) {
-					log(__FUNCTION__, Logger::Level::Warning, L"Rejecting clipboard message: uncompressed size %u bytes exceeds limit %llu bytes", payload.uncompressedDataSize, ClipboardLimits::kMaxDecompressedClipboardBytes);
+				if (payload.meta.uncompressedDataSize > ClipboardLimits::kMaxDecompressedClipboardBytes) {
+					log(__FUNCTION__, Logger::Level::Warning,
+						L"Rejecting CLIP frame: uncompressed size %llu bytes exceeds limit %llu bytes.",
+						static_cast<unsigned long long>(payload.meta.uncompressedDataSize),
+						ClipboardLimits::kMaxDecompressedClipboardBytes);
 					break;
 				}
 
-				if (!payload.isCompressed && payloadDataSize != payload.uncompressedDataSize) {
-					log(__FUNCTION__, Logger::Level::Warning, L"Rejecting uncompressed clipboard message: payload size %u bytes does not equal uncompressed size %u bytes", payloadDataSize, payload.uncompressedDataSize);
+				if (payload.meta.isCompressed == 0
+					&& payload.meta.payloadDataSize != payload.meta.uncompressedDataSize) {
+					log(__FUNCTION__, Logger::Level::Warning,
+						L"Rejecting uncompressed CLIP frame: payload size %llu bytes does not equal uncompressed size %llu bytes.",
+						static_cast<unsigned long long>(payload.meta.payloadDataSize),
+						static_cast<unsigned long long>(payload.meta.uncompressedDataSize));
 					break;
 				}
+
+				if (expectedBodyBytes > 0) {
+					payload.rawData.assign(
+						frame.data() + 4 + kClipHeaderSize,
+						frame.data() + 4 + kClipHeaderSize + expectedBodyBytes);
+				}
+
+				log(__FUNCTION__, Logger::Level::Debug,
+					L"Clipboard message received: format %ls (%u), compressed=%u, payload size=%llu bytes, uncompressed size=%llu bytes",
+					ClippClipboardFormatNameW(payload.meta.formatId),
+					payload.meta.formatId,
+					payload.meta.isCompressed,
+					static_cast<unsigned long long>(payload.meta.payloadDataSize),
+					static_cast<unsigned long long>(payload.meta.uncompressedDataSize));
 
 				if (!payload.ZstdDecompress()) {
 					break;
@@ -639,7 +651,17 @@ void Peer::ThreadProcRecv() {
 					}
 					clipboardReceivedCallback_(remoteHostName, remoteHostId, payload);
 				}
+				continue;
 			}
+
+			// Forward-compat: unknown tag from a peer that may speak future caps.
+			// Log and keep the connection alive — the frame body has already been
+			// consumed by RecvFrame so the stream stays in sync.
+			log(__FUNCTION__, Logger::Level::Warning,
+				L"Peer: unknown frame tag '%c%c%c%c' (%zu byte body); ignoring.",
+				static_cast<wchar_t>(frame[0]), static_cast<wchar_t>(frame[1]),
+				static_cast<wchar_t>(frame[2]), static_cast<wchar_t>(frame[3]),
+				frame.size() - 4);
 		}
 		log(__FUNCTION__, Logger::Level::Info, L"Client disconnected");
 	}

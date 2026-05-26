@@ -34,7 +34,11 @@ namespace {
     struct HandshakePlaintext {
         unsigned char ephemeralPk[crypto_kx_PUBLICKEYBYTES];
         unsigned char hostId[HostId::kSize];
-        char hostNameUTF8[CryptoChannel::HOSTNAME_MAX_BYTES];
+        // Feature-capability bits. All zero today; future caps gate is-it-safe-to-send
+        // decisions for new frame types and message extensions without breaking peers
+        // that predate them. Authentication relies on the surrounding secretbox MAC.
+        uint8_t       caps[CryptoChannel::CAPS_BYTES];
+        char          hostNameUTF8[CryptoChannel::HOSTNAME_MAX_BYTES];
     };
 
     struct HandshakeFrame {
@@ -51,10 +55,12 @@ namespace {
         HandshakePlaintext& plaintext,
         const PublicKey& publicKey,
         const HostId& hostId,
+        const CryptoChannel::Caps& caps,
         const char* hostNameUtf8)
     {
         std::memcpy(plaintext.ephemeralPk, publicKey.data(), publicKey.size());
         std::memcpy(plaintext.hostId, hostId.data().data(), hostId.data().size());
+        std::memcpy(plaintext.caps, caps.data(), caps.size());
         strncpys(plaintext.hostNameUTF8, hostNameUtf8);
     }
 
@@ -67,9 +73,11 @@ namespace {
     void CopyRemoteIdentity(
         const HandshakePlaintext& plaintext,
         HostId& remoteHostId,
+        CryptoChannel::Caps& remoteCaps,
         std::string& remoteHostNameUtf8)
     {
         std::memcpy(remoteHostId.data().data(), plaintext.hostId, remoteHostId.data().size());
+        std::memcpy(remoteCaps.data(), plaintext.caps, remoteCaps.size());
         remoteHostNameUtf8 = plaintext.hostNameUTF8;
     }
 
@@ -131,6 +139,12 @@ namespace {
         return clipp::CopyLocalPeerDisplayName(hostNameUtf8.data(), hostNameUtf8.size());
     }
 
+    CryptoChannel::Caps LocalCaps() {
+        // No caps bits defined yet; the field is reserved as part of the post-refactor
+        // baseline so future extensions can negotiate without breaking the handshake.
+        return CryptoChannel::Caps{};
+    }
+
     bool DeriveClientSessionKeys(
         const KeyPair& clientKeys,
         const PublicKey& serverPublicKey,
@@ -183,16 +197,12 @@ namespace {
         return crypto_secretstream_xchacha20poly1305_init_pull(&state, header.data(), rxKey.data()) == 0;
     }
 
-    bool CanEncryptMessage(uint32_t dataSize) {
-        return dataSize <= (kMaxCiphertextMessageBytes - crypto_secretstream_xchacha20poly1305_ABYTES);
-    }
-
     bool IsCiphertextMessageSizeValid(uint32_t ciphertextSize) {
         return ciphertextSize > crypto_secretstream_xchacha20poly1305_ABYTES
             && ciphertextSize <= kMaxCiphertextMessageBytes;
     }
 
-    bool TagEquals(const char* lhs, const char* rhs) {
+    bool TagEquals(const unsigned char* lhs, const char* rhs) {
         return std::memcmp(lhs, rhs, 4) == 0;
     }
 }
@@ -218,7 +228,7 @@ bool CryptoChannel::ClientHandshake(
     GenerateKeyPair(clientKeys);
 
     HandshakePlaintext localPlaintext{};
-    FillHandshakePlaintext(localPlaintext, clientKeys.publicKey, localHostId, localHostNameUtf8.c_str());
+    FillHandshakePlaintext(localPlaintext, clientKeys.publicKey, localHostId, LocalCaps(), localHostNameUtf8.c_str());
     if (!SendHandshakeFrame(io, localPlaintext, clientToServerKey)) {
         return false;
     }
@@ -229,7 +239,7 @@ bool CryptoChannel::ClientHandshake(
     }
 
     const PublicKey serverPublicKey = CopyPublicKey(remotePlaintext);
-    CopyRemoteIdentity(remotePlaintext, remoteHostId, remoteHostNameUtf8);
+    CopyRemoteIdentity(remotePlaintext, remoteHostId, remoteCaps_, remoteHostNameUtf8);
 
     SessionKeys sessionKeys{};
     if (!DeriveClientSessionKeys(clientKeys, serverPublicKey, sessionKeys)) {
@@ -260,7 +270,7 @@ bool CryptoChannel::ServerHandshake(
     }
 
     const PublicKey clientPublicKey = CopyPublicKey(remotePlaintext);
-    CopyRemoteIdentity(remotePlaintext, remoteHostId, remoteHostNameUtf8);
+    CopyRemoteIdentity(remotePlaintext, remoteHostId, remoteCaps_, remoteHostNameUtf8);
 
     HostId localHostId;
     std::array<char, HOSTNAME_MAX_BYTES> localHostNameUtf8{};
@@ -272,7 +282,7 @@ bool CryptoChannel::ServerHandshake(
     GenerateKeyPair(serverKeys);
 
     HandshakePlaintext localPlaintext{};
-    FillHandshakePlaintext(localPlaintext, serverKeys.publicKey, localHostId, localHostNameUtf8.data());
+    FillHandshakePlaintext(localPlaintext, serverKeys.publicKey, localHostId, LocalCaps(), localHostNameUtf8.data());
     if (!SendHandshakeFrame(io, localPlaintext, serverToClientKey)) {
         return false;
     }
@@ -288,29 +298,50 @@ bool CryptoChannel::ServerHandshake(
 }
 
 bool CryptoChannel::SendHandshakeDone(const SocketIoContext& io) {
-    return SendTaggedMessage(io, kHandshakeDoneTag);
+    return SendFrame(io, kHandshakeDoneTag);
 }
 
 bool CryptoChannel::ReceiveHandshakeDone(const SocketIoContext& io) {
-    char tag[4] = {};
-    return RecvTaggedMessage(io, tag) && TagEquals(tag, kHandshakeDoneTag);
-}
-
-bool CryptoChannel::SendMessage(const SocketIoContext& io, const unsigned char* data, uint32_t dataSize) {
-    if (!CanEncryptMessage(dataSize)) {
+    std::vector<unsigned char> frame;
+    if (!RecvFrame(io, frame) || frame.size() != 4) {
         return false;
     }
+    return TagEquals(frame.data(), kHandshakeDoneTag);
+}
 
-    std::vector<unsigned char> ciphertext(dataSize + crypto_secretstream_xchacha20poly1305_ABYTES);
+bool CryptoChannel::SendFrame(const SocketIoContext& io,
+                              const char* tag4,
+                              const unsigned char* bodyA, uint32_t bodyASize,
+                              const unsigned char* bodyB, uint32_t bodyBSize) {
+    // 4 (tag) + bodyA + bodyB must fit within the AEAD's plaintext budget.
+    constexpr uint64_t kMaxPlaintext =
+        static_cast<uint64_t>(kMaxCiphertextMessageBytes) - crypto_secretstream_xchacha20poly1305_ABYTES;
+    const uint64_t plaintextSize64 = 4ull
+        + static_cast<uint64_t>(bodyASize)
+        + static_cast<uint64_t>(bodyBSize);
+    if (plaintextSize64 > kMaxPlaintext) {
+        return false;
+    }
+    const size_t plaintextSize = static_cast<size_t>(plaintextSize64);
+
+    sendScratch_.resize(plaintextSize);
+    std::memcpy(sendScratch_.data(), tag4, 4);
+    if (bodyA != nullptr && bodyASize > 0) {
+        std::memcpy(sendScratch_.data() + 4, bodyA, bodyASize);
+    }
+    if (bodyB != nullptr && bodyBSize > 0) {
+        std::memcpy(sendScratch_.data() + 4 + bodyASize, bodyB, bodyBSize);
+    }
+
+    std::vector<unsigned char> ciphertext(plaintextSize + crypto_secretstream_xchacha20poly1305_ABYTES);
     unsigned long long ciphertextSize = 0;
-    unsigned char tag = 0;
-
+    const unsigned char tag = 0;
     if (crypto_secretstream_xchacha20poly1305_push(
             &txState_,
             ciphertext.data(),
             &ciphertextSize,
-            data,
-            dataSize,
+            sendScratch_.data(),
+            static_cast<unsigned long long>(plaintextSize),
             nullptr,
             0,
             tag) != 0) {
@@ -326,7 +357,7 @@ bool CryptoChannel::SendMessage(const SocketIoContext& io, const unsigned char* 
         && SendAll(io, reinterpret_cast<const char*>(ciphertext.data()), static_cast<int>(ciphertextSize));
 }
 
-bool CryptoChannel::RecvMessage(const SocketIoContext& io, std::vector<unsigned char>& outData) {
+bool CryptoChannel::RecvFrame(const SocketIoContext& io, std::vector<unsigned char>& outPlaintext) {
     uint32_t networkSize = 0;
     if (!RecvAll(io, reinterpret_cast<char*>(&networkSize), sizeof(networkSize))) {
         return false;
@@ -342,13 +373,12 @@ bool CryptoChannel::RecvMessage(const SocketIoContext& io, std::vector<unsigned 
         return false;
     }
 
+    outPlaintext.assign(static_cast<size_t>(ciphertextSize), 0);
     unsigned long long plaintextSize = 0;
     unsigned char tag = 0;
-    outData.assign(static_cast<size_t>(ciphertextSize), 0);
-
     if (crypto_secretstream_xchacha20poly1305_pull(
             &rxState_,
-            outData.data(),
+            outPlaintext.data(),
             &plaintextSize,
             &tag,
             ciphertext.data(),
@@ -358,20 +388,6 @@ bool CryptoChannel::RecvMessage(const SocketIoContext& io, std::vector<unsigned 
         return false;
     }
 
-    outData.resize(static_cast<size_t>(plaintextSize));
-    return true;
-}
-
-bool CryptoChannel::SendTaggedMessage(const SocketIoContext& io, const char* tag4) {
-    return SendMessage(io, reinterpret_cast<const unsigned char*>(tag4), 4);
-}
-
-bool CryptoChannel::RecvTaggedMessage(const SocketIoContext& io, char* outTag4) {
-    std::vector<unsigned char> message;
-    if (!RecvMessage(io, message) || message.size() != 4) {
-        return false;
-    }
-
-    std::memcpy(outTag4, message.data(), 4);
+    outPlaintext.resize(static_cast<size_t>(plaintextSize));
     return true;
 }

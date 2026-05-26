@@ -92,7 +92,7 @@ std::wstring PreviewText(const std::wstring& text) {
 }
 
 std::optional<std::wstring> TextFromPayload(const ClipboardPayload& payload) {
-    if (payload.formatId != CLIPP_FORMAT_UTF8) {
+    if (payload.meta.formatId != CLIPP_FORMAT_UTF8) {
         return std::nullopt;
     }
 
@@ -255,7 +255,7 @@ void ClipboardActivityStore::Unregister(std::size_t watcherID) {
 
 std::shared_ptr<const ClipboardPayload> ClipboardActivityStore::MakeStoredPayload(const ClipboardPayload& payload) {
     ClipboardPayload stored = payload;
-    if (!stored.isCompressed) {
+    if (stored.meta.isCompressed == 0) {
         stored.ZstdCompress();
     }
     return std::make_shared<const ClipboardPayload>(std::move(stored));
@@ -269,11 +269,11 @@ std::optional<ClipboardActivityDisplayItem> ClipboardActivityStore::BuildDisplay
     ClipboardActivityDisplayItem display;
     display.header = item.header;
 
-    if (IsClippImageFormat(item.payload->formatId)) {
+    if (IsClippImageFormat(item.payload->meta.formatId)) {
         // Image payloads aren't zstd-compressed (see ClipboardPayload::ZstdCompress); expose
         // the bytes via an aliasing shared_ptr so the UI shares them without a copy.
         display.kind = ClipboardActivityPayloadKind::Image;
-        display.imageFormatId = item.payload->formatId;
+        display.imageFormatId = item.payload->meta.formatId;
         display.imageData = std::shared_ptr<const std::vector<unsigned char>>(
             item.payload, &item.payload->rawData);
         return display;
@@ -284,7 +284,7 @@ std::optional<ClipboardActivityDisplayItem> ClipboardActivityStore::BuildDisplay
         return std::nullopt;
     }
 
-    if (payload.formatId == CLIPP_FORMAT_UTF8) {
+    if (payload.meta.formatId == CLIPP_FORMAT_UTF8) {
         auto text = TextFromPayload(payload);
         if (!text) {
             return std::nullopt;
@@ -342,7 +342,7 @@ void ClipboardActivityStore::NotifyWatchers(
 }
 
 uint64_t ClipboardActivityStore::AddItem(ClipboardActivityDirection direction, const std::wstring& deviceName, const ClipboardPayload& payload) {
-    if (payload.formatId == CLIPP_FORMAT_NONE) {
+    if (payload.meta.formatId == CLIPP_FORMAT_NONE) {
         return 0;
     }
 
@@ -359,9 +359,6 @@ uint64_t ClipboardActivityStore::AddItem(ClipboardActivityDirection direction, c
         item.header.deviceName = deviceName;
         item.header.timestamp = std::chrono::system_clock::now();
         item.payload = MakeStoredPayload(payload);
-        item.header.formatId = item.payload->formatId;
-        item.header.encodedBytes = item.payload->rawData.size();
-        item.header.uncompressedBytes = item.payload->uncompressedDataSize;
 
         itemID = item.header.id;
         updates.push_back({

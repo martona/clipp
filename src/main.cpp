@@ -17,7 +17,9 @@
 #include "PeerDisplay.h"
 #include "Clipboard.h"
 #include "ClipboardActivityStore.h"
+#include "ClipboardWire.h"
 #include "platform/uistrings.h"
+#include "Settings.h"
 #include "utils.h"
 
 #ifdef _WIN32
@@ -195,7 +197,7 @@ static std::string ReadHiddenLine(const std::string & prompt) {
 void OnClipboardNotification(PlatformWindowHandle hwnd) {
     g_logger.log(__FUNCTION__, Logger::Level::Debug, "Clipboard notification received");
     auto clipboardData = ReadClipboardData(hwnd);
-    if (clipboardData.formatId == CLIPP_FORMAT_NONE) {
+    if (clipboardData.meta.formatId == CLIPP_FORMAT_NONE) {
         g_logger.log(__FUNCTION__, Logger::Level::Debug, "Clipboard is empty, contains unsupported format, or came from us");
         return;
 	}
@@ -204,13 +206,16 @@ void OnClipboardNotification(PlatformWindowHandle hwnd) {
 		g_logger.log(__FUNCTION__, Logger::Level::Warning, "Failed to compress clipboard data; skipping broadcast");
 		return;
 	}
-	auto payload = std::make_shared<const ClipboardPayload>(clipboardData);
+    HostId localHostId;
+    g_settings.getHostID(localHostId);  // zero-init HostId on failure is fine for the activity record
+    ClipboardWire::FinalizeOutgoingPayload(clipboardData, localHostId);
+	auto payload = std::make_shared<const ClipboardPayload>(std::move(clipboardData));
     g_clipboardActivityStore.AddOutgoing(CLP_W(CLP_UI_THIS_DEVICE), *payload);
     g_peerManager.BroadcastClipboard(payload);
 	g_logger.log(__FUNCTION__, Logger::Level::Debug, "Broadcast clipboard data to peers (format: %s, ID: %u, payload size: %zu bytes, uncompressed size: %zu bytes)",
-        ClippClipboardFormatName(clipboardData.formatId),
-        clipboardData.formatId,
-        clipboardData.rawData.size(),
+        ClippClipboardFormatName(payload->meta.formatId),
+        payload->meta.formatId,
+        payload->rawData.size(),
         uncompressedDataSize);
 }
 

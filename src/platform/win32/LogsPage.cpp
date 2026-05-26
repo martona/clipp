@@ -20,7 +20,7 @@ LogsPage* g_logReflectorTarget = nullptr;
 
 ClipboardPayload MakeTextClipboardPayload(const std::wstring& text) {
     ClipboardPayload payload{};
-    payload.formatId = CLIPP_FORMAT_UTF8;
+    payload.meta.formatId = CLIPP_FORMAT_UTF8;
 
     const size_t utf8Bytes = utf16_to_utf8(text.c_str(), text.size(), nullptr, 0);
     payload.rawData.resize(utf8Bytes + 1);

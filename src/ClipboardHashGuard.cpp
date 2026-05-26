@@ -5,7 +5,7 @@ ClipboardHashGuard::Fingerprint ClipboardHashGuard::ComputeFingerprint(const Cli
     const XXH128_hash_t hash = XXH3_128bits_withSeed(
         payload.rawData.data(),
         payload.rawData.size(),
-        static_cast<XXH64_hash_t>(payload.formatId));
+        static_cast<XXH64_hash_t>(payload.meta.formatId));
     return { hash.high64, hash.low64 };
 }
 

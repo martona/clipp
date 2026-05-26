@@ -30,10 +30,10 @@ struct ClipboardActivityItemHeader {
     uint64_t id{};
     ClipboardActivityDirection direction{ ClipboardActivityDirection::Incoming };
     std::wstring deviceName;
+    // Local wall-clock when the item was added to the store. Distinct from any
+    // origin-device timestamp that may live in the payload's meta — pull that
+    // via DisplayItem / PayloadReference if a consumer wants it.
     std::chrono::system_clock::time_point timestamp{};
-    uint32_t formatId{};
-    size_t encodedBytes{};
-    uint32_t uncompressedBytes{};
 };
 
 struct ClipboardActivityDisplayItem {

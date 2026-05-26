@@ -86,7 +86,7 @@ bool PayloadFromSharePayload(CLPSharePayload* sharePayload, ClipboardPayload& pa
             return false;
         }
 
-        payload.formatId = CLIPP_FORMAT_UTF8;
+        payload.meta.formatId = CLIPP_FORMAT_UTF8;
         payload.rawData.assign(text.begin(), text.end());
         payload.rawData.push_back('\0');
         return payload.ZstdCompress();
@@ -98,7 +98,7 @@ bool PayloadFromSharePayload(CLPSharePayload* sharePayload, ClipboardPayload& pa
             return false;
         }
 
-        payload.formatId = CLIPP_FORMAT_JPEG;
+        payload.meta.formatId = CLIPP_FORMAT_JPEG;
         const auto* bytes = static_cast<const unsigned char*>(jpegData.bytes);
         payload.rawData.assign(bytes, bytes + jpegData.length);
         return payload.ZstdCompress();
@@ -110,7 +110,7 @@ bool PayloadFromSharePayload(CLPSharePayload* sharePayload, ClipboardPayload& pa
             return false;
         }
 
-        payload.formatId = CLIPP_FORMAT_PNG;
+        payload.meta.formatId = CLIPP_FORMAT_PNG;
         const auto* bytes = static_cast<const unsigned char*>(pngData.bytes);
         payload.rawData.assign(bytes, bytes + pngData.length);
         return payload.ZstdCompress();
@@ -182,7 +182,7 @@ bool SendPayloadsToPeer(const MDNSDiscovery::DiscoveredPeer& peer, const std::ve
         for (const ClipboardPayload& payload : payloads) {
             if (!ClipboardWire::SendClipboardPayload(channel, io, payload)) {
                 g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Share extension failed to send %ls payload to peer %hs.",
-                    ClippClipboardFormatNameW(payload.formatId),
+                    ClippClipboardFormatNameW(payload.meta.formatId),
                     peer.deviceName.c_str());
                 sentAll = false;
                 break;
@@ -301,11 +301,15 @@ bool SendPayloadsToPeer(const MDNSDiscovery::DiscoveredPeer& peer, const std::ve
         return nil;
     }
 
+    HostId localHostId;
+    g_settings.getHostID(localHostId);
+
     std::vector<ClipboardPayload> clipboardPayloads;
     clipboardPayloads.reserve(payloads.count);
     for (CLPSharePayload* payload in payloads) {
         ClipboardPayload clipboardPayload{};
         if (PayloadFromSharePayload(payload, clipboardPayload)) {
+            ClipboardWire::FinalizeOutgoingPayload(clipboardPayload, localHostId);
             clipboardPayloads.push_back(std::move(clipboardPayload));
         }
     }

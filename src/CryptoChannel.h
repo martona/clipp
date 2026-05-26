@@ -15,6 +15,8 @@ struct SocketIoContext;
 class CryptoChannel {
 public:
     static constexpr size_t HOSTNAME_MAX_BYTES = 256;
+    static constexpr size_t CAPS_BYTES = 16;
+    using Caps = std::array<uint8_t, CAPS_BYTES>;
 
     CryptoChannel();
 
@@ -30,11 +32,21 @@ public:
         HostId& remoteHostId,
         std::string& remoteHostNameUtf8);
 
-    bool SendTaggedMessage(const SocketIoContext& io, const char* tag4);
-    bool RecvTaggedMessage(const SocketIoContext& io, char* outTag4);
+    // Send a single secretstream frame: tag(4) + bodyA + bodyB, concatenated and
+    // encrypted in one push. The second buffer is optional; defaults to no body.
+    // The internal scratch buffer grows but doesn't shrink across calls.
+    bool SendFrame(const SocketIoContext& io,
+                   const char* tag4,
+                   const unsigned char* bodyA = nullptr,
+                   uint32_t bodyASize = 0,
+                   const unsigned char* bodyB = nullptr,
+                   uint32_t bodyBSize = 0);
 
-    bool SendMessage(const SocketIoContext& io, const unsigned char* data, uint32_t dataSize);
-    bool RecvMessage(const SocketIoContext& io, std::vector<unsigned char>& outData);
+    // Receive one secretstream frame. On success, outPlaintext.size() >= 4; the
+    // first 4 bytes are the tag, the remainder is the body. Callers slice in place.
+    bool RecvFrame(const SocketIoContext& io, std::vector<unsigned char>& outPlaintext);
+
+    const Caps& RemoteCaps() const { return remoteCaps_; }
 
 private:
     bool SendHandshakeDone(const SocketIoContext& io);
@@ -42,4 +54,6 @@ private:
 
     crypto_secretstream_xchacha20poly1305_state txState_{};
     crypto_secretstream_xchacha20poly1305_state rxState_{};
+    std::vector<unsigned char> sendScratch_;
+    Caps remoteCaps_{};
 };
