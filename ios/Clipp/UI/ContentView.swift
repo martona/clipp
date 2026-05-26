@@ -8,6 +8,7 @@
 import SwiftUI
 import Combine
 import UIKit
+import ImageIO
 
 struct ContentView: View {
     @StateObject private var clipboardStream = ClipboardStreamViewModel()
@@ -753,9 +754,11 @@ private struct ClipboardPayloadView: View {
 private struct ClipboardImagePreview: View {
     let data: Data
 
+    private static let thumbnailMaxPixelSize: CGFloat = 1024
+
     var body: some View {
-        if let image = UIImage(data: data) {
-            Image(uiImage: image)
+        if let thumb = Self.thumbnail(from: data, maxPixelSize: Self.thumbnailMaxPixelSize) {
+            Image(uiImage: thumb)
                 .resizable()
                 .scaledToFill()
                 .frame(width: 250, height: 170)
@@ -765,6 +768,25 @@ private struct ClipboardImagePreview: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private static func thumbnail(from data: Data, maxPixelSize: CGFloat) -> UIImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
+            return nil
+        }
+
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+        ]
+
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return nil
+        }
+
+        return UIImage(cgImage: cg)
     }
 }
 

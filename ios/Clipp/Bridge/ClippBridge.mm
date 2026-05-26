@@ -348,6 +348,21 @@ NSData* DataFromBytes(const std::vector<unsigned char>& bytes) {
     return [NSData dataWithBytes:bytes.data() length:bytes.size()];
 }
 
+NSData* DataFromImageBytes(const std::shared_ptr<const std::vector<unsigned char>>& bytes) {
+    if (!bytes || bytes->empty()) {
+        return nil;
+    }
+
+    // Zero-copy: the block-captured shared_ptr keeps the underlying vector alive for the
+    // lifetime of the NSData, so we can hand its bytes straight to Foundation.
+    auto retained = bytes;
+    return [[NSData alloc] initWithBytesNoCopy:const_cast<unsigned char*>(retained->data())
+                                        length:retained->size()
+                                   deallocator:^(void*, NSUInteger) {
+                                       (void)retained;
+                                   }];
+}
+
 NSString* PasteboardTypeForClippImageFormat(uint32_t formatId) {
     if (formatId == CLIPP_FORMAT_JPEG) {
         return @"public.jpeg";
@@ -376,7 +391,7 @@ CLPClipboardActivityItem* MakeClipboardActivityItem(const ClipboardActivityItemH
                                                           linkHost:ToNSString(display->linkHost)
                                                               text:detailText
                                                      imageFormatID:display->imageFormatId
-                                                         imageData:DataFromBytes(display->imageData)];
+                                                         imageData:DataFromImageBytes(display->imageData)];
 }
 
 CLPNetworkPeerItem* MakeNetworkPeerItem(const PeerDisplayItem& item) {

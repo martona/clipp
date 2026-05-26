@@ -68,7 +68,10 @@ std::wstring PayloadKindLabel(ClipboardActivityPayloadKind kind) {
     }
 }
 
-winrt::Windows::UI::Xaml::Media::Imaging::BitmapImage BitmapFromImageBytes(const std::vector<unsigned char>& bytes) {
+winrt::Windows::UI::Xaml::Media::Imaging::BitmapImage BitmapFromImageBytes(
+    const std::vector<unsigned char>& bytes,
+    int32_t decodePixelWidth)
+{
     using namespace winrt::Windows::Storage::Streams;
     using namespace winrt::Windows::UI::Xaml::Media::Imaging;
 
@@ -78,6 +81,12 @@ winrt::Windows::UI::Xaml::Media::Imaging::BitmapImage BitmapFromImageBytes(const
     }
 
     try {
+        // Decode at display size (DIPs) so large source images don't sit in the visual tree
+        // as full-resolution bitmaps. XAML scales DecodePixelWidth by the current DPI when
+        // DecodePixelType is Logical, and preserves aspect ratio when only width is set.
+        bitmap.DecodePixelType(DecodePixelType::Logical);
+        bitmap.DecodePixelWidth(decodePixelWidth);
+
         InMemoryRandomAccessStream stream;
         DataWriter writer(stream.GetOutputStreamAt(0));
         writer.WriteBytes(winrt::array_view<const uint8_t>(bytes.data(), bytes.data() + bytes.size()));
@@ -234,9 +243,10 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t it
     header.Children().Append(copyIcon);
     content.Children().Append(header);
 
-    if (display->kind == ClipboardActivityPayloadKind::Image && !display->imageData.empty()) {
+    if (display->kind == ClipboardActivityPayloadKind::Image && display->imageData && !display->imageData->empty()) {
         Image image;
-        image.Source(BitmapFromImageBytes(display->imageData));
+        const int32_t decodeWidth = static_cast<int32_t>(kActivityBubbleMaxWidth - 24);
+        image.Source(BitmapFromImageBytes(*display->imageData, decodeWidth));
         image.Stretch(Stretch::Uniform);
         image.MaxWidth(kActivityBubbleMaxWidth - 24);
         image.MaxHeight(260);

@@ -15,6 +15,7 @@
 #include <utility>
 
 #import <AppKit/AppKit.h>
+#import <ImageIO/ImageIO.h>
 #import <dispatch/dispatch.h>
 
 extern KeyManager g_keyManager;
@@ -222,6 +223,47 @@ namespace {
 constexpr CGFloat kPageInset = 28.0;
 constexpr CGFloat kActivityFollowTopTolerance = 48.0;
 constexpr CGFloat kActivityBubbleMaxWidth = 460.0;
+constexpr size_t kActivityThumbnailMaxPixelSize = 1024;
+
+NSImage* ThumbnailImageFromBytes(const std::shared_ptr<const std::vector<unsigned char>>& bytes) {
+    if (!bytes || bytes->empty()) {
+        return nil;
+    }
+
+    // Wrap the existing bytes without copying — the block-captured shared_ptr keeps the
+    // underlying vector alive for as long as the NSData lives.
+    auto retained = bytes;
+    NSData* data = [[NSData alloc] initWithBytesNoCopy:const_cast<unsigned char*>(retained->data())
+                                                length:retained->size()
+                                           deallocator:^(void*, NSUInteger) {
+                                               (void)retained;
+                                           }];
+    if (data == nil) {
+        return nil;
+    }
+
+    CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)data, NULL);
+    if (source == nullptr) {
+        return nil;
+    }
+
+    NSDictionary* options = @{
+        (id)kCGImageSourceCreateThumbnailFromImageAlways: @YES,
+        (id)kCGImageSourceCreateThumbnailWithTransform: @YES,
+        (id)kCGImageSourceShouldCacheImmediately: @YES,
+        (id)kCGImageSourceThumbnailMaxPixelSize: @(kActivityThumbnailMaxPixelSize),
+    };
+    CGImageRef thumb = CGImageSourceCreateThumbnailAtIndex(source, 0, (__bridge CFDictionaryRef)options);
+    CFRelease(source);
+
+    if (thumb == nullptr) {
+        return nil;
+    }
+
+    NSImage* image = [[NSImage alloc] initWithCGImage:thumb size:NSZeroSize];
+    CGImageRelease(thumb);
+    return image;
+}
 
 NSString* FormatActivityTime(std::chrono::system_clock::time_point timestamp) {
     const std::time_t rawTime = std::chrono::system_clock::to_time_t(timestamp);
@@ -424,10 +466,8 @@ NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
     [copyButton setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
     [content addArrangedSubview:header];
 
-    if (display->kind == ClipboardActivityPayloadKind::Image && !display->imageData.empty()) {
-        NSData* data = [NSData dataWithBytes:display->imageData.data()
-                                      length:display->imageData.size()];
-        NSImage* image = [[NSImage alloc] initWithData:data];
+    if (display->kind == ClipboardActivityPayloadKind::Image && display->imageData && !display->imageData->empty()) {
+        NSImage* image = ThumbnailImageFromBytes(display->imageData);
         if (image != nil) {
             NSImageView* imageView = [[NSImageView alloc] initWithFrame:NSZeroRect];
             imageView.translatesAutoresizingMaskIntoConstraints = NO;

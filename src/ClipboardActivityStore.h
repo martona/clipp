@@ -43,7 +43,9 @@ struct ClipboardActivityDisplayItem {
     std::wstring detailText;
     std::wstring linkHost;
     uint32_t imageFormatId{ CLIPP_FORMAT_NONE };
-    std::vector<unsigned char> imageData;
+    // Aliasing shared_ptr to the encoded image bytes inside the stored ClipboardPayload.
+    // Holding this keeps the payload alive without copying the bytes. Null for non-image items.
+    std::shared_ptr<const std::vector<unsigned char>> imageData;
 };
 
 struct ClipboardActivityUpdate {

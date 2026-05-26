@@ -266,13 +266,23 @@ std::optional<ClipboardActivityDisplayItem> ClipboardActivityStore::BuildDisplay
         return std::nullopt;
     }
 
+    ClipboardActivityDisplayItem display;
+    display.header = item.header;
+
+    if (IsClippImageFormat(item.payload->formatId)) {
+        // Image payloads aren't zstd-compressed (see ClipboardPayload::ZstdCompress); expose
+        // the bytes via an aliasing shared_ptr so the UI shares them without a copy.
+        display.kind = ClipboardActivityPayloadKind::Image;
+        display.imageFormatId = item.payload->formatId;
+        display.imageData = std::shared_ptr<const std::vector<unsigned char>>(
+            item.payload, &item.payload->rawData);
+        return display;
+    }
+
     ClipboardPayload payload = *item.payload;
     if (!payload.ZstdDecompress()) {
         return std::nullopt;
     }
-
-    ClipboardActivityDisplayItem display;
-    display.header = item.header;
 
     if (payload.formatId == CLIPP_FORMAT_UTF8) {
         auto text = TextFromPayload(payload);
@@ -293,10 +303,6 @@ std::optional<ClipboardActivityDisplayItem> ClipboardActivityStore::BuildDisplay
             display.kind = ClipboardActivityPayloadKind::Text;
             display.previewText = PreviewText(*text);
         }
-    } else if (IsClippImageFormat(payload.formatId)) {
-        display.kind = ClipboardActivityPayloadKind::Image;
-        display.imageFormatId = payload.formatId;
-        display.imageData = std::move(payload.rawData);
     } else {
         display.kind = ClipboardActivityPayloadKind::Unsupported;
     }
