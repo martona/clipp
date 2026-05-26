@@ -1,7 +1,7 @@
 #include "SettingsPage.h"
 
 #include "ClipboardActivityStore.h"
-#include "MDNSThread.h"
+#include "MDNSDiscovery.h"
 #include "NetworkRuntime.h"
 #include "PeerManager.h"
 #include "Settings.h"

@@ -25,6 +25,12 @@
     <string>1</string>
     <key>LSUIElement</key>
     <true/>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_clipp._tcp</string>
+    </array>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Clipp uses your local network to discover and connect to your trusted devices.</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
 </dict>

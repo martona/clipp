@@ -17,6 +17,7 @@
 #include "CryptoChannel.h"
 #include "LocalPeerName.h"
 #include "NetworkDefs.h"
+#include "PeerDisplay.h"
 #include "utils.h"
 #include "utils_socket.h"
 #include "PeerManager.h"
@@ -27,8 +28,20 @@
 #endif
 
 extern PeerManager g_peerManager;
+extern PeerDisplay g_peerDisplay;
 
 static std::atomic<uint64_t> g_nextPeerLogId{ 1 };
+
+// Outgoing reconnect backoff schedule. Capped at 60s; we never give up — discovery
+// being event-driven means we should keep retrying until the OS reports the peer gone.
+static const std::array<std::chrono::seconds, 6> g_outgoingBackoff = {
+	std::chrono::seconds(1),
+	std::chrono::seconds(2),
+	std::chrono::seconds(5),
+	std::chrono::seconds(15),
+	std::chrono::seconds(60),
+	std::chrono::seconds(60),
+};
 
 static void CullStoppedPeersAsync() {
 	std::thread([]() {
@@ -315,22 +328,42 @@ bool Peer::DrainOutboundMessages(CryptoChannel& channel, const SocketIoContext& 
 }
 
 void Peer::ThreadProcSend() {
-	do {
+	size_t backoffIdx = 0;
+	auto goBackoff = [&]() {
+		const auto delay = g_outgoingBackoff[(std::min)(backoffIdx, g_outgoingBackoff.size() - 1)];
+		++backoffIdx;
+		g_peerDisplay.NotifyPeerConnState(hostName(), hostID(), PeerConnState::Backoff);
+		log(__FUNCTION__, Logger::Level::Debug, L"Peer: backing off %lld s before reconnect.",
+			static_cast<long long>(delay.count()));
+		InterruptibleSleep(std::chrono::duration_cast<std::chrono::milliseconds>(delay));
+	};
+
+	while (!stopRequested_.load()) {
+		g_peerDisplay.NotifyPeerConnState(hostName(), hostID(), PeerConnState::Connecting);
+
 		if (!ConnectSocket()) {
-			log(__FUNCTION__, Logger::Level::Error, L"Peer: failed to connect.");
-			break;
+			if (stopRequested_.load()) break;
+			goBackoff();
+			continue;
 		}
+
 		CryptoChannel channel;
 		HostId remoteHostId;
 		std::string remoteHostNameUtf8;
 		HostId localHostId;
-		if (!g_settings.getHostID(localHostId)) { break; }
+		if (!g_settings.getHostID(localHostId)) {
+			CloseSocket();
+			break;
+		}
 		const std::string localHostName = clipp::GetLocalPeerDisplayName("unknown", CryptoChannel::HOSTNAME_MAX_BYTES);
 		SOCKET socket = CurrentSocket();
 		const SocketIoContext io{ socket, wakeEvent_, stopRequested_ };
 		if (socket == INVALID_SOCKET || !channel.ClientHandshake(io, localHostId, localHostName, remoteHostId, remoteHostNameUtf8)) {
 			log(__FUNCTION__, Logger::Level::Debug, L"Peer: secure handshake failed.");
-			break;
+			CloseSocket();
+			if (stopRequested_.load()) break;
+			goBackoff();
+			continue;
 		}
 
 		const std::wstring remoteHostName = Utf8ToWideString(remoteHostNameUtf8);
@@ -345,14 +378,22 @@ void Peer::ThreadProcSend() {
 		}
 		if (hostIDMismatch) {
 			log(__FUNCTION__, Logger::Level::Warning, L"Peer: host ID mismatch");
-			break;
+			CloseSocket();
+			// Identity mismatch won't fix itself; back off and retry — discovery may correct it.
+			if (stopRequested_.load()) break;
+			goBackoff();
+			continue;
 		}
 		if (hostNameMismatch) {
 			log(__FUNCTION__, Logger::Level::Warning, L"Peer: host name mismatch; expected %ls but got %ls", expectedHostName.c_str(), remoteHostName.c_str());
-			break;
+			// Tolerate name drift — accept the connection. Update tracked name.
+			std::lock_guard<std::mutex> lock(dataMutex_);
+			hostName_ = remoteHostName;
 		}
 
 		log(__FUNCTION__, Logger::Level::Info, L"Peer connected and authenticated.");
+		backoffIdx = 0;
+		g_peerDisplay.NotifyPeerConnState(hostName(), hostID(), PeerConnState::Connected);
 		auto nextPingTime = std::chrono::steady_clock::now();
 		while (!stopRequested_.load()) {
 			const auto now = std::chrono::steady_clock::now();
@@ -425,12 +466,20 @@ void Peer::ThreadProcSend() {
 				}
 			}
 		}
-	} while (false);
+
+		// Inner loop exited: connection broke (or stopRequested). Drop the socket and either exit
+		// (stopRequested) or fall through to the outer-loop reconnect attempt.
+		CloseSocket();
+		log(__FUNCTION__, Logger::Level::Info, L"Peer disconnected; will attempt to reconnect.");
+		if (stopRequested_.load()) break;
+		// We were connected at least once — start backoff from the bottom of the schedule.
+		goBackoff();
+	}
+
 	CloseSocket();
-	log(__FUNCTION__, Logger::Level::Info, L"Peer disconnected");
+	log(__FUNCTION__, Logger::Level::Info, L"Peer thread exiting.");
 	running_.store(false);
 	CullStoppedPeersAsync();
-	log(__FUNCTION__, Logger::Level::Info, L"Thread exiting");
 }
 
 void Peer::ThreadProcRecv() {

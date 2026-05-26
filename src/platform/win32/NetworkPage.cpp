@@ -2,7 +2,7 @@
 
 #include "KeyManager.h"
 #include "Logger.h"
-#include "MDNSThread.h"
+#include "MDNSDiscovery.h"
 #include "Settings.h"
 #include "platform/uiClippPage.h"
 #include "platform/uistrings.h"

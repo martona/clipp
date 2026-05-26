@@ -71,6 +71,20 @@ void PeerManager::RemovePeer(const HostId& hostID) {
 		}), peers_.end());
 }
 
+void PeerManager::RemoveOutgoingPeer(const HostId& hostID) {
+	std::lock_guard<std::mutex> lock(peersMutex_);
+	peers_.erase(std::remove_if(peers_.begin(), peers_.end(),
+		[hostID](const std::unique_ptr<Peer>& peer) {
+			if (peer->connType_ == Peer::ConnType::Outgoing && peer->hostID() == hostID) {
+				peer->Stop();
+				g_peerDisplay.NotifyPeerRemoved(peer->hostID(), peer->connType_);
+				g_logger.log(__FUNCTION__, Logger::Level::Debug, L"PeerManager: removed outgoing peer (discovery reported gone).");
+				return true;
+			}
+			return false;
+		}), peers_.end());
+}
+
 void PeerManager::CullPeers() {
 	const auto now = std::chrono::steady_clock::now();
 	std::lock_guard<std::mutex> lock(peersMutex_);

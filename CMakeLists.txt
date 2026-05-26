@@ -123,6 +123,7 @@ if (WIN32)
         Crypt32
         Normaliz
         windowscodecs
+        dnsapi
     )
     if (MSVC)
         target_link_options(clipp-win32 PRIVATE
@@ -158,6 +159,9 @@ elseif (APPLE)
         "src/platform/macos/*.h"
         "src/platform/macos/*.mm"
     )
+    # Cross-Apple discovery impl (used on macOS and iOS); add by name since the common glob is
+    # restricted to *.cpp / *.h.
+    list(APPEND CLIPP_MACOS_PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/MDNSDiscovery_Apple.mm")
     set(CLIPP_MACOS_APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/src/resources/Clipp.icns")
     set(CLIPP_MACOS_MENU_BAR_ICON "${CMAKE_CURRENT_SOURCE_DIR}/src/resources/ClippMenuBarTemplate.png")
     set(CLIPP_MACOS_ABOUT_IMAGE "${CMAKE_CURRENT_SOURCE_DIR}/src/resources/Clipboard4DevAspect-macos-1024-transparent.png")
@@ -177,6 +181,11 @@ elseif (APPLE)
     )
     clipp_apply_common_target_settings(clipp)
     target_compile_options(clipp PRIVATE "-Wno-deprecated-declarations")
+    # Existing macOS .mm code relies on ARC semantics (no manual retain/release); enable it.
+    # The Xcode generator ignores $<COMPILE_LANGUAGE:OBJCXX> compile options reliably, so set
+    # the Xcode build setting directly. Keep the compile option for Ninja/Make generators.
+    set_target_properties(clipp PROPERTIES XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC "YES")
+    target_compile_options(clipp PRIVATE "$<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>")
 
     find_library(COREFOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
     find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)

@@ -3,7 +3,7 @@
 #ifdef __APPLE__
 
 #include "KeyManager.h"
-#include "MDNSThread.h"
+#include "MDNSDiscovery.h"
 #include "PeerManager.h"
 #include "Settings.h"
 #include "platform/uiClippPage.h"

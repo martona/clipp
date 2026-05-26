@@ -23,6 +23,7 @@ public:
     void UpdateHostID(const HostId& hostID);
     void UpdateIncomingConnection(bool connected);
     void UpdateOutgoingConnection(bool connected);
+    void UpdateOutgoingConnState(PeerConnState state);
     void UpdateBytesSent(uint64_t bytesSent);
     void UpdateBytesReceived(uint64_t bytesReceived);
     void UpdateConnectedSince(std::chrono::steady_clock::time_point connectedSince);
@@ -48,4 +49,6 @@ private:
 
     std::chrono::steady_clock::time_point connectedSince_{};
     std::wstring connectedForText_;
+    bool hasIncoming_{ false };
+    PeerConnState outgoingState_{ PeerConnState::Connecting };
 };

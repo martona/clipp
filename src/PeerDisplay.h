@@ -13,14 +13,32 @@
 #include "Peer.h"
 #include "HostId.h"
 
+// Outgoing connection state, as seen from this device. (Incoming state is just
+// "we have an inbound socket or not" — the two-way nature is captured by the pair.)
+enum class PeerConnState {
+	Connecting,   // outgoing TCP attempt in progress
+	Connected,    // outgoing TCP + handshake complete
+	Backoff,      // outgoing failed, retrying after a delay
+	Failed,       // outgoing gave up (rare; usually we keep retrying)
+};
+
 struct PeerDisplayItem {
 	std::wstring hostName;
 	HostId hostID;
 	bool hasIncomingConnection{ false };
 	bool hasOutgoingConnection{ false };
+	PeerConnState outgoingConnState{ PeerConnState::Connecting };
 	uint64_t bytesSent{};
 	uint64_t bytesReceived{};
 	std::chrono::steady_clock::time_point connectedSince{};
+
+	// True when something looks off worth surfacing in the UI: outgoing not connected,
+	// or outgoing connected but no inbound (likely firewall/NAT keeping the peer from
+	// reaching us). The UI can use this to render a single subtle warning indicator.
+	bool hasConnectivityIssue() const {
+		if (outgoingConnState != PeerConnState::Connected) return true;
+		return !hasIncomingConnection;
+	}
 };
 
 struct PeerDisplayUpdate {
@@ -45,6 +63,8 @@ public:
 	void NotifyPeer(const std::wstring& hostName, const HostId& hostID, Peer::ConnType connType, std::chrono::steady_clock::time_point connectedSince);
 	void NotifyPeerRemoved(const HostId& hostID, Peer::ConnType connType);
 	void NotifyPeerBytes(const HostId& hostID, uint64_t bytesSent, uint64_t bytesReceived);
+	// Outgoing-direction connection state transitions (called by Peer::ThreadProcSend).
+	void NotifyPeerConnState(const std::wstring& hostName, const HostId& hostID, PeerConnState state);
 	std::vector<PeerDisplayItem> Query() const;
 	PeerDisplayRegistration QueryAndRegister(Watcher watcher, void* userData = nullptr);
 	void Unregister(std::size_t watcherID);

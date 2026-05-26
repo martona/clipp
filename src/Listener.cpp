@@ -10,6 +10,7 @@
 #include "PeerManager.h"
 #include "Settings.h"
 #include "KeyManager.h"
+#include "utils_socket.h"
 
 extern PeerManager g_peerManager;
 extern KeyManager g_keyManager;
@@ -146,8 +147,13 @@ void Listener::ThreadProc() {
 
             SOCKET clientSock = accept(listenSock, nullptr, nullptr);
             if (clientSock == INVALID_SOCKET) {
-                g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Listener: accept failed.");
-                continue;
+                const int err = LastSocketError();
+                // On iOS, backgrounding can invalidate the listening socket; select() then
+                // returns ready forever and accept() fails in a tight loop. Bail and let the
+                // outer loop create a fresh socket instead of spinning.
+                g_logger.log(__FUNCTION__, Logger::Level::Debug,
+                    L"Listener: accept failed (errno=%d); recreating listener socket.", err);
+                break;
             }
 
             if (!HasNetworkKey()) {

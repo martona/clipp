@@ -1,2 +1,2 @@
 #include "../../../src/MDNSProtocol.cpp"
-#include "../../../src/MDNSThread.cpp"
+#include "../../../src/MDNSDiscovery_Apple.mm"

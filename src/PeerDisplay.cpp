@@ -113,6 +113,44 @@ void PeerDisplay::NotifyPeerRemoved(const HostId& hostID, Peer::ConnType connTyp
 	}
 }
 
+void PeerDisplay::NotifyPeerConnState(const std::wstring& hostName, const HostId& hostID, PeerConnState state) {
+	PeerDisplayUpdate update;
+	std::vector<WatcherRegistration> watchers;
+
+	{
+		std::lock_guard<std::mutex> lock(mutex_);
+		auto found = std::find_if(entries_.begin(), entries_.end(), [&hostID](const PeerDisplayEntry& entry) {
+			return HostIdEquals(entry, hostID);
+		});
+
+		if (found == entries_.end()) {
+			// Create a placeholder entry so the UI can render "Connecting…" before the first
+			// successful handshake. NotifyPeer will fill in any missing data when it fires.
+			PeerDisplayEntry entry;
+			entry.item.hostName = hostName;
+			entry.item.hostID = hostID;
+			entry.item.outgoingConnState = state;
+			found = entries_.insert(std::upper_bound(entries_.begin(), entries_.end(), entry.item,
+				[](const PeerDisplayItem& item, const PeerDisplayEntry& entry) { return LessDisplayItem(item, entry.item); }), entry);
+		} else {
+			if (!hostName.empty() && found->item.hostName.empty()) {
+				found->item.hostName = hostName;
+			}
+			found->item.outgoingConnState = state;
+		}
+
+		update.type = PeerDisplayUpdate::Type::Updated;
+		update.item = found->item;
+		watchers = watchers_;
+	}
+
+	for (const auto& watcher : watchers) {
+		if (watcher.watcher) {
+			watcher.watcher(update, watcher.userData);
+		}
+	}
+}
+
 void PeerDisplay::NotifyPeerBytes(const HostId& hostID, uint64_t bytesSent, uint64_t bytesReceived) {
 	PeerDisplayUpdate update;
 	std::vector<WatcherRegistration> watchers;
