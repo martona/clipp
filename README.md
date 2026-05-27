@@ -52,12 +52,7 @@ TODO.
 
 ## Building From Source
 
-TODO.
-
-```powershell
-vcpkg integrate install
-vcpkg x-update-baseline --add-initial-baseline
-```
+See [BUILDING.md](BUILDING.md) for prerequisites and build instructions for Windows, macOS, and iOS.
 
 ## Troubleshooting
 

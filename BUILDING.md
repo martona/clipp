@@ -1,0 +1,246 @@
+# Building Clipp From Source
+
+This document covers building Clipp for Windows, macOS, and iOS from a source checkout. For most cases, the build is a one-liner from the [`scripts/`](scripts) directory — the rest of this document covers prerequisites, environment overrides, and the cases where you need to bypass the scripts.
+
+## Contents
+
+- [Tested platforms](#tested-platforms)
+- [Prerequisites](#prerequisites)
+- [Building](#building)
+- [Build outputs](#build-outputs)
+- [Environment variables](#environment-variables)
+- [Code signing](#code-signing)
+- [Visual Studio standalone project](#visual-studio-standalone-project)
+- [Troubleshooting](#troubleshooting)
+
+## Tested platforms
+
+| Platform | Architecture        | Status                    | Build entry point                                                            |
+|----------|---------------------|---------------------------|------------------------------------------------------------------------------|
+| Windows  | amd64               | tested in CI              | `scripts\build_windows.ps1`                                                  |
+| Windows  | arm64               | untested (CI in progress) | `scripts\build_windows.ps1 -VcVarsArch arm64 -Triplet arm64-windows-static`  |
+| macOS    | arm64               | tested in CI              | `scripts/build_macos.sh`                                                     |
+| iOS      | arm64 simulator     | tested in CI              | `scripts/build_ios.sh`                                                       |
+| iOS      | arm64 device        | manual Xcode only         | open `ios/Clipp.xcodeproj` in Xcode                                          |
+
+Intel Macs are not supported: the build's minimum deployment target is macOS 14.0, which Apple ships for Apple Silicon only. CI coverage for the Windows arm64 row is planned in a follow-up change.
+
+## Prerequisites
+
+### All platforms
+
+`git` is the only universal prerequisite you install by hand. CMake (≥ 3.20) and vcpkg are pulled in by the platform setup below.
+
+vcpkg is provisioned per platform:
+
+- **macOS / iOS**: the build scripts clone vcpkg into a per-user cache directory (default: `~/Library/Caches/clipp/vcpkg`) and bootstrap it on first run. Set `$CLIPP_CACHE_DIR` if you want the cache somewhere else.
+- **Windows**: the script reuses an existing vcpkg — the copy bundled with the Visual Studio C++ workload by default. Set `$VCPKG_ROOT` to point at a different checkout.
+
+The vcpkg manifest at [`src/vcpkg.json`](src/vcpkg.json) pulls in `libsodium`, `xxhash`, and `zstd`. Versions are pinned by the manifest's `builtin-baseline` — vcpkg's manifest mode handles version selection automatically; no manual baseline step is required. If you reuse an older vcpkg checkout that pre-dates the baseline commit, `git pull` inside that checkout to refresh it.
+
+### Windows
+
+- **Visual Studio** (2026, 2022 or 18, any edition) with the **Desktop development with C++** workload. This single workload provides CMake, vcpkg, Ninja, the MSVC toolchain, and the Windows SDK — everything the build script needs.
+- For arm64 cross-compilation, also install the **MSVC v143 — VS 2022 C++ ARM64 build tools** component (or its VS18/VS2026 equivalent). The default workload installs the amd64 toolset only.
+
+### macOS
+
+- **Xcode Command Line Tools** (for the Ninja-based build path) or **full Xcode** (for the Xcode-generator build path). The script picks Xcode if `xcode-select -p` resolves to an `Xcode.app` install, otherwise Ninja.
+- Homebrew or MacPorts. The libsodium vcpkg port requires autotools:
+  ```sh
+  brew install autoconf autoconf-archive automake libtool ninja
+  ```
+  or
+  ```sh
+  sudo port install autoconf autoconf-archive automake libtool
+  ```
+- Minimum deployment target: **macOS 14.0** (set in [`CMakeLists.txt`](CMakeLists.txt)).
+
+### iOS (in addition to the macOS prerequisites)
+
+- **Full Xcode** with `xcodebuild` on `PATH`
+- iOS SDK (bundled with Xcode)
+
+The iOS scripts target `arm64-ios-simulator` only and verify the host is Apple Silicon — Intel Macs are not currently supported for iOS builds via these scripts.
+
+## Building
+
+Each script is idempotent. They will reconfigure CMake or rerun vcpkg as needed and respect a previously populated cache directory.
+
+### Windows
+
+From a regular PowerShell prompt (the script imports the Visual Studio environment itself):
+
+```powershell
+.\scripts\build_windows.ps1
+```
+
+Parameters (all optional):
+
+| Parameter      | Default                       | Description                                                                  |
+|----------------|-------------------------------|------------------------------------------------------------------------------|
+| `-BuildType`   | `Release`                     | `Release` or `Debug`                                                         |
+| `-Triplet`     | `x64-windows-static`          | Any vcpkg triplet — e.g. `arm64-windows-static`                              |
+| `-VcVarsAll`   | auto-located                  | Path to `vcvarsall.bat` if `vswhere` fails to find it                        |
+| `-VcVarsArch`  | `amd64`                       | First argument to `vcvarsall.bat` — `amd64`, `arm64`, `amd64_arm64`, …       |
+| `-VcpkgRoot`   | auto-located                  | vcpkg root directory                                                         |
+| `-Generator`   | auto (Ninja → NMake)          | CMake generator override                                                     |
+| `-Parallel`    | `[Environment]::ProcessorCount` | Parallel build jobs                                                        |
+
+### macOS
+
+```sh
+./scripts/build_macos.sh           # incremental
+./scripts/build_macos.sh --clean   # wipe build/ first
+```
+
+The script:
+
+1. Verifies Xcode Command Line Tools are installed.
+2. Installs missing tools via Homebrew if available.
+3. Clones and bootstraps vcpkg under [`$CLIPP_CACHE_DIR/vcpkg`](#cache-locations) if absent.
+4. Configures CMake using the Xcode generator (if full Xcode is selected) or Ninja, then builds.
+5. Optionally signs the bundle if [`APPLE_CODESIGN_IDENTITY`](#code-signing) is set.
+
+### iOS simulator
+
+```sh
+./scripts/build_ios.sh                        # full build, includes vcpkg setup
+./scripts/build_ios.sh --skip-vcpkg           # reuse previously installed deps
+./scripts/build_ios.sh --disable-code-signing # pass CODE_SIGNING_ALLOWED=NO
+./scripts/build_ios.sh --clean                # remove build/ios first
+```
+
+The script delegates dependency setup to [`scripts/setup_ios_vcpkg.sh`](scripts/setup_ios_vcpkg.sh), then builds the `Clipp` target in `ios/Clipp.xcodeproj` via `xcodebuild`.
+
+### iOS device
+
+CI does not currently build for physical devices; device builds are produced manually from Xcode:
+
+1. Run dependency setup once:
+   ```sh
+   ./scripts/setup_ios_vcpkg.sh --device-only
+   ```
+2. Open `ios/Clipp.xcodeproj` in Xcode.
+3. Select your development team under **Signing & Capabilities** for the `Clipp` target.
+4. Choose a connected device (or "Any iOS Device") and **Product → Build / Archive**.
+
+## Build outputs
+
+| Platform / generator | Output                                                                     |
+|----------------------|----------------------------------------------------------------------------|
+| Windows              | `build\windows-<config>\clipp-win32.exe` + `clipp-win32.com` + `clipp-win32.pdb` |
+| macOS (Ninja)        | `build/clipp.app`                                                          |
+| macOS (Xcode)        | `build/<Config>/clipp.app` (e.g. `build/Release/clipp.app`)                |
+| iOS simulator        | `build/ios/Build/<Config>-iphonesimulator/Clipp.app`                       |
+
+`<config>` is the lower-cased build type on Windows (`release`, `debug`) and the literal Xcode configuration name on macOS/iOS (`Release`, `Debug`).
+
+`clipp-win32.com` is a small console shim that re-launches `clipp-win32.exe` with stdio attached — useful when running from `cmd.exe` / PowerShell where the GUI subsystem detaches by default.
+
+## Environment variables
+
+Most users won't need to set any of these; defaults are listed for reference. The groupings below mirror what each script reads.
+
+### vcpkg
+
+| Variable                       | Used by                  | Default                                                                                            | Purpose                                                                              |
+|--------------------------------|--------------------------|----------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------|
+| `VCPKG_ROOT`                   | all                      | macOS/iOS: `$CLIPP_CACHE_DIR/vcpkg` (auto-cloned). Windows: auto-located via `vswhere` and common paths; **not** auto-cloned. | vcpkg checkout to use                                                                |
+| `VCPKG_DEFAULT_BINARY_CACHE`   | macOS, iOS               | `$CLIPP_CACHE_DIR/vcpkg-binary-cache`                                                              | Binary cache directory for prebuilt vcpkg ports                                       |
+| `VCPKG_INSTALLED_DIR`          | macOS, iOS               | macOS: `$CLIPP_CACHE_DIR/vcpkg-installed`. iOS: `$REPO_ROOT/vcpkg-installed`. Windows: fixed to `build\vcpkg_installed` (script-managed, not env-overridable). | Where vcpkg installs ports                                                            |
+| `VCPKG_STAGING_INSTALLED_DIR`  | iOS                      | `$CLIPP_CACHE_DIR/vcpkg-ios-installed`                                                             | Per-triplet staging root before publishing into `VCPKG_INSTALLED_DIR`                |
+| `VCPKG_OVERLAY_TRIPLETS`       | iOS                      | `$REPO_ROOT/src/vcpkg-triplets`                                                                    | Overlay triplet search path (macOS reads this from CMake; iOS sets it via env)        |
+| `VCPKG_BINARY_SOURCES`         | iOS                      | `clear;files,$VCPKG_DEFAULT_BINARY_CACHE,readwrite`                                                | vcpkg binary cache configuration string                                              |
+| `VCPKG_INSTALL_OPTIONS`        | all                      | (unset)                                                                                            | Extra options forwarded to `vcpkg install`. Semicolon-separated on Windows.          |
+| `VCVARSALL`                    | Windows                  | (unset)                                                                                            | Path to `vcvarsall.bat`. Alias for the `-VcVarsAll` script parameter.                |
+
+### Cache locations
+
+| Variable          | Used by    | Default                                                              | Purpose                                                                  |
+|-------------------|------------|----------------------------------------------------------------------|--------------------------------------------------------------------------|
+| `CLIPP_CACHE_DIR` | macOS, iOS | `$XDG_CACHE_HOME/clipp` if set, else `$HOME/Library/Caches/clipp`    | Root for vcpkg checkout, binary cache, and installed deps                |
+| `XDG_CACHE_HOME`  | macOS, iOS | (unset)                                                              | Standard XDG cache root; consulted as a fallback for `CLIPP_CACHE_DIR`   |
+
+### Build configuration
+
+| Variable                    | Used by    | Default                            | Purpose                                                 |
+|-----------------------------|------------|------------------------------------|---------------------------------------------------------|
+| `CLIPP_BUILD_CONFIGURATION` | macOS, iOS | `Release`                          | CMake/Xcode build configuration                         |
+| `BUILD_DIR`                 | macOS, iOS | macOS: `build`. iOS: `build/ios`.  | Output directory for the build                          |
+| `SYMROOT`                   | iOS        | `$BUILD_DIR/Build`                 | Xcode `SYMROOT` for the iOS build                       |
+| `OBJROOT`                   | iOS        | `$BUILD_DIR/Intermediates`         | Xcode `OBJROOT` for the iOS build                       |
+
+### iOS-specific
+
+| Variable                       | Default                  | Purpose                                                                  |
+|--------------------------------|--------------------------|--------------------------------------------------------------------------|
+| `CLIPP_IOS_PROJECT`            | `ios/Clipp.xcodeproj`    | Xcode project path                                                       |
+| `CLIPP_IOS_TARGET`             | `Clipp`                  | Xcode target                                                             |
+| `CLIPP_IOS_SDK`                | `iphonesimulator`        | `xcodebuild` SDK — `iphonesimulator` or `iphoneos`                       |
+| `CLIPP_IOS_DEVICE_TRIPLET`     | `arm64-ios`              | vcpkg triplet used by `setup_ios_vcpkg.sh` for device builds             |
+| `CLIPP_IOS_SIMULATOR_TRIPLET`  | `arm64-ios-simulator`    | vcpkg triplet used by `setup_ios_vcpkg.sh` for simulator builds          |
+
+### Code signing
+
+| Variable                                | Used by    | Default | Purpose                                                                                                          |
+|-----------------------------------------|------------|---------|------------------------------------------------------------------------------------------------------------------|
+| `APPLE_CODESIGN_IDENTITY`               | macOS, iOS | (unset) | Codesign identity hash or common name. Triggers `codesign` in the Ninja path; toggles Xcode signing in the Xcode path. |
+| `APPLE_TEAM_ID`                         | macOS, iOS | (unset) | Apple Developer Team ID; paired with `APPLE_CODESIGN_IDENTITY` for the Xcode-generator path                       |
+| `ARTIFACT_SIGNING_ENDPOINT`             | Windows    | (unset) | TrustedSigning endpoint URL passed to `sign.exe`                                                                  |
+| `ARTIFACT_SIGNING_ACCOUNT`              | Windows    | (unset) | TrustedSigning account name                                                                                       |
+| `ARTIFACT_SIGNING_CERTIFICATE_PROFILE`  | Windows    | (unset) | TrustedSigning certificate profile                                                                                |
+
+Windows signing is skipped silently unless all three `ARTIFACT_SIGNING_*` variables are set; a warning is emitted if some but not all are present. macOS signing is skipped if `APPLE_CODESIGN_IDENTITY` is unset.
+
+## Code signing
+
+### Windows
+
+The Windows build invokes `sign.exe` (Microsoft TrustedSigning CLI) when all of `ARTIFACT_SIGNING_ENDPOINT`, `ARTIFACT_SIGNING_ACCOUNT`, and `ARTIFACT_SIGNING_CERTIFICATE_PROFILE` are set. `sign.exe` must be available on `PATH` — install it as a .NET global tool:
+
+```powershell
+dotnet tool install --global --prerelease sign
+```
+
+`sign.exe` authenticates against Azure to reach the TrustedSigning service. The usual developer setup requires the Azure CLI installed and an active session (`az login`) against an account configured for code signing. Configuring the Azure side is out of scope for this document.
+
+### macOS
+
+Set `APPLE_CODESIGN_IDENTITY` to a codesign identity hash or common name. The Ninja path signs the bundle with `codesign --force --deep` after the build and runs `codesign --verify --deep --strict` to confirm. The Xcode path enables `CLIPP_MACOS_ENABLE_CODE_SIGNING=ON` and forwards `APPLE_CODESIGN_IDENTITY` and `APPLE_TEAM_ID` into the Xcode build settings via `CLIPP_MACOS_CODE_SIGN_IDENTITY` and `CLIPP_MACOS_DEVELOPMENT_TEAM`.
+
+### iOS
+
+Pass `--disable-code-signing` to `build_ios.sh` for simulator builds. Device builds use Xcode's automatic or manual signing configured through `ios/Clipp.xcodeproj`.
+
+## Visual Studio standalone project
+
+For working in Visual Studio without going through CMake, open the solution at [`clipp.slnx`](clipp.slnx). It wraps three project files with the build dependencies wired up:
+
+- [`src/clipp-win32.vcxproj`](src/clipp-win32.vcxproj) — the main executable
+- [`src/clipp-win32-darkmode32/darkmode32.vcxproj`](src/clipp-win32-darkmode32/darkmode32.vcxproj) — the dark-mode static lib
+- [`src/clipp-win32-shim/clipp-win32-shim.vcxproj`](src/clipp-win32-shim/clipp-win32-shim.vcxproj) — the console shim
+
+Open `clipp.slnx` rather than any individual `.vcxproj`; the projects are not standalone (they depend on each other via the solution).
+
+This path is a developer convenience, **not** the source of truth: the CMake build wins. If you add or remove source files in `src/`, update both `CMakeLists.txt` (where explicit entries exist) and the relevant `.vcxproj` — the `.vcxproj` files do not pick up new files automatically.
+
+## Troubleshooting
+
+- **vcpkg builds fail on Windows with "path too long" or libsodium build errors.**
+  vcpkg's internal build trees can exceed Windows' 260-character path limit if `VCPKG_ROOT` is deeply nested. Move `VCPKG_ROOT` to a short path (e.g. `C:\v`) or `subst` a drive letter for the build.
+
+- **macOS build fails with "Missing autotools required by libsodium's vcpkg port".**
+  Install via Homebrew (`brew install autoconf autoconf-archive automake libtool`) or MacPorts (`sudo port install autoconf autoconf-archive automake libtool`).
+
+- **iOS build fails on Intel Macs.**
+  Only `arm64-ios-simulator` is supported in the current scripts. Use an Apple Silicon machine or build manually from Xcode.
+
+- **Windows `dumpbin /dependents` shows unexpected runtime DLLs.**
+  The Release build is meant to be statically linked. If `VCRUNTIME`, `MSVCP`, `ucrtbase`, or any of `libsodium`, `xxhash`, `zstd`, `lodepng` appear as imports, your triplet is wrong — use `x64-windows-static` (or `arm64-windows-static`), not `x64-windows`.
+
+- **macOS `.app` is built but won't launch on another Mac.**
+  Unsigned bundles need `xattr -dr com.apple.quarantine path/to/clipp.app` after the first copy, or proper Developer ID signing plus notarization for distribution.
+
+- **`dnsapi`-related link or runtime errors on Windows arm64.**
+  `dnsapi.lib` is part of the Windows SDK and ships for all architectures, so a missing symbol typically means the wrong SDK is selected. Verify the Windows SDK component is installed for the target arch and that `vcvarsall.bat <arch>` succeeded — the build script prints the imported environment for inspection.
