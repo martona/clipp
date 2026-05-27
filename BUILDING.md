@@ -86,6 +86,7 @@ Parameters (all optional):
 | `-VcpkgRoot`   | auto-located                  | vcpkg root directory                                                         |
 | `-Generator`   | auto (Ninja → NMake)          | CMake generator override                                                     |
 | `-Parallel`    | `[Environment]::ProcessorCount` | Parallel build jobs                                                        |
+| `-DisableCodeSigning` | (off)                  | Skip artifact signing even if all `ARTIFACT_SIGNING_*` env vars are set. CI uses this. |
 
 ### macOS
 

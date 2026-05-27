@@ -13,7 +13,9 @@ param(
 
     [string]$Generator = "",
 
-    [int]$Parallel = [Environment]::ProcessorCount
+    [int]$Parallel = [Environment]::ProcessorCount,
+
+    [switch]$DisableCodeSigning
 )
 
 $ErrorActionPreference = "Stop"
@@ -270,7 +272,10 @@ $signingVars = [ordered]@{
 $presentVars = @($signingVars.GetEnumerator() | Where-Object { $_.Value })
 $missingVars = @($signingVars.GetEnumerator() | Where-Object { -not $_.Value } | ForEach-Object { $_.Key })
 
-if ($presentVars.Count -eq 0) {
+if ($DisableCodeSigning) {
+    Write-Host "Skipping artifact signing (-DisableCodeSigning was passed)."
+}
+elseif ($presentVars.Count -eq 0) {
     # No signing env vars set; skip silently.
 }
 elseif ($missingVars.Count -gt 0) {

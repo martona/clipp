@@ -94,7 +94,7 @@ jobs:
             ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ matrix.triplet }}-
 
       - name: Build Release
-        run: .\scripts\build_windows.ps1 -BuildType Release -Triplet $env:CLIPP_RELEASE_TRIPLET -VcVarsArch ${{ matrix.vcvars_arch }}
+        run: .\scripts\build_windows.ps1 -BuildType Release -Triplet $env:CLIPP_RELEASE_TRIPLET -VcVarsArch ${{ matrix.vcvars_arch }} -DisableCodeSigning
 
       - name: Verify Windows artifacts
         run: |
