@@ -345,11 +345,10 @@ private struct NetworkTrafficState {
 private struct NetworkToolbarIndicator: View {
     let mode: NetworkIndicatorMode
     // The traffic-active deadlines, pushed in from the parent's NetworkTrafficState.
-    // Each frame's body re-checks `<until> > context.date`, so the indicator drops
-    // the glyph the moment the deadline expires — independent of whether the
-    // parent view re-evaluates. This is the actual fix for the simulator quirk
-    // where a stale parent-side `isReceiving` snapshot kept the glyph lit until
-    // some unrelated state change finally retriggered ContentView's body.
+    // We compare them against the outer TimelineView's context.date each tick,
+    // independent of whether the parent re-evaluates its body — that's what makes
+    // the indicator stop reliably when the deadline expires (and not get stuck
+    // waiting for some unrelated state change to wake the view tree).
     let sendingUntil: Date
     let receivingUntil: Date
 
@@ -358,12 +357,19 @@ private struct NetworkToolbarIndicator: View {
     private static let badgePeriod: Double = 1.7   // setup-needed badge pulse (autoreverse 0.85s)
     private static let glyphPeriod: Double = 1.12  // send/receive arrow bob (autoreverse 0.56s)
 
+    // Liveness-check cadence. Slow enough to be idle-cheap, fast enough that the
+    // visual lag between "deadline expired" and "indicator goes dark" is well
+    // under the 1.2 s hold time the deadlines build in anyway.
+    private static let livenessTick: Double = 0.25
+
     var body: some View {
-        // Single TimelineView for the whole indicator. Its body is the source of
-        // truth for liveness and animation phase; both come from context.date.
-        TimelineView(.animation) { context in
-            let now = context.date
-            let t = now.timeIntervalSinceReferenceDate
+        // Outer schedule runs at a steady 4 Hz, recomputes which sub-views should
+        // exist (based on `mode` and the absolute deadline Dates), and otherwise
+        // does ~no work. The 60 fps animation cost is paid only by the inner
+        // TimelineViews, which exist only while their conditional is true — i.e.,
+        // not when the indicator is idle.
+        TimelineView(.periodic(from: Date(), by: Self.livenessTick)) { outerContext in
+            let now = outerContext.date
             let isSending = sendingUntil > now
             let isReceiving = receivingUntil > now
 
@@ -372,54 +378,66 @@ private struct NetworkToolbarIndicator: View {
                     .symbolRenderingMode(.hierarchical)
 
                 if mode == .searching {
-                    let angle = t.truncatingRemainder(dividingBy: Self.sweepPeriod) / Self.sweepPeriod * 360.0
-                    Circle()
-                        .trim(from: 0.08, to: 0.28)
-                        .stroke(
-                            .secondary,
-                            style: StrokeStyle(lineWidth: 1.5, lineCap: .round)
-                        )
-                        .frame(width: 24, height: 24)
-                        .rotationEffect(.degrees(angle))
-                        .transition(.opacity)
+                    TimelineView(.animation) { animContext in
+                        let t = animContext.date.timeIntervalSinceReferenceDate
+                        let angle = t.truncatingRemainder(dividingBy: Self.sweepPeriod) / Self.sweepPeriod * 360.0
+                        Circle()
+                            .trim(from: 0.08, to: 0.28)
+                            .stroke(
+                                .secondary,
+                                style: StrokeStyle(lineWidth: 1.5, lineCap: .round)
+                            )
+                            .frame(width: 24, height: 24)
+                            .rotationEffect(.degrees(angle))
+                    }
+                    .transition(.opacity)
                 }
 
                 if mode == .needsSetup {
-                    let phase = (sin(t * 2.0 * .pi / Self.badgePeriod) + 1.0) / 2.0
-                    Image(systemName: "exclamationmark.circle.fill")
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(.white, .orange)
-                        .font(.system(size: 12, weight: .semibold))
-                        .background(
-                            Circle()
-                                .fill(.background)
-                                .frame(width: 13, height: 13)
-                        )
-                        .scaleEffect(1.0 + phase * 0.18)
-                        .offset(x: 9, y: -9)
-                        .transition(.scale.combined(with: .opacity))
+                    TimelineView(.animation) { animContext in
+                        let t = animContext.date.timeIntervalSinceReferenceDate
+                        let phase = (sin(t * 2.0 * .pi / Self.badgePeriod) + 1.0) / 2.0
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, .orange)
+                            .font(.system(size: 12, weight: .semibold))
+                            .background(
+                                Circle()
+                                    .fill(.background)
+                                    .frame(width: 13, height: 13)
+                            )
+                            .scaleEffect(1.0 + phase * 0.18)
+                            .offset(x: 9, y: -9)
+                    }
+                    .transition(.scale.combined(with: .opacity))
                 }
 
                 if mode != .needsSetup {
                     if isSending {
-                        let phase = (sin(t * 2.0 * .pi / Self.glyphPeriod) + 1.0) / 2.0
-                        NetworkTrafficGlyph(
-                            symbolName: "arrow.up.circle.fill",
-                            color: .blue,
-                            yOffset: -8 + CGFloat(phase) * -6,
-                            opacity: 1.0 - phase * 0.44
-                        )
+                        TimelineView(.animation) { animContext in
+                            let t = animContext.date.timeIntervalSinceReferenceDate
+                            let phase = (sin(t * 2.0 * .pi / Self.glyphPeriod) + 1.0) / 2.0
+                            NetworkTrafficGlyph(
+                                symbolName: "arrow.up.circle.fill",
+                                color: .blue,
+                                yOffset: -8 + CGFloat(phase) * -6,
+                                opacity: 1.0 - phase * 0.44
+                            )
+                        }
                         .transition(.scale.combined(with: .opacity))
                     }
 
                     if isReceiving {
-                        let phase = (sin(t * 2.0 * .pi / Self.glyphPeriod) + 1.0) / 2.0
-                        NetworkTrafficGlyph(
-                            symbolName: "arrow.down.circle.fill",
-                            color: .green,
-                            yOffset: 8 + CGFloat(phase) * 6,
-                            opacity: 1.0 - phase * 0.44
-                        )
+                        TimelineView(.animation) { animContext in
+                            let t = animContext.date.timeIntervalSinceReferenceDate
+                            let phase = (sin(t * 2.0 * .pi / Self.glyphPeriod) + 1.0) / 2.0
+                            NetworkTrafficGlyph(
+                                symbolName: "arrow.down.circle.fill",
+                                color: .green,
+                                yOffset: 8 + CGFloat(phase) * 6,
+                                opacity: 1.0 - phase * 0.44
+                            )
+                        }
                         .transition(.scale.combined(with: .opacity))
                     }
                 }
