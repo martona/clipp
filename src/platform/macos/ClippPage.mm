@@ -288,6 +288,8 @@ NSString* PayloadKindLabel(ClipboardActivityPayloadKind kind) {
         return CLP_NS(CLP_UI_TEXT);
     case ClipboardActivityPayloadKind::PrivateText:
         return CLP_NS(CLP_UI_PRIVATE_TEXT);
+    case ClipboardActivityPayloadKind::PrivatePlaceholder:
+        return CLP_NS(CLP_UI_PRIVATE_PLACEHOLDER_TITLE);
     case ClipboardActivityPayloadKind::Link:
         return CLP_NS(CLP_UI_LINK);
     case ClipboardActivityPayloadKind::Image:
@@ -296,6 +298,33 @@ NSString* PayloadKindLabel(ClipboardActivityPayloadKind kind) {
     default:
         return CLP_NS(CLP_UI_UNSUPPORTED_CLIPBOARD_ITEM);
     }
+}
+
+// Small pill-style badge that flags "the source app explicitly marked this as
+// private", to distinguish marker-driven items from heuristic-driven ones.
+NSView* MakePrivateBadgeView() {
+    NSView* badge = [[NSView alloc] initWithFrame:NSZeroRect];
+    badge.translatesAutoresizingMaskIntoConstraints = NO;
+    badge.wantsLayer = YES;
+    badge.layer.cornerRadius = 8.0;
+    badge.layer.backgroundColor = [NSColor colorWithCalibratedRed:0.78
+                                                            green:0.45
+                                                             blue:0.0
+                                                            alpha:0.18].CGColor;
+
+    NSTextField* badgeText = [NSTextField labelWithString:CLP_NS(CLP_UI_PRIVATE_BADGE)];
+    badgeText.translatesAutoresizingMaskIntoConstraints = NO;
+    badgeText.font = [NSFont systemFontOfSize:11.0 weight:NSFontWeightRegular];
+    badgeText.textColor = [NSColor labelColor];
+    [badge addSubview:badgeText];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [badgeText.leadingAnchor constraintEqualToAnchor:badge.leadingAnchor constant:8.0],
+        [badgeText.trailingAnchor constraintEqualToAnchor:badge.trailingAnchor constant:-8.0],
+        [badgeText.topAnchor constraintEqualToAnchor:badge.topAnchor constant:1.0],
+        [badgeText.bottomAnchor constraintEqualToAnchor:badge.bottomAnchor constant:-1.0],
+    ]];
+    return badge;
 }
 
 NSColor* ActivityBubbleColor(bool isOutgoing) {
@@ -418,10 +447,15 @@ NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
     }
 
     const bool isOutgoing = display->direction == ClipboardActivityDirection::Outgoing;
+    const bool isPrivatePlaceholder =
+        display->kind == ClipboardActivityPayloadKind::PrivatePlaceholder;
+    const bool showCopyAction = !isPrivatePlaceholder;
 
     MacOSActivityRowView* row = [[MacOSActivityRowView alloc] initWithFrame:NSZeroRect];
     row.translatesAutoresizingMaskIntoConstraints = NO;
-    row.toolTip = CLP_NS(CLP_UI_COPY);
+    if (showCopyAction) {
+        row.toolTip = CLP_NS(CLP_UI_COPY);
+    }
 
     NSBox* bubble = MacOSMakeGroupBox();
     NSColor* bubbleFillColor = ActivityBubbleColor(isOutgoing);
@@ -439,9 +473,11 @@ NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
 
     MacOSClippPageTarget* target = [[MacOSClippPageTarget alloc] initWithOwner:this itemID:itemID];
     [activityItemTargets_ addObject:target];
-    NSClickGestureRecognizer* copyGesture = [[NSClickGestureRecognizer alloc] initWithTarget:row
-                                                                                       action:@selector(copyActivityItem:)];
-    [row addGestureRecognizer:copyGesture];
+    if (showCopyAction) {
+        NSClickGestureRecognizer* copyGesture = [[NSClickGestureRecognizer alloc] initWithTarget:row
+                                                                                           action:@selector(copyActivityItem:)];
+        [row addGestureRecognizer:copyGesture];
+    }
 
     NSString* metaText = [NSString stringWithFormat:@"%@ - %@",
         MacOSToNSString(deviceName),
@@ -454,16 +490,19 @@ NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
     header.alignment = NSLayoutAttributeCenterY;
     header.spacing = 8.0;
 
-    NSButton* copyButton = MacOSMakeIconButton(@"doc.on.doc", CLP_NS(CLP_UI_COPY), row, @selector(copyActivityItem:));
-    copyButton.alphaValue = 0.0;
-    copyButton.enabled = NO;
-    copyButton.refusesFirstResponder = YES;
-    [row setCopyButton:copyButton target:target action:@selector(copyActivityItem:) bubble:bubble normalFillColor:bubbleFillColor];
-
     [header addArrangedSubview:meta];
-    [header addArrangedSubview:copyButton];
     [meta setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
-    [copyButton setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    if (showCopyAction) {
+        NSButton* copyButton = MacOSMakeIconButton(@"doc.on.doc", CLP_NS(CLP_UI_COPY), row, @selector(copyActivityItem:));
+        copyButton.alphaValue = 0.0;
+        copyButton.enabled = NO;
+        copyButton.refusesFirstResponder = YES;
+        [row setCopyButton:copyButton target:target action:@selector(copyActivityItem:) bubble:bubble normalFillColor:bubbleFillColor];
+
+        [header addArrangedSubview:copyButton];
+        [copyButton setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
+    }
     [content addArrangedSubview:header];
 
     if (display->kind == ClipboardActivityPayloadKind::Image && display->imageData && !display->imageData->empty()) {
@@ -486,19 +525,40 @@ NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
             host.font = [NSFont systemFontOfSize:13.0 weight:NSFontWeightSemibold];
             [content addArrangedSubview:host];
         } else if (display->kind == ClipboardActivityPayloadKind::PrivateText ||
+                   display->kind == ClipboardActivityPayloadKind::PrivatePlaceholder ||
                    display->kind == ClipboardActivityPayloadKind::Unsupported) {
+            NSStackView* labelRow = [[NSStackView alloc] initWithFrame:NSZeroRect];
+            labelRow.translatesAutoresizingMaskIntoConstraints = NO;
+            labelRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+            labelRow.alignment = NSLayoutAttributeCenterY;
+            labelRow.spacing = 8.0;
+
             NSTextField* kindLabel = MakeActivityLabel(PayloadKindLabel(display->kind), 13.0, [NSColor labelColor]);
             kindLabel.font = [NSFont systemFontOfSize:13.0 weight:NSFontWeightSemibold];
-            [content addArrangedSubview:kindLabel];
+            [labelRow addArrangedSubview:kindLabel];
+
+            if (display->sourceMarked) {
+                NSView* badge = MakePrivateBadgeView();
+                [labelRow addArrangedSubview:badge];
+            }
+
+            [content addArrangedSubview:labelRow];
         }
 
-        NSString* previewText = display->previewText.empty()
-            ? PayloadKindLabel(display->kind)
-            : MacOSToNSString(display->previewText);
-        NSTextField* preview = MakeActivityPreviewLabel(
-            previewText,
-            false);
-        [content addArrangedSubview:preview];
+        if (display->kind == ClipboardActivityPayloadKind::PrivatePlaceholder) {
+            NSTextField* detail = MakeActivityLabel(CLP_NS(CLP_UI_PRIVATE_PLACEHOLDER_DETAIL),
+                                                    12.0,
+                                                    [NSColor secondaryLabelColor]);
+            [content addArrangedSubview:detail];
+        } else {
+            NSString* previewText = display->previewText.empty()
+                ? PayloadKindLabel(display->kind)
+                : MacOSToNSString(display->previewText);
+            NSTextField* preview = MakeActivityPreviewLabel(
+                previewText,
+                false);
+            [content addArrangedSubview:preview];
+        }
     }
 
     [bubble addSubview:content];
@@ -661,6 +721,13 @@ void MacOSClippPage::ScrollActivityToTop() const {
 void MacOSClippPage::CopyActivityItem(uint64_t itemID) {
     auto payload = activityStore_.PayloadReference(itemID);
     if (!payload) {
+        return;
+    }
+
+    // Placeholder payloads carry no content; clicking them must not zap
+    // whatever's on the user's clipboard with empty bytes.
+    if ((payload->meta.flags & NetworkDefs::CLPM_FLAG_SOURCE_MARKED_PRIVATE) != 0
+        && payload->EncodedBytes().empty()) {
         return;
     }
 

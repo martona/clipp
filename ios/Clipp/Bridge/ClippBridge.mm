@@ -330,6 +330,8 @@ CLPClipboardPayloadKind ToBridgePayloadKind(ClipboardActivityPayloadKind kind) {
         return CLPClipboardPayloadKindText;
     case ClipboardActivityPayloadKind::PrivateText:
         return CLPClipboardPayloadKindPrivateText;
+    case ClipboardActivityPayloadKind::PrivatePlaceholder:
+        return CLPClipboardPayloadKindPrivatePlaceholder;
     case ClipboardActivityPayloadKind::Link:
         return CLPClipboardPayloadKindLink;
     case ClipboardActivityPayloadKind::Image:
@@ -398,7 +400,8 @@ CLPClipboardActivityItem* MakeClipboardActivityItem(const ClipboardActivityItemH
                                                           linkHost:ToNSString(display->linkHost)
                                                               text:detailText
                                                      imageFormatID:display->imageFormatId
-                                                         imageData:DataFromImageBytes(display->imageData)];
+                                                         imageData:DataFromImageBytes(display->imageData)
+                                                      sourceMarked:display->sourceMarked ? YES : NO];
 }
 
 CLPNetworkPeerItem* MakeNetworkPeerItem(const PeerDisplayItem& item) {
@@ -412,10 +415,24 @@ bool ClipboardPayloadFromPasteboard(ClipboardPayload& payload, NSError** error) 
     payload = ClipboardPayload{};
     UIPasteboard* pasteboard = UIPasteboard.generalPasteboard;
 
+    // Best-effort privacy detection on iOS: UIPasteboard's localOnly /
+    // expirationDate are write-only — there's no read-side API for them. The
+    // nspasteboard.org "ConcealedType" convention is rare on iOS but cheap to
+    // check; if a source app set it, propagate the flag.
+    const bool sourceMarkedPrivate =
+        [pasteboard.pasteboardTypes containsObject:@"org.nspasteboard.ConcealedType"];
+
     NSString* text = pasteboard.string;
     if (text.length == 0 && pasteboard.URL != nil) {
         text = pasteboard.URL.absoluteString;
     }
+
+    auto applyPrivacyFlag = [&payload, sourceMarkedPrivate](bool encodeOk) -> bool {
+        if (encodeOk && sourceMarkedPrivate) {
+            payload.meta.flags |= NetworkDefs::CLPM_FLAG_SOURCE_MARKED_PRIVATE;
+        }
+        return encodeOk;
+    };
 
     if (text.length > 0) {
         NSData* textData = [text dataUsingEncoding:NSUTF8StringEncoding];
@@ -429,7 +446,7 @@ bool ClipboardPayloadFromPasteboard(ClipboardPayload& payload, NSError** error) 
         const auto* src = static_cast<const unsigned char*>(textData.bytes);
         bytes.assign(src, src + textData.length);
         bytes.push_back('\0');
-        return payload.SetUncompressedBytes(std::move(bytes));
+        return applyPrivacyFlag(payload.SetUncompressedBytes(std::move(bytes)));
     }
 
     NSData* jpegData = [pasteboard dataForPasteboardType:@"public.jpeg"];
@@ -438,7 +455,7 @@ bool ClipboardPayloadFromPasteboard(ClipboardPayload& payload, NSError** error) 
         std::vector<unsigned char> bytes;
         const auto* src = static_cast<const unsigned char*>(jpegData.bytes);
         bytes.assign(src, src + jpegData.length);
-        return payload.SetUncompressedBytes(std::move(bytes));
+        return applyPrivacyFlag(payload.SetUncompressedBytes(std::move(bytes)));
     }
 
     NSData* pngData = [pasteboard dataForPasteboardType:@"public.png"];
@@ -451,7 +468,7 @@ bool ClipboardPayloadFromPasteboard(ClipboardPayload& payload, NSError** error) 
         std::vector<unsigned char> bytes;
         const auto* src = static_cast<const unsigned char*>(pngData.bytes);
         bytes.assign(src, src + pngData.length);
-        return payload.SetUncompressedBytes(std::move(bytes));
+        return applyPrivacyFlag(payload.SetUncompressedBytes(std::move(bytes)));
     }
 
     AssignError(error, kClippOutgoingClipboardErrorBase + 3, @"The clipboard does not contain sendable text or image data.");
@@ -578,7 +595,8 @@ void CLPIOSReceiveClipboardPayload(std::shared_ptr<const ClipboardPayload> paylo
                               linkHost:(NSString*)linkHost
                                   text:(NSString*)text
                          imageFormatID:(unsigned int)imageFormatID
-                              imageData:(NSData*)imageData {
+                              imageData:(NSData*)imageData
+                          sourceMarked:(BOOL)sourceMarked {
     self = [super init];
     if (self) {
         _activityItemID = activityItemID;
@@ -593,6 +611,7 @@ void CLPIOSReceiveClipboardPayload(std::shared_ptr<const ClipboardPayload> paylo
         _text = [text copy];
         _imageFormatID = imageFormatID;
         _imageData = [imageData copy];
+        _sourceMarked = sourceMarked;
     }
     return self;
 }
@@ -650,6 +669,24 @@ void CLPIOSReceiveClipboardPayload(std::shared_ptr<const ClipboardPayload> paylo
         return NO;
     }
 
+    // Source-marked-private placeholders carry no content; copying them must
+    // not zap the user's clipboard with empty bytes.
+    if ((payload->meta.flags & NetworkDefs::CLPM_FLAG_SOURCE_MARKED_PRIVATE) != 0
+        && payload->EncodedBytes().empty()) {
+        AssignError(error, kClippClipboardActivityErrorBase + 5, @"This item was marked private and has no copyable content.");
+        return NO;
+    }
+
+    const bool sourceMarkedPrivate =
+        (payload->meta.flags & NetworkDefs::CLPM_FLAG_SOURCE_MARKED_PRIVATE) != 0;
+    // When propagating a source-marked-private payload to the iOS pasteboard,
+    // use the options-aware setItems: API so localOnly is honored. localOnly
+    // keeps the value off Universal Clipboard syncing to the user's other Apple
+    // devices and signals downstream consumers that this isn't general history.
+    NSDictionary* pasteboardOptions = sourceMarkedPrivate
+        ? @{ UIPasteboardOptionLocalOnly: @YES }
+        : @{};
+
     if (item.hasTextPayload) {
         NSString* text = ClipboardTextFromPayload(*payload);
         if (text == nil) {
@@ -657,7 +694,12 @@ void CLPIOSReceiveClipboardPayload(std::shared_ptr<const ClipboardPayload> paylo
             return NO;
         }
 
-        UIPasteboard.generalPasteboard.string = text;
+        if (sourceMarkedPrivate) {
+            [UIPasteboard.generalPasteboard setItems:@[ @{ @"public.utf8-plain-text" : text } ]
+                                              options:pasteboardOptions];
+        } else {
+            UIPasteboard.generalPasteboard.string = text;
+        }
         g_clipboardHashGuard.RememberCurrent(*payload);
         return YES;
     }
@@ -672,8 +714,13 @@ void CLPIOSReceiveClipboardPayload(std::shared_ptr<const ClipboardPayload> paylo
             return NO;
         }
 
-        [UIPasteboard.generalPasteboard setData:imageData
-                              forPasteboardType:pasteboardType];
+        if (sourceMarkedPrivate) {
+            [UIPasteboard.generalPasteboard setItems:@[ @{ pasteboardType : imageData } ]
+                                              options:pasteboardOptions];
+        } else {
+            [UIPasteboard.generalPasteboard setData:imageData
+                                  forPasteboardType:pasteboardType];
+        }
         g_clipboardHashGuard.RememberCurrent(*payload);
         return YES;
     }

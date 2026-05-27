@@ -7,6 +7,15 @@
 #include <chrono>
 #include <future>
 #include "ClipboardHashGuard.h"
+#include "NetworkDefs.h"
+
+// nspasteboard.org convention: an app marks pasteboard content as "do not put
+// in clipboard history" by declaring this type alongside the actual content.
+// The type's data is conventionally empty — the presence of the type is the
+// signal. Apple's own NSPasteboardContentsCurrentHostOnly (set via
+// prepareForNewContentsWithOptions:) has no read-side API, so on macOS this
+// is the only practical detection signal.
+static NSString* const kNspasteboardConcealedType = @"org.nspasteboard.ConcealedType";
 
 static std::thread g_clipboardThread;
 static std::atomic<bool> g_stopClipboardThread{false};
@@ -66,10 +75,16 @@ void StopClipboardNotification() {
 ClipboardPayload ReadClipboardData(PlatformWindowHandle hwnd) {
     ClipboardPayload payload{};
     payload.meta.formatId = CLIPP_FORMAT_NONE;
+    bool sourceMarkedPrivate = false;
     std::vector<unsigned char> bytes;
 
     @autoreleasepool {
         NSPasteboard* pb = [NSPasteboard generalPasteboard];
+
+        sourceMarkedPrivate = [[pb types] containsObject:kNspasteboardConcealedType];
+        if (sourceMarkedPrivate) {
+            g_logger.log(__FUNCTION__, Logger::Level::Debug, "Source app marked clipboard content as private (org.nspasteboard.ConcealedType present).");
+        }
 
         // Try to read Text
         NSString* text = [pb stringForType:NSPasteboardTypeString];
@@ -117,6 +132,11 @@ ClipboardPayload ReadClipboardData(PlatformWindowHandle hwnd) {
         g_logger.log(__FUNCTION__, Logger::Level::Debug, "Ignoring clipboard notification for already-current clipboard contents.");
         payload.meta.formatId = CLIPP_FORMAT_NONE;
         payload.SetEncodedBytes({});
+        return payload;
+    }
+
+    if (sourceMarkedPrivate) {
+        payload.meta.flags |= NetworkDefs::CLPM_FLAG_SOURCE_MARKED_PRIVATE;
     }
 
     return payload;
@@ -140,7 +160,18 @@ void SetClipboardData(
 
     @autoreleasepool {
         NSPasteboard* pb = [NSPasteboard generalPasteboard];
-        [pb clearContents];
+
+        // When propagating a source-marked-private payload, ask the system to
+        // keep this clipboard write off Universal Clipboard (host-only) and
+        // declare org.nspasteboard.ConcealedType so other clipboard managers
+        // / history tools skip it. Otherwise, plain clearContents.
+        const bool sourceMarkedPrivate =
+            (payload->meta.flags & NetworkDefs::CLPM_FLAG_SOURCE_MARKED_PRIVATE) != 0;
+        if (sourceMarkedPrivate) {
+            [pb prepareForNewContentsWithOptions:NSPasteboardContentsCurrentHostOnly];
+        } else {
+            [pb clearContents];
+        }
 
         bool wroteClipboard = false;
 
@@ -176,6 +207,14 @@ void SetClipboardData(
             g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Unsupported clipboard payload format %ls (%u); nothing written",
                          ClippClipboardFormatNameW(payload->meta.formatId),
                          payload->meta.formatId);
+        }
+
+        if (wroteClipboard && sourceMarkedPrivate) {
+            // Declare the conceal type so third-party clipboard managers and
+            // history tools that respect the nspasteboard.org convention skip
+            // this entry. Data is intentionally empty — presence of the type
+            // is the signal.
+            [pb setData:[NSData data] forType:kNspasteboardConcealedType];
         }
 
         if (wroteClipboard && markAsClippOriginated) {

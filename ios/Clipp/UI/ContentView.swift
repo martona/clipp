@@ -505,6 +505,7 @@ private struct SendBottomButton: View {
 private enum ClipboardPayload {
     case text(String)
     case privateText(String)
+    case privatePlaceholder
     case link(title: String, host: String, url: String)
     case image(Data)
 }
@@ -520,7 +521,17 @@ private struct ClipboardStreamItem: Identifiable {
     let timestamp: Date
     let direction: StreamDirection
     let payload: ClipboardPayload
+    // True when the source app set an explicit OS-level privacy marker on this
+    // clipboard item (as opposed to the receive-side heuristic catching it).
+    let sourceMarked: Bool
     let activitySourceItem: ClipboardActivityItem?
+
+    var isPrivatePlaceholder: Bool {
+        if case .privatePlaceholder = payload {
+            return true
+        }
+        return false
+    }
 
     var time: String {
         timestamp.formatted(date: .omitted, time: .shortened)
@@ -552,6 +563,9 @@ private struct ClipboardStreamItem: Identifiable {
             let text = activityItem.detailText.isEmpty ? activityItem.previewText : activityItem.detailText
             payload = .privateText(text)
 
+        case .privatePlaceholder:
+            payload = .privatePlaceholder
+
         case .link:
             let url = activityItem.detailText.isEmpty ? activityItem.previewText : activityItem.detailText
             let host = activityItem.linkHost.isEmpty ? activityItem.previewText : activityItem.linkHost
@@ -574,6 +588,7 @@ private struct ClipboardStreamItem: Identifiable {
         deviceName = activityItem.deviceName
         timestamp = activityItem.timestamp
         direction = activityItem.isOutgoing ? .outgoing : .incoming
+        sourceMarked = activityItem.sourceMarked
         activitySourceItem = activityItem
     }
 }
@@ -641,9 +656,21 @@ private struct ClipboardBubble: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ClipboardPayloadView(payload: item.payload, isOutgoing: item.direction == .outgoing)
-                .contentShape(Rectangle())
-                .onTapGesture(perform: onInspect)
+            Group {
+                if item.isPrivatePlaceholder {
+                    // Placeholder rows are informational; no tap-to-inspect,
+                    // no copy-back. Nothing to inspect, nothing to copy.
+                    ClipboardPayloadView(payload: item.payload,
+                                         isOutgoing: item.direction == .outgoing,
+                                         sourceMarked: item.sourceMarked)
+                } else {
+                    ClipboardPayloadView(payload: item.payload,
+                                         isOutgoing: item.direction == .outgoing,
+                                         sourceMarked: item.sourceMarked)
+                        .contentShape(Rectangle())
+                        .onTapGesture(perform: onInspect)
+                }
+            }
 
             HStack(spacing: 8) {
                 Text(item.time)
@@ -652,7 +679,7 @@ private struct ClipboardBubble: View {
 
                 Spacer(minLength: 12)
 
-                if item.direction == .incoming {
+                if item.direction == .incoming && !item.isPrivatePlaceholder {
                     Button(action: onCopy) {
                         Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
                             .font(.caption.weight(.semibold))
@@ -680,6 +707,7 @@ private struct ClipboardBubble: View {
 private struct ClipboardPayloadView: View {
     let payload: ClipboardPayload
     let isOutgoing: Bool
+    let sourceMarked: Bool
 
     var body: some View {
         switch payload {
@@ -692,7 +720,10 @@ private struct ClipboardPayloadView: View {
                 .textSelection(.enabled)
 
         case .privateText(let text):
-            PrivateLineView(text: text, isOutgoing: isOutgoing)
+            PrivateLineView(text: text, isOutgoing: isOutgoing, sourceMarked: sourceMarked)
+
+        case .privatePlaceholder:
+            PrivatePlaceholderView(isOutgoing: isOutgoing)
 
         case .link(let title, let host, let url):
             VStack(alignment: .leading, spacing: 5) {
@@ -767,6 +798,7 @@ private struct ClipboardImagePreview: View {
 private struct PrivateLineView: View {
     let text: String
     let isOutgoing: Bool
+    let sourceMarked: Bool
 
     @State private var isPeeking = false
 
@@ -785,6 +817,17 @@ private struct PrivateLineView: View {
             Image(systemName: isPeeking ? "eye.fill" : "eye")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(isOutgoing ? .white.opacity(0.72) : .secondary)
+
+            if sourceMarked {
+                Text(CLP_UI_PRIVATE_BADGE)
+                    .font(.caption2)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(
+                        Capsule().fill(Color.orange.opacity(0.18))
+                    )
+                    .foregroundStyle(isOutgoing ? .white : .primary)
+            }
         }
         .contentShape(Rectangle())
         .onLongPressGesture(
@@ -798,6 +841,28 @@ private struct PrivateLineView: View {
             perform: {}
         )
         .accessibilityLabel(isPeeking ? text : "Hidden one-line clipboard item")
+    }
+}
+
+private struct PrivatePlaceholderView: View {
+    let isOutgoing: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "lock.fill")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(isOutgoing ? .white.opacity(0.72) : .secondary)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(CLP_UI_PRIVATE_PLACEHOLDER_TITLE)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(isOutgoing ? .white : .primary)
+
+                Text(CLP_UI_PRIVATE_PLACEHOLDER_DETAIL)
+                    .font(.caption)
+                    .foregroundStyle(isOutgoing ? .white.opacity(0.72) : .secondary)
+            }
+        }
     }
 }
 
@@ -815,7 +880,7 @@ private struct ClipboardInspectSheet: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
 
-                    ClipboardInspectPayloadView(payload: item.payload)
+                    ClipboardInspectPayloadView(payload: item.payload, sourceMarked: item.sourceMarked)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(16)
@@ -845,6 +910,7 @@ private struct ClipboardInspectSheet: View {
 
 private struct ClipboardInspectPayloadView: View {
     let payload: ClipboardPayload
+    let sourceMarked: Bool
 
     var body: some View {
         switch payload {
@@ -855,7 +921,11 @@ private struct ClipboardInspectPayloadView: View {
                 .textSelection(.enabled)
 
         case .privateText(let text):
-            PrivateLineView(text: text, isOutgoing: false)
+            PrivateLineView(text: text, isOutgoing: false, sourceMarked: sourceMarked)
+                .padding(.vertical, 4)
+
+        case .privatePlaceholder:
+            PrivatePlaceholderView(isOutgoing: false)
                 .padding(.vertical, 4)
 
         case .link(let title, let host, let url):

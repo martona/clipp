@@ -11,6 +11,7 @@ typedef NS_ENUM(NSInteger, CLPClipboardPayloadKind) {
     CLPClipboardPayloadKindPrivateText = 2,
     CLPClipboardPayloadKindLink = 3,
     CLPClipboardPayloadKindImage = 4,
+    CLPClipboardPayloadKindPrivatePlaceholder = 5,
 };
 
 NS_SWIFT_NAME(ClipboardDirection)
@@ -38,6 +39,11 @@ NS_SWIFT_NAME(ClipboardActivityItem)
 @property(nonatomic, assign, readonly) BOOL hasImagePayload;
 @property(nonatomic, assign, readonly) BOOL isIncoming;
 @property(nonatomic, assign, readonly) BOOL isOutgoing;
+// True iff the kind classification came from an explicit OS-level privacy
+// marker on the source clipboard (as opposed to the receive-side single-line-
+// no-whitespace heuristic). The UI uses this to attach a "private" badge on
+// PrivateText entries and to distinguish PrivatePlaceholder rows.
+@property(nonatomic, assign, readonly) BOOL sourceMarked;
 
 - (instancetype)initWithActivityItemID:(unsigned long long)activityItemID
                             identifier:(NSString*)identifier
@@ -50,7 +56,8 @@ NS_SWIFT_NAME(ClipboardActivityItem)
                               linkHost:(NSString*)linkHost
                                   text:(nullable NSString*)text
                          imageFormatID:(unsigned int)imageFormatID
-                              imageData:(nullable NSData*)imageData NS_DESIGNATED_INITIALIZER;
+                              imageData:(nullable NSData*)imageData
+                          sourceMarked:(BOOL)sourceMarked NS_DESIGNATED_INITIALIZER;
 - (instancetype)init NS_UNAVAILABLE;
 
 @end
