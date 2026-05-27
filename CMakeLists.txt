@@ -162,6 +162,7 @@ if (WIN32)
         "src/clipp-win32.exe.manifest"
     )
     clipp_apply_common_target_settings(clipp-win32)
+    set_target_properties(clipp-win32 PROPERTIES OUTPUT_NAME "clipp")
     target_compile_definitions(clipp-win32 PRIVATE WIN32 UNICODE _UNICODE _CONSOLE)
     target_link_libraries(clipp-win32 PRIVATE
         darkmode32
@@ -193,7 +194,7 @@ if (WIN32)
         target_compile_options(clipp-win32-shim PRIVATE /utf-8)
     endif()
     set_target_properties(clipp-win32-shim PROPERTIES
-        OUTPUT_NAME "clipp-win32"
+        OUTPUT_NAME "clipp"
         SUFFIX ".com"
     )
 

@@ -66,13 +66,13 @@ IDB_CLIPP_ABOUT_IMAGE   RCDATA                  "resources\\Clipboard4DevAspect-
 //
 
 #ifdef CLIPP_RESOURCE_SHIM
-#define CLIPP_RESOURCE_FILE_DESCRIPTION "clipp-win32.com"
-#define CLIPP_RESOURCE_INTERNAL_NAME "clipp-win32.com"
-#define CLIPP_RESOURCE_ORIGINAL_FILENAME "clipp-win32.com"
+#define CLIPP_RESOURCE_FILE_DESCRIPTION "clipp.com"
+#define CLIPP_RESOURCE_INTERNAL_NAME "clipp.com"
+#define CLIPP_RESOURCE_ORIGINAL_FILENAME "clipp.com"
 #else
-#define CLIPP_RESOURCE_FILE_DESCRIPTION "clipp-win32.exe"
-#define CLIPP_RESOURCE_INTERNAL_NAME "clipp-win32.exe"
-#define CLIPP_RESOURCE_ORIGINAL_FILENAME "clipp-win32.exe"
+#define CLIPP_RESOURCE_FILE_DESCRIPTION "clipp.exe"
+#define CLIPP_RESOURCE_INTERNAL_NAME "clipp.exe"
+#define CLIPP_RESOURCE_ORIGINAL_FILENAME "clipp.exe"
 #endif
 
 VS_VERSION_INFO VERSIONINFO

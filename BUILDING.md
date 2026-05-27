@@ -136,14 +136,14 @@ CI does not currently build for physical devices; device builds are produced man
 
 | Platform / generator | Output                                                                     |
 |----------------------|----------------------------------------------------------------------------|
-| Windows              | `build\windows-<config>\clipp-win32.exe` + `clipp-win32.com` + `clipp-win32.pdb` |
+| Windows              | `build\windows-<config>\clipp.exe` + `clipp.com` + `clipp.pdb`             |
 | macOS (Ninja)        | `build/clipp.app`                                                          |
 | macOS (Xcode)        | `build/<Config>/clipp.app` (e.g. `build/Release/clipp.app`)                |
 | iOS simulator        | `build/ios/Build/<Config>-iphonesimulator/Clipp.app`                       |
 
 `<config>` is the lower-cased build type on Windows (`release`, `debug`) and the literal Xcode configuration name on macOS/iOS (`Release`, `Debug`).
 
-`clipp-win32.com` is a small console shim that re-launches `clipp-win32.exe` with stdio attached — useful when running from `cmd.exe` / PowerShell where the GUI subsystem detaches by default.
+`clipp.com` is a small console shim that re-launches `clipp.exe` with stdio attached — useful when running from `cmd.exe` / PowerShell where the GUI subsystem detaches by default.
 
 ## Environment variables
 

@@ -98,8 +98,8 @@ jobs:
 
       - name: Verify Windows artifacts
         run: |
-          $exe = ".\build\windows-release\clipp-win32.exe"
-          $shim = ".\build\windows-release\clipp-win32.com"
+          $exe = ".\build\windows-release\clipp.exe"
+          $shim = ".\build\windows-release\clipp.com"
           if (-not (Test-Path $exe)) {
             throw "Missing expected executable: $exe"
           }
@@ -109,7 +109,7 @@ jobs:
 
       - name: Verify static dependency closure
         run: |
-          $exe = ".\build\windows-release\clipp-win32.exe"
+          $exe = ".\build\windows-release\clipp.exe"
           $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
           $installPath = & $vswhere -latest -products * -property installationPath
           $vcvars = Join-Path $installPath "VC\Auxiliary\Build\vcvarsall.bat"

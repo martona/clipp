@@ -1,12 +1,31 @@
 # Clipp
 
+[![Windows CI](https://github.com/martona/clipp/actions/workflows/windows-ci.yml/badge.svg)](https://github.com/martona/clipp/actions/workflows/windows-ci.yml)
+[![macOS CI](https://github.com/martona/clipp/actions/workflows/macos-ci.yml/badge.svg)](https://github.com/martona/clipp/actions/workflows/macos-ci.yml)
+[![iOS CI](https://github.com/martona/clipp/actions/workflows/ios-ci.yml/badge.svg)](https://github.com/martona/clipp/actions/workflows/ios-ci.yml)
+
 Secure cross-platform clipboard sync for trusted devices.
 
 Clipp is a free, open source, peer-to-peer clipboard sync utility for Windows, macOS, and iOS. It is built for the boring case: devices you already trust, on a network you already control, sharing clipboard text and images without routing your clipboard through someone else's cloud.
 
-I wrote Clipp because I needed this exact thing, and the usual options kept failing one or more basic tests: not open source, cloud-dependent, not free, or folded into a larger kitchen-sink app whose job was no longer just clipboard sync. Clipp tries to stay small and explicit: discover nearby peers, verify device trust, move clipboard data directly, and otherwise stay out of the way.
+I wrote Clipp because I needed this exact thing, and the usual options kept failing one or more basic tests: not open source, cloud-dependent, not free, or folded into a larger kitchen-sink app whose job was no longer just clipboard sync. Clipp tries to stay narrow: discover nearby peers, verify device trust, move clipboard data directly, and otherwise stay out of the way.
 
-Clipp is LAN-first by design. If you want the same workflow across networks, use a trusted overlay such as Tailscale or NostrVPN and let Clipp keep doing the simple peer-to-peer part.
+Clipp is LAN-first by design. If you want the same workflow across networks, use an overlay such as Tailscale or NostrVPN and let Clipp keep doing the simple peer-to-peer part.
+
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center" valign="top">
+      <img src="docs/screenshots/windows.png" alt="Clipp on Windows: Network tab with key fingerprint and peer list" width="400"><br>
+      <em>Windows — peer discovery, with key fingerprint and connected devices</em>
+    </td>
+    <td align="center" valign="top">
+      <img src="docs/screenshots/macos.png" alt="Clipp on macOS: clipboard activity stream with text, masked password, and an image received from iPhone" width="400"><br>
+      <em>macOS — clipboard activity stream: text, masked password, image from iPhone</em>
+    </td>
+  </tr>
+</table>
 
 ## What It Does
 
@@ -36,32 +55,84 @@ A note on passwords: single-line text that does not contain whitespace is assume
 
 Clipp is LAN-first. If you want to use it across networks, put the devices on a trusted VPN or mesh network and keep the Clipp listener off the public internet. The master key is still required, but the intended outer boundary is a private network you control.
 
-If you find a security issue, please report it privately to the project maintainer before publishing details.
+To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Platform Status
 
-TODO.
+<!-- TODO: user-facing platform support table. "Will this work on my device?"
+     Suggested shape: per-OS minimum version, supported architectures, and any
+     known caveats per platform (e.g. iOS device install requires Xcode for now). -->
 
 ## Installation
 
-TODO.
+<!-- TODO: per-platform install instructions for end users.
+     Suggested shape:
+       - Releases pointer (GitHub Releases link once builds are published)
+       - Windows: download, unzip, run
+       - macOS: download, drag to Applications, allow on first run
+       - iOS: TestFlight or sideload via Xcode
+     Until releases are published, point readers at "Building From Source". -->
+
+Prebuilt binaries are not yet published. See [Building From Source](#building-from-source) below.
 
 ## Usage
 
-TODO.
+<!-- TODO: end-user usage walkthrough.
+     Suggested shape:
+       - First run: pick a network name and secret
+       - Verify the fingerprint matches on a second device
+       - How clipboard sync triggers (copy on A, paste on B)
+       - The activity stream: pinning, re-copying, image preview
+       - Tray / menu bar behavior, quitting vs minimizing -->
+
+## Troubleshooting
+
+<!-- TODO: runtime troubleshooting (not build troubleshooting — that lives in BUILDING.md).
+     Suggested topics:
+       - Devices don't see each other (multicast blocked / VLAN isolation)
+       - Fingerprints don't match between devices
+       - Clipboard sync works one direction but not the other
+       - Windows: app doesn't appear in the tray
+       - macOS: app gets killed on sleep / Gatekeeper warning on first run
+       - iOS: simulator can't discover the Mac it's running on -->
+
+## FAQ
+
+**Will Clipp ever support Linux or Android?**
+
+<!-- TODO: answer. -->
+
+**Can I sync over the internet without a VPN?**
+
+<!-- TODO: answer. The intro implies "no — use a trusted overlay". Confirm and expand. -->
+
+**Does Clipp upload anything to a server?**
+
+<!-- TODO: answer. Privacy posture. -->
+
+**I forgot the network secret. Can I recover it?**
+
+<!-- TODO: answer. -->
 
 ## Building From Source
 
 See [BUILDING.md](BUILDING.md) for prerequisites and build instructions for Windows, macOS, and iOS.
 
-## Troubleshooting
-
-TODO.
-
 ## Project Status
 
-TODO.
+<!-- TODO: describe the current maturity (e.g. early-stage / public preview /
+     stable), maintenance posture (actively developed / steady state), and
+     breaking-change expectations for the wire protocol or on-disk state. -->
 
 ## Contributing
 
-TODO.
+<!-- TODO: contribution guidelines.
+     Suggested shape:
+       - How to file issues
+       - PR expectations (scope, tests, CI must pass)
+       - Code style pointers (or "match surrounding code")
+       - Pointer to BUILDING.md for setup -->
+
+## License
+
+Clipp is released under the MIT License. See [LICENSE.md](LICENSE.md).
