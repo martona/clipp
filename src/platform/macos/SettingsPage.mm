@@ -613,8 +613,7 @@ void MacOSSettingsPage::ResetHostID() {
         return;
     }
 
-    MDNSNotifyHostIDChange();
-    g_peerManager.ClearPeers();
+    g_networkRuntime.Restart();
     RefreshHostIDDisplay();
     RefreshHostIDWarning();
     MacOSSetFieldText(statusMessage_, CLP_NS(CLP_UI_HOST_ID_RESET));

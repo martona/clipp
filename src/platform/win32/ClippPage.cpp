@@ -11,6 +11,18 @@
 #include <string>
 #include <utility>
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>       // IStream, IID_PPV_ARGS, COM goop
+#include <shcore.h>        // CreateStreamOverRandomAccessStream (synchronous COM bridge
+                           // we use to write image bytes into an in-memory stream
+                           // without tripping the C++/WinRT STA-blocking-wait assert
+                           // that fires on DataWriter::StoreAsync().get()).
+
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Storage.Streams.h>
@@ -87,12 +99,23 @@ winrt::Windows::UI::Xaml::Media::Imaging::BitmapImage BitmapFromImageBytes(
         bitmap.DecodePixelType(DecodePixelType::Logical);
         bitmap.DecodePixelWidth(decodePixelWidth);
 
+        // We need the image bytes inside an IRandomAccessStream that BitmapImage
+        // can decode from. The obvious path — DataWriter::WriteBytes +
+        // StoreAsync().get() — trips C++/WinRT's STA-blocking-wait assert in
+        // Debug builds because .get() on an IAsyncOperation while the caller is
+        // on the STA (UI) thread is *technically* a deadlock hazard, even when
+        // the underlying op is synchronous-in-practice (in-memory stream).
+        //
+        // Bypass the async wrapper by writing through the COM IStream interface
+        // adapter instead. ISequentialStream::Write is plain synchronous COM;
+        // no IAsyncOperation, no assert, no thread hop.
         InMemoryRandomAccessStream stream;
-        DataWriter writer(stream.GetOutputStreamAt(0));
-        writer.WriteBytes(winrt::array_view<const uint8_t>(bytes.data(), bytes.data() + bytes.size()));
-        writer.StoreAsync().get();
-        writer.FlushAsync().get();
-        writer.DetachStream();
+        winrt::com_ptr<IStream> rawStream;
+        winrt::check_hresult(::CreateStreamOverRandomAccessStream(
+            winrt::get_unknown(stream), IID_PPV_ARGS(rawStream.put())));
+        ULONG written = 0;
+        winrt::check_hresult(rawStream->Write(
+            bytes.data(), static_cast<ULONG>(bytes.size()), &written));
         stream.Seek(0);
         bitmap.SetSource(stream);
     } catch (const winrt::hresult_error&) {

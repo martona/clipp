@@ -13,6 +13,9 @@
 #define NOMINMAX
 #endif
 #include <Windows.h>
+#include <shcore.h>        // CreateStreamOverRandomAccessStream — see comment in
+                           // LoadResourceStream below for why we route through a
+                           // COM IStream instead of DataWriter.
 #ifdef GetCurrentTime
 #undef GetCurrentTime
 #endif
@@ -53,11 +56,18 @@ winrt::Windows::Storage::Streams::IRandomAccessStream LoadResourceStream(int res
         return nullptr;
     }
 
+    // Synchronous COM IStream write — see BitmapFromImageBytes in ClippPage.cpp
+    // for the longer rationale. tl;dr: DataWriter::StoreAsync().get() trips a
+    // debug-only STA-blocking-wait assert; IStream::Write avoids the async
+    // wrapper entirely while staying just as fast (it's the same underlying
+    // in-memory buffer, written through a thin COM adapter).
     InMemoryRandomAccessStream stream;
-    DataWriter writer(stream.GetOutputStreamAt(0));
-    writer.WriteBytes(winrt::array_view<std::uint8_t const>(bytes, bytes + resourceSize));
-    writer.StoreAsync().get();
-    writer.DetachStream();
+    winrt::com_ptr<IStream> rawStream;
+    winrt::check_hresult(::CreateStreamOverRandomAccessStream(
+        winrt::get_unknown(stream), IID_PPV_ARGS(rawStream.put())));
+    ULONG written = 0;
+    winrt::check_hresult(rawStream->Write(
+        bytes, static_cast<ULONG>(resourceSize), &written));
     stream.Seek(0);
     return stream;
 }

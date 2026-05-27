@@ -3,6 +3,7 @@
 #include "KeyManager.h"
 #include "Logger.h"
 #include "MDNSDiscovery.h"
+#include "NetworkRuntime.h"
 #include "Settings.h"
 #include "platform/uiClippPage.h"
 #include "platform/uistrings.h"
@@ -11,6 +12,8 @@
 #include <string>
 
 #include <sodium.h>
+
+extern NetworkRuntime g_networkRuntime;
 
 #include <winrt/Windows.UI.h>
 #include <winrt/Windows.UI.Text.h>
@@ -117,8 +120,10 @@ void NetworkPage::BuildNetworkSecretSection(winrt::Windows::UI::Xaml::Controls::
         if (newName != g_settings.networkName() && !newName.empty()) {
             g_settings.set_networkName(newName);
             g_keyManager.ClearNetworkKey();
-            MDNSNotifyNetworkKeyChange();
-            peerManager_.ClearPeers();
+            // Full restart so other peers see our DNS-SD goodbye + our re-announce
+            // (clears their backoff queue) and our own browser re-discovers the
+            // network with the new key.
+            g_networkRuntime.Restart();
             SetupPasswordFields();
         }
     });
@@ -293,8 +298,7 @@ void NetworkPage::OnDerivedKey(const KeyManager::NetworkKey* key) {
 
     g_settings.set_networkName(g_settings.networkName());
     g_keyManager.SetNetworkKey(*key);
-    MDNSNotifyNetworkKeyChange();
-    peerManager_.ClearPeers();
+    g_networkRuntime.Restart();
 
     if (uiDispatcher_) {
         uiDispatcher_.TryEnqueue([this]() {

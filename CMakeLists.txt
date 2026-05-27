@@ -50,6 +50,50 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if (MSVC AND WIN32)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    # Use /Z7 (debug info embedded in each .obj) instead of /Zi (separate
+    # compile-time vc140.pdb shared across cl.exe instances — that PDB races
+    # under parallel ninja and fails with C1041). The linker still produces
+    # the final clipp-win32.pdb for the .exe from the embedded info; only the
+    # per-translation-unit compile-time PDB goes away. Slight increase in .obj
+    # sizes; no contention.
+    #
+    # Apply to ALL configs (not just Debug) so Release builds also ship a PDB
+    # next to the .exe — needed to symbolicate field crashes.
+    #
+    # FORCE the cache write because CMake caches toolchain-default flags on
+    # first configure; without FORCE, a re-configure would keep the old /Zi.
+    foreach(flag_var
+            CMAKE_CXX_FLAGS_DEBUG          CMAKE_C_FLAGS_DEBUG
+            CMAKE_CXX_FLAGS_RELEASE        CMAKE_C_FLAGS_RELEASE
+            CMAKE_CXX_FLAGS_RELWITHDEBINFO CMAKE_C_FLAGS_RELWITHDEBINFO
+            CMAKE_CXX_FLAGS_MINSIZEREL     CMAKE_C_FLAGS_MINSIZEREL)
+        if(DEFINED ${flag_var})
+            if("${${flag_var}}" MATCHES "/Zi")
+                string(REGEX REPLACE "/Zi" "/Z7" ${flag_var} "${${flag_var}}")
+            elseif(NOT "${${flag_var}}" MATCHES "/Z7")
+                string(APPEND ${flag_var} " /Z7")
+            endif()
+            set(${flag_var} "${${flag_var}}" CACHE STRING "" FORCE)
+        endif()
+    endforeach()
+
+    # Tell the linker to emit a PDB for non-Debug configs. Debug already
+    # implies /DEBUG via CMAKE_*_LINKER_FLAGS_DEBUG; Release/RelWithDebInfo/
+    # MinSizeRel do not, so /Z7 alone would just bloat .obj files without
+    # producing a usable .pdb. Combine with /OPT:REF /OPT:ICF (already in the
+    # CMake defaults for Release link) so the binary stays optimized.
+    foreach(linker_flag_var
+            CMAKE_EXE_LINKER_FLAGS_RELEASE
+            CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO
+            CMAKE_EXE_LINKER_FLAGS_MINSIZEREL
+            CMAKE_SHARED_LINKER_FLAGS_RELEASE
+            CMAKE_SHARED_LINKER_FLAGS_RELWITHDEBINFO
+            CMAKE_SHARED_LINKER_FLAGS_MINSIZEREL)
+        if(DEFINED ${linker_flag_var} AND NOT "${${linker_flag_var}}" MATCHES "/DEBUG")
+            string(APPEND ${linker_flag_var} " /DEBUG")
+            set(${linker_flag_var} "${${linker_flag_var}}" CACHE STRING "" FORCE)
+        endif()
+    endforeach()
 endif()
 
 if (APPLE)
@@ -110,6 +154,12 @@ if (WIN32)
         ${CLIPP_COMMON_SOURCES}
         ${CLIPP_WIN32_PLATFORM_SOURCES}
         "src/clipp-win32.rc"
+        # CMake auto-recognizes .manifest sources and routes them to mt.exe
+        # at link time. Replaces a hand-rolled /MANIFEST:EMBED + /MANIFESTINPUT
+        # link-option pair that worked in Release (where CMake's MT step is
+        # skipped under /INCREMENTAL:NO) but conflicted with the MT step in
+        # Debug.
+        "src/clipp-win32.exe.manifest"
     )
     clipp_apply_common_target_settings(clipp-win32)
     target_compile_definitions(clipp-win32 PRIVATE WIN32 UNICODE _UNICODE _CONSOLE)
@@ -119,6 +169,9 @@ if (WIN32)
         runtimeobject
         dwmapi
         shell32
+        shcore       # CreateStreamOverRandomAccessStream (used to write image
+                     # bytes into an InMemoryRandomAccessStream synchronously,
+                     # bypassing the DataWriter/IAsyncOperation STA assert).
         ws2_32
         Crypt32
         Normaliz
@@ -128,7 +181,6 @@ if (WIN32)
     if (MSVC)
         target_link_options(clipp-win32 PRIVATE
             "/ENTRY:mainCRTStartup"
-            "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/src/clipp-win32.exe.manifest"
         )
     endif()
 

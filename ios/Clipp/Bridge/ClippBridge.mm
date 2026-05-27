@@ -868,8 +868,12 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, std::shared_ptr
 
         g_logger.log("iOS", Logger::Level::Info, "Network name changed; clearing network key.");
         g_keyManager.ClearNetworkKey();
-        MDNSNotifyNetworkKeyChange();
-        g_peerManager.ClearPeers();
+        // Full restart: sends DNS-SD goodbye for the old service, tears down the
+        // existing browser cache, and re-publishes + re-browses with the new key.
+        // This is what makes other peers see us as freshly-joined rather than
+        // sitting in their backoff queue, and it's what makes our own browser
+        // re-emit Added events for currently-visible peers.
+        RestartNetworkRuntime(error);
     }
 
     return LoadNetworkKeyStatus(error);
@@ -925,9 +929,7 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, std::shared_ptr
         return nil;
     }
 
-    MDNSNotifyNetworkKeyChange();
-    g_peerManager.ClearPeers();
-    StartNetworkRuntimeIfNeeded(nullptr);
+    RestartNetworkRuntime(nullptr);
 
     return LoadNetworkKeyStatus(error);
 }
@@ -938,8 +940,7 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, std::shared_ptr
     }
 
     g_keyManager.ClearNetworkKey();
-    MDNSNotifyNetworkKeyChange();
-    g_peerManager.ClearPeers();
+    RestartNetworkRuntime(nullptr);
     return YES;
 }
 
@@ -983,9 +984,7 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, std::shared_ptr
 }
 
 + (void)notifyNetworkKeyChanged {
-    MDNSNotifyNetworkKeyChange();
-    g_peerManager.ClearPeers();
-    StartNetworkRuntimeIfNeeded(nullptr);
+    RestartNetworkRuntime(nullptr);
 }
 
 + (BOOL)isRunning {
@@ -1160,8 +1159,7 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, std::shared_ptr
         return nil;
     }
 
-    MDNSNotifyHostIDChange();
-    g_peerManager.ClearPeers();
+    RestartNetworkRuntime(nullptr);
     return LoadSettingsSnapshot(error);
 }
 

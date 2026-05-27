@@ -4,6 +4,7 @@
 
 #include "KeyManager.h"
 #include "MDNSDiscovery.h"
+#include "NetworkRuntime.h"
 #include "PeerManager.h"
 #include "Settings.h"
 #include "platform/uiClippPage.h"
@@ -23,6 +24,7 @@
 extern Settings g_settings;
 extern KeyManager g_keyManager;
 extern PeerDisplay g_peerDisplay;
+extern NetworkRuntime g_networkRuntime;
 extern PeerManager g_peerManager;
 
 @interface MacOSNetworkPageFieldDelegate : NSObject <NSTextFieldDelegate> {
@@ -435,8 +437,7 @@ void MacOSNetworkPage::ApplyNetworkNameChange() {
 
     if (newName != currentName && g_settings.set_networkName(newName)) {
         g_keyManager.ClearNetworkKey();
-        MDNSNotifyNetworkKeyChange();
-        g_peerManager.ClearPeers();
+        g_networkRuntime.Restart();
         SetupPasswordFields();
         if (networkKeyChangedHandler_) {
             networkKeyChangedHandler_();
@@ -502,8 +503,7 @@ void MacOSNetworkPage::OnDerivedKey(const KeyManager::NetworkKey& key) {
         return;
     }
 
-    MDNSNotifyNetworkKeyChange();
-    g_peerManager.ClearPeers();
+    g_networkRuntime.Restart();
     NewPasswordHashReceived();
     if (networkKeyChangedHandler_) {
         networkKeyChangedHandler_();

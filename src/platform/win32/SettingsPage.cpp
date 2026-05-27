@@ -556,8 +556,7 @@ void SettingsPage::ResetHostID() {
         return;
     }
 
-    MDNSNotifyHostIDChange();
-    g_peerManager.ClearPeers();
+    g_networkRuntime.Restart();
     RefreshHostIDDisplay();
     RefreshHostIDWarning();
     statusMessage_.Text(CLP_W(CLP_UI_HOST_ID_RESET));

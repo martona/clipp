@@ -18,9 +18,12 @@
 #include <condition_variable>
 #include <map>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
+
+#include <sodium.h>
 
 #pragma comment(lib, "dnsapi.lib")
 
@@ -63,6 +66,13 @@ struct State {
     };
     std::map<std::wstring, InstanceState> liveInstances;
 
+    // hostId-level dedup over `liveInstances`. Multiple wire instances for the
+    // same hostId (e.g., after a peer restart that picks a new random instance
+    // name while the old name is still in our cache awaiting TTL) collapse into
+    // a single logical peer from the callback's perspective. Added fires only
+    // when the set transitions empty→non-empty; Removed only on non-empty→empty.
+    std::map<HostId, std::set<std::wstring>> liveByHostId;
+
     std::atomic<bool> hostIDCollisionWarning{ false };
 };
 
@@ -84,10 +94,23 @@ std::string LowerAscii(std::string s) {
     return s;
 }
 
-std::wstring MakeInstanceName(const HostId& hostId) {
-    // Non-identifying: clipp-<first 8 hex chars of hostId>.
-    const std::string hex = hostId.ToHexString(/*bytesPerGroup=*/HostId::kSize); // no dashes
-    return Utf8ToWide("clipp-" + hex.substr(0, 8));
+std::wstring MakeInstanceName(const HostId& /*hostId*/) {
+    // Non-identifying random label per publish. Random (not hostId-derived) so
+    // each restart looks like a brand-new mDNS instance to neighbors — they
+    // can't reuse a cached entry from a previous session and miss our re-join.
+    // Identity still travels in the encrypted TXT record's hostId field; the
+    // discovery layer collapses multiple instances of the same hostId into one
+    // logical peer for callbacks, so the wire-level instance name can churn
+    // freely without confusing PeerManager.
+    unsigned char raw[4]{};
+    randombytes_buf(raw, sizeof(raw));
+    static const char kHex[] = "0123456789abcdef";
+    std::string name = "clipp-";
+    for (unsigned char b : raw) {
+        name.push_back(kHex[b >> 4]);
+        name.push_back(kHex[b & 0x0F]);
+    }
+    return Utf8ToWide(name);
 }
 
 std::wstring FullInstanceFqdn(const std::wstring& instance) {
@@ -226,6 +249,12 @@ void HandleResolved(const DNS_SERVICE_INSTANCE* instance) {
     Callback cb = nullptr;
     {
         std::lock_guard<std::mutex> lock(s.mutex);
+        if (!s.started) {
+            // Stop() may have cleared state between when this resolve was
+            // queued and now — discard the resolve to avoid touching cleared
+            // maps or firing a callback after the consumer detached.
+            return;
+        }
         cb = s.callback;
 
         // Self-filter / collision detection.
@@ -247,6 +276,14 @@ void HandleResolved(const DNS_SERVICE_INSTANCE* instance) {
             it->second.resolved = true;
             it->second.hostId = peer.hostId;
             it->second.deviceName = peer.deviceName;
+        }
+
+        // hostId-level dedup: only fire Added on the empty→non-empty transition.
+        auto& instancesForHost = s.liveByHostId[peer.hostId];
+        const bool firstForHost = instancesForHost.empty();
+        instancesForHost.insert(instance->pszInstanceName);
+        if (!firstForHost) {
+            cb = nullptr;
         }
     }
 
@@ -296,6 +333,12 @@ void WINAPI OnBrowseCallback(DWORD status, PVOID /*queryContext*/, PDNS_RECORD p
     Callback cb = nullptr;
     {
         std::lock_guard<std::mutex> lock(s.mutex);
+        if (!s.started) {
+            // Final synchronous callback from DnsServiceBrowseCancel during Stop().
+            // Stop() has already cleared liveInstances / callback; drop the records.
+            if (pDnsRecord) DnsRecordListFree(pDnsRecord, DnsFreeRecordList);
+            return;
+        }
         cb = s.callback;
     }
 
@@ -309,6 +352,7 @@ void WINAPI OnBrowseCallback(DWORD status, PVOID /*queryContext*/, PDNS_RECORD p
         if (isGoodbye) {
             State::InstanceState gone;
             bool wasResolved = false;
+            bool fireRemoved = false;
             {
                 std::lock_guard<std::mutex> lock(s.mutex);
                 auto it = s.liveInstances.find(instanceFqdn);
@@ -317,8 +361,20 @@ void WINAPI OnBrowseCallback(DWORD status, PVOID /*queryContext*/, PDNS_RECORD p
                     wasResolved = gone.resolved;
                     s.liveInstances.erase(it);
                 }
+
+                if (wasResolved) {
+                    // hostId-level dedup: only fire Removed on the non-empty→empty transition.
+                    auto setIt = s.liveByHostId.find(gone.hostId);
+                    if (setIt != s.liveByHostId.end()) {
+                        setIt->second.erase(instanceFqdn);
+                        if (setIt->second.empty()) {
+                            s.liveByHostId.erase(setIt);
+                            fireRemoved = true;
+                        }
+                    }
+                }
             }
-            if (wasResolved && cb) {
+            if (fireRemoved && cb) {
                 DiscoveredPeer peer;
                 peer.deviceName = gone.deviceName;
                 peer.hostId = gone.hostId;
@@ -364,11 +420,17 @@ void WINAPI OnRegisterComplete(DWORD status, PVOID /*queryContext*/, PDNS_SERVIC
             && _wcsicmp(fullName.c_str() + fullName.size() - suffix.size(), suffix.c_str()) == 0) {
             leaf = fullName.substr(0, fullName.size() - suffix.size());
         }
+        // Apply the cached published-name updates under the lock unless the
+        // discovery layer has been torn down in the meantime (Stop() between
+        // the register submission and this completion firing). Skipping is
+        // benign — the State has already been wiped.
         std::lock_guard<std::mutex> lock(s.mutex);
-        s.publishedInstanceNameW = leaf;
-        s.publishedInstanceNameUtf8 = LowerAscii(WideToUtf8(leaf));
-        g_logger.log(__FUNCTION__, Logger::Level::Info,
-            L"DNS-SD published as '%ls'", fullName.c_str());
+        if (s.started) {
+            s.publishedInstanceNameW = leaf;
+            s.publishedInstanceNameUtf8 = LowerAscii(WideToUtf8(leaf));
+            g_logger.log(__FUNCTION__, Logger::Level::Info,
+                L"DNS-SD published as '%ls'", fullName.c_str());
+        }
     }
     if (pInstance) DnsServiceFreeInstance(pInstance);
 }
@@ -417,18 +479,6 @@ bool PublishLocked(State& s) {
     return true;
 }
 
-void UnpublishLocked(State& s) {
-    if (s.registerActive) {
-        DnsServiceRegisterCancel(&s.registerCancel);
-        s.registerActive = false;
-    }
-    if (s.registeredInstance) {
-        DnsServiceFreeInstance(s.registeredInstance);
-        s.registeredInstance = nullptr;
-    }
-    s.publishedInstanceNameW.clear();
-    s.publishedInstanceNameUtf8.clear();
-}
 
 bool StartBrowseLocked(State& s) {
     DNS_SERVICE_BROWSE_REQUEST req = {};
@@ -445,14 +495,6 @@ bool StartBrowseLocked(State& s) {
     }
     s.browseActive = true;
     return true;
-}
-
-void StopBrowseLocked(State& s) {
-    if (s.browseActive) {
-        DnsServiceBrowseCancel(&s.browseCancel);
-        s.browseActive = false;
-    }
-    s.liveInstances.clear();
 }
 
 } // namespace
@@ -487,31 +529,53 @@ bool Start(Callback callback, bool publishLocal) {
 
 void Stop() {
     auto& s = GlobalState();
-    std::lock_guard<std::mutex> lock(s.mutex);
-    if (!s.started) return;
-    UnpublishLocked(s);
-    StopBrowseLocked(s);
-    s.callback = nullptr;
-    s.started = false;
+
+    // Tear down all soft state under the lock, but stage the DNS_SERVICE_CANCEL
+    // handles and the owned DNS_SERVICE_INSTANCE so we can invoke the actual
+    // cancel APIs AFTER releasing the lock. DnsServiceBrowseCancel /
+    // DnsServiceRegisterCancel synchronously deliver one final completion
+    // callback on the calling thread, and those callbacks re-acquire s.mutex.
+    // Holding the mutex across cancel recursively locks the non-recursive
+    // std::mutex; MSVC throws system_error(EDEADLK), the exception unwinds
+    // through the dnsapi C callback boundary, and terminate() fires.
+    DNS_SERVICE_CANCEL browseCancel{};
+    DNS_SERVICE_CANCEL registerCancel{};
+    DNS_SERVICE_INSTANCE* instanceToFree = nullptr;
+    bool wasBrowseActive = false;
+    bool wasRegisterActive = false;
+    {
+        std::lock_guard<std::mutex> lock(s.mutex);
+        if (!s.started) return;
+
+        wasRegisterActive = s.registerActive;
+        registerCancel = s.registerCancel;
+        s.registerActive = false;
+        instanceToFree = s.registeredInstance;
+        s.registeredInstance = nullptr;
+        s.publishedInstanceNameW.clear();
+        s.publishedInstanceNameUtf8.clear();
+
+        wasBrowseActive = s.browseActive;
+        browseCancel = s.browseCancel;
+        s.browseActive = false;
+        s.liveInstances.clear();
+        s.liveByHostId.clear();
+
+        // Clear started + callback BEFORE the cancel calls so the synchronous
+        // final callback that DnsServiceBrowseCancel/RegisterCancel delivers
+        // sees the discovery layer as stopped and bails (see the !s.started
+        // guards in OnBrowseCallback / HandleResolved / OnRegisterComplete).
+        s.callback = nullptr;
+        s.started = false;
+    }
+
+    if (wasRegisterActive) DnsServiceRegisterCancel(&registerCancel);
+    if (instanceToFree)    DnsServiceFreeInstance(instanceToFree);
+    if (wasBrowseActive)   DnsServiceBrowseCancel(&browseCancel);
+
     g_logger.log(__FUNCTION__, Logger::Level::Info, "DNS-SD discovery stopped.");
 }
 
-void NotifyNetworkKeyChange() {
-    auto& s = GlobalState();
-    std::lock_guard<std::mutex> lock(s.mutex);
-    if (!s.started || !s.publishLocal) return;
-    UnpublishLocked(s);
-    PublishLocked(s);
-}
-
-void NotifyHostIDChange() {
-    auto& s = GlobalState();
-    std::lock_guard<std::mutex> lock(s.mutex);
-    s.hostIDCollisionWarning.store(false);
-    if (!s.started || !s.publishLocal) return;
-    UnpublishLocked(s);
-    PublishLocked(s);
-}
 
 bool HasHostIDCollisionWarning() {
     return GlobalState().hostIDCollisionWarning.load();

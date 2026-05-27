@@ -42,11 +42,6 @@ bool Start(Callback callback, bool publishLocal = true);
 // Stops browse + publish. Sends DNS-SD goodbye for the published instance.
 void Stop();
 
-// Republishes the TXT record. Call when the network key changes (so old peers stop
-// being able to decrypt our blob) or when the local host id is reset.
-void NotifyNetworkKeyChange();
-void NotifyHostIDChange();
-
 // Host id collision warning is raised when we see another peer advertising our hostId.
 bool HasHostIDCollisionWarning();
 void ClearHostIDCollisionWarning();
@@ -57,9 +52,7 @@ bool BrowseOnce(std::chrono::milliseconds wait, std::vector<DiscoveredPeer>& out
 
 } // namespace MDNSDiscovery
 
-// Back-compat aliases for callers that haven't been ported yet (NetworkPage / SettingsPage /
-// iOS bridge). New names map 1:1.
-inline void MDNSNotifyNetworkKeyChange() { MDNSDiscovery::NotifyNetworkKeyChange(); }
-inline void MDNSNotifyHostIDChange() { MDNSDiscovery::NotifyHostIDChange(); }
+// Back-compat aliases for callers that haven't been ported yet (NetworkPage /
+// SettingsPage / iOS bridge).
 inline bool MDNSHasHostIDCollisionWarning() { return MDNSDiscovery::HasHostIDCollisionWarning(); }
 inline void MDNSClearHostIDCollisionWarning() { MDNSDiscovery::ClearHostIDCollisionWarning(); }

@@ -20,10 +20,13 @@
 #error "MDNSDiscovery_Apple.mm requires ARC. Enable CLANG_ENABLE_OBJC_ARC on the target."
 #endif
 
+#include <sodium.h>
+
 #include <atomic>
 #include <chrono>
 #include <map>
 #include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -58,6 +61,14 @@ struct State {
     // Tracks instance-name -> hostId mapping so didRemoveService can emit a usable hostId.
     std::mutex liveInstancesMutex;
     std::map<std::string, ResolvedInstance> liveInstances;
+
+    // hostId-level dedup over `liveInstances`. Multiple wire instances for the
+    // same hostId (e.g., after a peer restart that picks a new random instance
+    // name while the old name is still in our cache awaiting TTL) collapse into
+    // a single logical peer from the callback's perspective. Added fires only
+    // when the set transitions empty→non-empty; Removed only on non-empty→empty.
+    // Guarded by liveInstancesMutex (same scope as liveInstances).
+    std::map<HostId, std::set<std::string>> liveByHostId;
 };
 
 State& GlobalState() {
@@ -72,8 +83,23 @@ std::string LowerAscii(std::string s) {
     return s;
 }
 
-std::string MakeInstanceName(const HostId& hostId) {
-    return "clipp-" + hostId.ToHexString(/*bytesPerGroup=*/HostId::kSize).substr(0, 8);
+std::string MakeInstanceName(const HostId& /*hostId*/) {
+    // Non-identifying random label per publish. Random (not hostId-derived) so
+    // each restart looks like a brand-new mDNS instance to neighbors — they
+    // can't reuse a cached entry from a previous session and miss our re-join.
+    // Identity still travels in the encrypted TXT record's hostId field; the
+    // discovery layer collapses multiple instances of the same hostId into one
+    // logical peer for callbacks, so the wire-level instance name can churn
+    // freely without confusing PeerManager.
+    unsigned char raw[4]{};
+    randombytes_buf(raw, sizeof(raw));
+    static const char kHex[] = "0123456789abcdef";
+    std::string name = "clipp-";
+    for (unsigned char b : raw) {
+        name.push_back(kHex[b >> 4]);
+        name.push_back(kHex[b & 0x0F]);
+    }
+    return name;
 }
 
 // RFC 6763 TXT record format: a sequence of <1-byte length><up to 255 bytes of "key=value">.
@@ -125,6 +151,7 @@ std::map<std::string, std::string> ParseTxtRecordData(NSData* data) {
 @property (nonatomic, strong) NSThread* thread;
 @property (nonatomic, assign) BOOL stopRequested;
 @property (nonatomic, assign) std::map<std::string, ResolvedInstance>* liveInstances;
+@property (nonatomic, assign) std::map<HostId, std::set<std::string>>* liveByHostId;
 @property (nonatomic, assign) std::mutex* liveInstancesMutex;
 
 // Optional capture target: when set, Added events also push into this vector (used by BrowseOnce).
@@ -133,7 +160,6 @@ std::map<std::string, std::string> ParseTxtRecordData(NSData* data) {
 
 - (void)startContinuousPublish:(BOOL)publishLocal;
 - (void)stopContinuous;
-- (void)republishOnly;
 @end
 
 @implementation ClippMDNSAppleCoordinator
@@ -263,23 +289,6 @@ static std::string LowerCaseUtf8FromNSString(NSString* s) {
     [self.resolving removeAllObjects];
 }
 
-- (void)republishOnly {
-    // Called by NotifyNetworkKeyChange / NotifyHostIDChange. Re-publish on the discovery thread.
-    NSThread* discoveryThread = self.thread;
-    if (!discoveryThread) return;
-
-    [self performSelector:@selector(republishOnDiscoveryThread)
-                 onThread:discoveryThread
-               withObject:nil
-            waitUntilDone:NO
-                    modes:@[NSRunLoopCommonModes]];
-}
-
-- (void)republishOnDiscoveryThread {
-    [self unpublish];
-    [self publishLocalOnRunLoop:[NSRunLoop currentRunLoop]];
-}
-
 #pragma mark - NSNetServiceBrowserDelegate
 
 - (void)netServiceBrowser:(NSNetServiceBrowser*)browser
@@ -318,18 +327,31 @@ static std::string LowerCaseUtf8FromNSString(NSString* s) {
 
     ResolvedInstance gone;
     bool wasResolved = false;
+    bool fireRemoved = false;
     if (self.liveInstances && self.liveInstancesMutex) {
-        std::lock_guard<std::mutex> lock(*self.liveInstancesMutex);
         const std::string key = LowerCaseUtf8FromNSString(service.name);
+        std::lock_guard<std::mutex> lock(*self.liveInstancesMutex);
         auto it = self.liveInstances->find(key);
         if (it != self.liveInstances->end()) {
             gone = it->second;
             wasResolved = gone.resolved;
             self.liveInstances->erase(it);
         }
+
+        // hostId-level dedup: only fire Removed on the non-empty→empty transition.
+        if (wasResolved && self.liveByHostId) {
+            auto setIt = self.liveByHostId->find(gone.hostId);
+            if (setIt != self.liveByHostId->end()) {
+                setIt->second.erase(key);
+                if (setIt->second.empty()) {
+                    self.liveByHostId->erase(setIt);
+                    fireRemoved = true;
+                }
+            }
+        }
     }
 
-    if (cb && wasResolved) {
+    if (cb && fireRemoved) {
         MDNSDiscovery::DiscoveredPeer peer;
         peer.deviceName = gone.deviceName;
         peer.hostId = gone.hostId;
@@ -437,15 +459,24 @@ static std::string LowerCaseUtf8FromNSString(NSString* s) {
     }
     if (peer.ip.empty()) return;
 
+    bool firstForHost = true;
     if (self.liveInstances && self.liveInstancesMutex) {
+        const std::string nameKey = LowerCaseUtf8FromNSString(service.name);
         std::lock_guard<std::mutex> lock(*self.liveInstancesMutex);
-        auto& entry = (*self.liveInstances)[LowerCaseUtf8FromNSString(service.name)];
+        auto& entry = (*self.liveInstances)[nameKey];
         entry.resolved = true;
         entry.hostId = peer.hostId;
         entry.deviceName = peer.deviceName;
+
+        // hostId-level dedup: only fire Added on the empty→non-empty transition.
+        if (self.liveByHostId) {
+            auto& instancesForHost = (*self.liveByHostId)[peer.hostId];
+            firstForHost = instancesForHost.empty();
+            instancesForHost.insert(nameKey);
+        }
     }
 
-    if (cb) cb(MDNSDiscovery::Event::Added, peer);
+    if (cb && firstForHost) cb(MDNSDiscovery::Event::Added, peer);
 
     if (self.captureVector && self.captureMutex) {
         std::lock_guard<std::mutex> lock(*self.captureMutex);
@@ -482,6 +513,7 @@ bool Start(Callback callback, bool publishLocal) {
 
     gContinuous = [[ClippMDNSAppleCoordinator alloc] init];
     gContinuous.liveInstances = &s.liveInstances;
+    gContinuous.liveByHostId = &s.liveByHostId;
     gContinuous.liveInstancesMutex = &s.liveInstancesMutex;
     [gContinuous startContinuousPublish:(publishLocal ? YES : NO)];
     g_logger.log(__FUNCTION__, Logger::Level::Info, "DNS-SD discovery started.");
@@ -499,33 +531,16 @@ void Stop() {
     if (gContinuous) {
         [gContinuous stopContinuous];
         gContinuous.liveInstances = nullptr;
+        gContinuous.liveByHostId = nullptr;
         gContinuous.liveInstancesMutex = nullptr;
         gContinuous = nil;
     }
     {
         std::lock_guard<std::mutex> lock(s.liveInstancesMutex);
         s.liveInstances.clear();
+        s.liveByHostId.clear();
     }
     g_logger.log(__FUNCTION__, Logger::Level::Info, "DNS-SD discovery stopped.");
-}
-
-void NotifyNetworkKeyChange() {
-    auto& s = GlobalState();
-    {
-        std::lock_guard<std::mutex> lock(s.mutex);
-        if (!s.started || !s.publishLocal) return;
-    }
-    if (gContinuous) [gContinuous republishOnly];
-}
-
-void NotifyHostIDChange() {
-    auto& s = GlobalState();
-    s.hostIDCollisionWarning.store(false);
-    {
-        std::lock_guard<std::mutex> lock(s.mutex);
-        if (!s.started || !s.publishLocal) return;
-    }
-    if (gContinuous) [gContinuous republishOnly];
 }
 
 bool HasHostIDCollisionWarning() {
@@ -559,9 +574,11 @@ bool BrowseOnce(std::chrono::milliseconds wait, std::vector<DiscoveredPeer>& out
         std::vector<DiscoveredPeer> captured;
         std::mutex localInstancesMutex;
         std::map<std::string, ResolvedInstance> localInstances;
+        std::map<HostId, std::set<std::string>> localByHostId;
         coordinator.captureVector = &captured;
         coordinator.captureMutex = &captureMutex;
         coordinator.liveInstances = &localInstances;
+        coordinator.liveByHostId = &localByHostId;
         coordinator.liveInstancesMutex = &localInstancesMutex;
 
         NSRunLoop* runLoop = [NSRunLoop currentRunLoop];
