@@ -264,3 +264,32 @@ Write-Host "Building clipp..."
 Invoke-NativeCommand -FilePath $cmakeExe -Arguments @("--build", $buildDir, "--config", $BuildType, "--parallel", "$Parallel")
 
 Write-Host "Built: $buildDir"
+
+$signingVars = [ordered]@{
+    "ARTIFACT_SIGNING_ENDPOINT"            = $env:ARTIFACT_SIGNING_ENDPOINT
+    "ARTIFACT_SIGNING_ACCOUNT"             = $env:ARTIFACT_SIGNING_ACCOUNT
+    "ARTIFACT_SIGNING_CERTIFICATE_PROFILE" = $env:ARTIFACT_SIGNING_CERTIFICATE_PROFILE
+}
+$presentVars = @($signingVars.GetEnumerator() | Where-Object { $_.Value })
+$missingVars = @($signingVars.GetEnumerator() | Where-Object { -not $_.Value } | ForEach-Object { $_.Key })
+
+if ($presentVars.Count -eq 0) {
+    # No signing env vars set; skip silently.
+}
+elseif ($missingVars.Count -gt 0) {
+    Write-Warning "Skipping artifact signing; missing env var(s): $($missingVars -join ', ')"
+}
+else {
+    Write-Host "Signing artifacts in $buildDir..."
+    $signArgs = @(
+        "code", "artifact-signing",
+        "-b", $buildDir,
+        "-ase", $env:ARTIFACT_SIGNING_ENDPOINT,
+        "-asa", $env:ARTIFACT_SIGNING_ACCOUNT,
+        "*.exe",
+        "*.com",
+        "-v", "Information",
+        "-ascp", $env:ARTIFACT_SIGNING_CERTIFICATE_PROFILE
+    )
+    Invoke-NativeCommand -FilePath "sign.exe" -Arguments $signArgs
+}
