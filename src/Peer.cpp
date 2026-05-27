@@ -706,15 +706,7 @@ void Peer::ThreadProcRecv() {
 					static_cast<unsigned long long>(payload.meta.uncompressedDataSize));
 
 				if (clipboardReceivedCallback_) {
-					HostId remoteHostId;
-					std::wstring remoteHostName;
-					{
-						std::lock_guard<std::mutex> lock(dataMutex_);
-						remoteHostId = hostID_;
-						remoteHostName = hostName_;
-					}
-					clipboardReceivedCallback_(remoteHostName, remoteHostId,
-						std::make_shared<const ClipboardPayload>(std::move(payload)));
+					clipboardReceivedCallback_(std::make_shared<const ClipboardPayload>(std::move(payload)));
 				}
 				continue;
 			}

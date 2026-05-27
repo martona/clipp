@@ -215,7 +215,7 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t it
         return Grid{ nullptr };
     }
 
-    const bool isOutgoing = display->header.direction == ClipboardActivityDirection::Outgoing;
+    const bool isOutgoing = display->direction == ClipboardActivityDirection::Outgoing;
 
     Grid row;
     row.HorizontalAlignment(HorizontalAlignment::Stretch);
@@ -232,11 +232,7 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t it
     content.Spacing(7);
 
     TextBlock meta;
-    std::wstring deviceName = display->header.deviceName;
-    if (deviceName.empty()) {
-        deviceName = isOutgoing ? CLP_W(CLP_UI_THIS_DEVICE) : CLP_W(CLP_UI_UNKNOWN_HOST);
-    }
-    const std::wstring metaText = deviceName + L" - " + FormatActivityTime(display->header.timestamp);
+    const std::wstring metaText = display->deviceName + L" - " + FormatActivityTime(display->header.timestamp);
     meta.Text(metaText);
     meta.FontSize(12);
     meta.Opacity(0.68);

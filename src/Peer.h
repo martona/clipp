@@ -30,7 +30,7 @@ public:
 	} ConnType;
 	ConnType connType_;
 
-	using ClipboardReceivedCallback = std::function<void(const std::wstring&, const HostId&, std::shared_ptr<const ClipboardPayload>)>;
+	using ClipboardReceivedCallback = std::function<void(std::shared_ptr<const ClipboardPayload>)>;
 	using VerifiedCallback = std::function<void(const std::wstring&, const HostId&, ConnType, std::chrono::steady_clock::time_point)>;
 	using TrafficCallback = std::function<void(const HostId&, uint64_t, uint64_t)>;
 

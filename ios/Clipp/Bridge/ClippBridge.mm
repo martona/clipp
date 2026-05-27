@@ -6,7 +6,9 @@
 #include "../../../src/ClipboardPayload.h"
 #include "../../../src/ClipboardHashGuard.h"
 #include "../../../src/ClipboardWire.h"
+#include "../../../src/CryptoChannel.h"
 #include "../../../src/KeyManager.h"
+#include "../../../src/LocalPeerName.h"
 #include "../../../src/Logger.h"
 #include "../../../src/MDNSDiscovery.h"
 #include "../../../src/NetworkDefs.h"
@@ -387,9 +389,9 @@ CLPClipboardActivityItem* MakeClipboardActivityItem(const ClipboardActivityItemH
     NSString* detailText = ToNSString(display->detailText);
     return [[CLPClipboardActivityItem alloc] initWithActivityItemID:header.id
                                                         identifier:ActivityIdentifier(header.id)
-                                                        deviceName:ToNSString(display->header.deviceName)
+                                                        deviceName:ToNSString(display->deviceName)
                                                          timestamp:ToNSDate(display->header.timestamp)
-                                                         direction:ToBridgeDirection(display->header.direction)
+                                                         direction:ToBridgeDirection(display->direction)
                                                               kind:ToBridgePayloadKind(display->kind)
                                                       previewText:ToNSString(display->previewText)
                                                        detailText:detailText
@@ -530,7 +532,7 @@ CLPDiagnosticLogLine* MakeDiagnosticLogLine(const TerminalLogBuffer::Line& line)
 }
 }
 
-void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, std::shared_ptr<const ClipboardPayload> payload) {
+void CLPIOSReceiveClipboardPayload(std::shared_ptr<const ClipboardPayload> payload) {
     if (!payload) {
         return;
     }
@@ -558,7 +560,7 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, std::shared_ptr
         }
 
         EnsureClipboardActivityWatcher();
-        g_clipboardActivityStore.AddIncoming(hostName, std::move(payload));
+        g_clipboardActivityStore.Add(std::move(payload));
     }
 }
 
@@ -711,9 +713,10 @@ void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, std::shared_ptr
     g_clipboardHashGuard.RememberCurrent(payload);
     HostId localHostId;
     g_settings.getHostID(localHostId);
-    payload.StampOrigin(localHostId, g_settings.nextOriginSequenceNumber());
+    const std::string localHostName = clipp::GetLocalPeerDisplayName("iPhone", CryptoChannel::HOSTNAME_MAX_BYTES);
+    payload.StampOrigin(localHostId, localHostName.c_str(), g_settings.nextOriginSequenceNumber());
     auto sharedPayload = std::make_shared<const ClipboardPayload>(std::move(payload));
-    const uint64_t activityItemID = g_clipboardActivityStore.AddOutgoing(L"This iPhone", sharedPayload);
+    const uint64_t activityItemID = g_clipboardActivityStore.Add(sharedPayload);
     g_peerManager.BroadcastClipboard(sharedPayload);
     g_logger.log("iOS",
                  Logger::Level::Info,

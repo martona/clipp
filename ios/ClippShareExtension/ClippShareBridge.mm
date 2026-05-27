@@ -305,13 +305,14 @@ bool SendPayloadsToPeer(const MDNSDiscovery::DiscoveredPeer& peer, const std::ve
 
     HostId localHostId;
     g_settings.getHostID(localHostId);
+    const std::string localHostName = clipp::GetLocalPeerDisplayName("iPhone", CryptoChannel::HOSTNAME_MAX_BYTES);
 
     std::vector<ClipboardPayload> clipboardPayloads;
     clipboardPayloads.reserve(payloads.count);
     for (CLPSharePayload* payload in payloads) {
         ClipboardPayload clipboardPayload{};
         if (PayloadFromSharePayload(payload, clipboardPayload)) {
-            clipboardPayload.StampOrigin(localHostId, g_settings.nextOriginSequenceNumber());
+            clipboardPayload.StampOrigin(localHostId, localHostName.c_str(), g_settings.nextOriginSequenceNumber());
             clipboardPayloads.push_back(std::move(clipboardPayload));
         }
     }

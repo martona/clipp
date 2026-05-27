@@ -29,8 +29,6 @@ enum class ClipboardActivityPayloadKind {
 
 struct ClipboardActivityItemHeader {
     uint64_t id{};
-    ClipboardActivityDirection direction{ ClipboardActivityDirection::Incoming };
-    std::wstring deviceName;
     // Local wall-clock when the item was added to the store. Distinct from any
     // origin-device timestamp that may live in the payload's meta — pull that
     // via DisplayItem / PayloadReference if a consumer wants it.
@@ -39,6 +37,11 @@ struct ClipboardActivityItemHeader {
 
 struct ClipboardActivityDisplayItem {
     ClipboardActivityItemHeader header;
+    // Resolved from the payload at build time: Outgoing iff originHostId matches
+    // the local host, Incoming otherwise. deviceName is the localized "This
+    // device" string when outgoing, the wire-carried origin hostname otherwise.
+    ClipboardActivityDirection direction{ ClipboardActivityDirection::Incoming };
+    std::wstring deviceName;
     ClipboardActivityPayloadKind kind{ ClipboardActivityPayloadKind::Unsupported };
     std::wstring previewText;
     std::wstring detailText;
@@ -69,8 +72,10 @@ class ClipboardActivityStore {
 public:
     using Watcher = std::function<void(const ClipboardActivityUpdate&, void*)>;
 
-    uint64_t AddIncoming(const std::wstring& deviceName, std::shared_ptr<const ClipboardPayload> payload);
-    uint64_t AddOutgoing(const std::wstring& deviceName, std::shared_ptr<const ClipboardPayload> payload);
+    // Insert a payload into the activity store. Direction and device-name are
+    // derived at display time from payload->meta.originHostId / originHostName,
+    // so the caller doesn't pass them in.
+    uint64_t Add(std::shared_ptr<const ClipboardPayload> payload);
 
     void SetLimits(uint64_t memoryLimitBytes, uint64_t maxAgeSeconds, uint64_t maxItems);
 
@@ -119,7 +124,7 @@ private:
     static uint64_t EstimateItemBytes(const Item& item);
     static void NotifyWatchers(const std::vector<WatcherRegistration>& watchers, const std::vector<ClipboardActivityUpdate>& updates);
 
-    uint64_t AddItem(ClipboardActivityDirection direction, const std::wstring& deviceName, std::shared_ptr<const ClipboardPayload> payload);
+    uint64_t AddItem(std::shared_ptr<const ClipboardPayload> payload);
     void ApplyLimitsLocked(std::chrono::system_clock::time_point now, std::vector<ClipboardActivityUpdate>& updates);
     std::optional<Item> FindItem(uint64_t itemID) const;
 

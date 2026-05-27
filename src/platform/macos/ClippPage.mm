@@ -417,7 +417,7 @@ NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
         return nil;
     }
 
-    const bool isOutgoing = display->header.direction == ClipboardActivityDirection::Outgoing;
+    const bool isOutgoing = display->direction == ClipboardActivityDirection::Outgoing;
 
     MacOSActivityRowView* row = [[MacOSActivityRowView alloc] initWithFrame:NSZeroRect];
     row.translatesAutoresizingMaskIntoConstraints = NO;
@@ -435,10 +435,7 @@ NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
     content.distribution = NSStackViewDistributionFill;
     content.spacing = 7.0;
 
-    std::wstring deviceName = display->header.deviceName;
-    if (deviceName.empty()) {
-        deviceName = isOutgoing ? CLP_W(CLP_UI_THIS_DEVICE) : CLP_W(CLP_UI_UNKNOWN_HOST);
-    }
+    const std::wstring& deviceName = display->deviceName;
 
     MacOSClippPageTarget* target = [[MacOSClippPageTarget alloc] initWithOwner:this itemID:itemID];
     [activityItemTargets_ addObject:target];

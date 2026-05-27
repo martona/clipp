@@ -1,6 +1,8 @@
 #include "platform.h"
 
 #include "ClipboardActivityStore.h"
+#include "Settings.h"
+#include "platform/uistrings.h"
 #include "utils.h"
 
 #include <algorithm>
@@ -112,12 +114,8 @@ std::optional<std::wstring> TextFromPayload(const ClipboardPayload& payload) {
 }
 }
 
-uint64_t ClipboardActivityStore::AddIncoming(const std::wstring& deviceName, std::shared_ptr<const ClipboardPayload> payload) {
-    return AddItem(ClipboardActivityDirection::Incoming, deviceName, std::move(payload));
-}
-
-uint64_t ClipboardActivityStore::AddOutgoing(const std::wstring& deviceName, std::shared_ptr<const ClipboardPayload> payload) {
-    return AddItem(ClipboardActivityDirection::Outgoing, deviceName, std::move(payload));
+uint64_t ClipboardActivityStore::Add(std::shared_ptr<const ClipboardPayload> payload) {
+    return AddItem(std::move(payload));
 }
 
 void ClipboardActivityStore::SetLimits(uint64_t memoryLimitBytes, uint64_t maxAgeSeconds, uint64_t maxItems) {
@@ -255,6 +253,17 @@ std::optional<ClipboardActivityDisplayItem> ClipboardActivityStore::BuildDisplay
     ClipboardActivityDisplayItem display;
     display.header = item.header;
 
+    HostId localHostId;
+    g_settings.getHostID(localHostId);
+    const HostId originHostId(item.payload->meta.originHostId);
+    if (originHostId == localHostId) {
+        display.direction = ClipboardActivityDirection::Outgoing;
+        display.deviceName = CLP_W(CLP_UI_THIS_DEVICE);
+    } else {
+        display.direction = ClipboardActivityDirection::Incoming;
+        display.deviceName = Utf8ToWideString(item.payload->meta.originHostName);
+    }
+
     if (IsClippImageFormat(item.payload->meta.formatId)) {
         // Image payloads aren't zstd-compressed, so EncodedBytes() IS the image —
         // expose it via an aliasing shared_ptr so the UI shares the buffer
@@ -306,8 +315,7 @@ uint64_t ClipboardActivityStore::EstimateItemBytes(const Item& item) {
     const uint64_t payloadBytes = item.payload != nullptr
         ? static_cast<uint64_t>(item.payload->EncodedBytes().size())
         : 0;
-    const uint64_t deviceNameBytes = static_cast<uint64_t>(item.header.deviceName.size() * sizeof(wchar_t));
-    return kMetadataEstimateBytes + payloadBytes + deviceNameBytes;
+    return kMetadataEstimateBytes + payloadBytes;
 }
 
 void ClipboardActivityStore::NotifyWatchers(
@@ -323,7 +331,7 @@ void ClipboardActivityStore::NotifyWatchers(
     }
 }
 
-uint64_t ClipboardActivityStore::AddItem(ClipboardActivityDirection direction, const std::wstring& deviceName, std::shared_ptr<const ClipboardPayload> payload) {
+uint64_t ClipboardActivityStore::AddItem(std::shared_ptr<const ClipboardPayload> payload) {
     if (!payload || payload->meta.formatId == CLIPP_FORMAT_NONE) {
         return 0;
     }
@@ -353,8 +361,6 @@ uint64_t ClipboardActivityStore::AddItem(ClipboardActivityDirection direction, c
 
         Item item;
         item.header.id = nextItemID_++;
-        item.header.direction = direction;
-        item.header.deviceName = deviceName;
         item.header.timestamp = std::chrono::system_clock::now();
         item.payload = std::move(payload);
 

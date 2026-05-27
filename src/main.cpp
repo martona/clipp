@@ -18,6 +18,8 @@
 #include "Clipboard.h"
 #include "ClipboardActivityStore.h"
 #include "ClipboardWire.h"
+#include "CryptoChannel.h"
+#include "LocalPeerName.h"
 #include "platform/uistrings.h"
 #include "Settings.h"
 #include "utils.h"
@@ -203,9 +205,10 @@ void OnClipboardNotification(PlatformWindowHandle hwnd) {
     }
     HostId localHostId;
     g_settings.getHostID(localHostId);  // zero-init HostId on failure is fine for the activity record
-    clipboardData.StampOrigin(localHostId, g_settings.nextOriginSequenceNumber());
+    const std::string localHostName = clipp::GetLocalPeerDisplayName("unknown", CryptoChannel::HOSTNAME_MAX_BYTES);
+    clipboardData.StampOrigin(localHostId, localHostName.c_str(), g_settings.nextOriginSequenceNumber());
     auto payload = std::make_shared<const ClipboardPayload>(std::move(clipboardData));
-    g_clipboardActivityStore.AddOutgoing(CLP_W(CLP_UI_THIS_DEVICE), payload);
+    g_clipboardActivityStore.Add(payload);
     g_peerManager.BroadcastClipboard(payload);
     g_logger.log(__FUNCTION__, Logger::Level::Debug, "Broadcast clipboard data to peers (format: %s, ID: %u, encoded size: %zu bytes, uncompressed size: %llu bytes)",
         ClippClipboardFormatName(payload->meta.formatId),

@@ -571,13 +571,7 @@ private struct ClipboardStreamItem: Identifiable {
         }
 
         id = activityItem.identifier
-        if !activityItem.deviceName.isEmpty {
-            deviceName = activityItem.deviceName
-        } else if activityItem.isOutgoing {
-            deviceName = "This iPhone"
-        } else {
-            deviceName = "Unknown device"
-        }
+        deviceName = activityItem.deviceName
         timestamp = activityItem.timestamp
         direction = activityItem.isOutgoing ? .outgoing : .incoming
         activitySourceItem = activityItem

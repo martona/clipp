@@ -116,7 +116,8 @@ public:
         ResetScratch();
     }
 
-    // Stamps origin-side metadata onto meta: originHostId, a fresh random
+    // Stamps origin-side metadata onto meta: originHostId, originHostName
+    // (UTF-8, NUL-padded/truncated to HOSTNAME_MAX_BYTES), a fresh random
     // eventGuid, wall-clock timestamp (ms since Unix epoch), and the caller-
     // provided originSequenceNumber. Call this on locally-originated payloads
     // BEFORE wrapping in shared_ptr<const> and broadcasting. Receivers do NOT
@@ -125,8 +126,9 @@ public:
     // The eventGuid is what makes activity-stream dedup and "give me everything
     // since X" sync queries possible — identical content copied twice gets
     // distinct GUIDs, where the hash alone would collide.
-    void StampOrigin(const HostId& originHostId, uint64_t originSequenceNumber) {
+    void StampOrigin(const HostId& originHostId, const char* originHostNameUtf8, uint64_t originSequenceNumber) {
         std::memcpy(meta.originHostId, originHostId.data().data(), sizeof(meta.originHostId));
+        strncpys(meta.originHostName, originHostNameUtf8 != nullptr ? originHostNameUtf8 : "");
         randombytes_buf(meta.eventGuid, sizeof(meta.eventGuid));
         meta.originSequenceNumber = originSequenceNumber;
         const auto now = std::chrono::system_clock::now();

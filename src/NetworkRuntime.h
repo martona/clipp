@@ -24,7 +24,7 @@ public:
 
 private:
     void ThreadProc();
-    void OnClipboardReceived(const std::wstring& hostName, const HostId& hostID, std::shared_ptr<const ClipboardPayload> payload);
+    void OnClipboardReceived(std::shared_ptr<const ClipboardPayload> payload);
 
     static void OnDiscoveryEvent(MDNSDiscovery::Event event, const MDNSDiscovery::DiscoveredPeer& peer);
 

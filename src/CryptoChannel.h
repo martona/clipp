@@ -14,7 +14,7 @@ struct SocketIoContext;
 
 class CryptoChannel {
 public:
-    static constexpr size_t HOSTNAME_MAX_BYTES = 256;
+    static constexpr size_t HOSTNAME_MAX_BYTES = 128;
     static constexpr size_t CAPS_BYTES = 16;
     using Caps = std::array<uint8_t, CAPS_BYTES>;
 

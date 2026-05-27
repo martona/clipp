@@ -8,7 +8,7 @@
 
 #if defined(__APPLE__) && (TARGET_OS_IPHONE || TARGET_OS_SIMULATOR)
 #define CLIPP_IOS_CLIPBOARD_RECEIVE_STUB 1
-void CLPIOSReceiveClipboardPayload(const std::wstring& hostName, std::shared_ptr<const ClipboardPayload> payload);
+void CLPIOSReceiveClipboardPayload(std::shared_ptr<const ClipboardPayload> payload);
 #else
 #include "ClipboardActivityStore.h"
 #include "Clipboard.h"
@@ -22,8 +22,8 @@ extern ClipboardActivityStore g_clipboardActivityStore;
 #endif
 
 NetworkRuntime::NetworkRuntime()
-    : listener_([this](const std::wstring& hostName, const HostId& hostID, std::shared_ptr<const ClipboardPayload> payload) {
-        OnClipboardReceived(hostName, hostID, std::move(payload));
+    : listener_([this](std::shared_ptr<const ClipboardPayload> payload) {
+        OnClipboardReceived(std::move(payload));
     }) {
 }
 
@@ -110,26 +110,26 @@ void NetworkRuntime::ThreadProc() {
     g_logger.log(__FUNCTION__, Logger::Level::Info, "Peer manager cleared.");
 }
 
-void NetworkRuntime::OnClipboardReceived(const std::wstring& hostName, const HostId&, std::shared_ptr<const ClipboardPayload> payload) {
+void NetworkRuntime::OnClipboardReceived(std::shared_ptr<const ClipboardPayload> payload) {
     const bool isReplay = (payload->meta.flags & NetworkDefs::CLPM_FLAG_SYNC_REPLAY) != 0;
-    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Received clipboard data from client %ls (format: %ls, ID: %u, encoded size: %zu bytes%ls)",
-        hostName.c_str(),
+    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Received clipboard data from %hs (format: %ls, ID: %u, encoded size: %zu bytes%ls)",
+        payload->meta.originHostName,
         ClippClipboardFormatNameW(payload->meta.formatId),
         payload->meta.formatId,
         payload->EncodedBytes().size(),
         isReplay ? L", sync replay" : L"");
 #if CLIPP_IOS_CLIPBOARD_RECEIVE_STUB
-    CLPIOSReceiveClipboardPayload(hostName, std::move(payload));
+    CLPIOSReceiveClipboardPayload(std::move(payload));
 #else
     // Sync-replay events are historical and must NOT touch the OS clipboard or
     // the "current clipboard" hash guard — they represent past activity from
     // other devices, not the current paste-buffer state.
     if (!isReplay && IsClipboardDataCurrent(*payload)) {
-        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Ignoring clipboard data from client %ls because the same contents are already current.", hostName.c_str());
+        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Ignoring clipboard data from %hs because the same contents are already current.", payload->meta.originHostName);
         return;
     }
 
-    g_clipboardActivityStore.AddIncoming(hostName, payload);
+    g_clipboardActivityStore.Add(payload);
     if (!isReplay) {
         SetClipboardData(payload, true);
     }

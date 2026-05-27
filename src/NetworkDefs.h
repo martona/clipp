@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CryptoChannel.h"
 #include "HostId.h"
 #include "platform.h"
 
@@ -47,8 +48,11 @@ struct ClipboardMessage {
     uint8_t  reserved0[3];
     uint8_t  hashBytes[64];
     // The device that originally copied the payload. Distinguished from the immediate
-    // sender, in anticipation of relayed/multi-hop transport. Today they match.
+    // sender so SYNC replay (where the connection partner is a relayer, not the
+    // origin) shows the right device name. originHostName is the origin's display
+    // name (UTF-8, NUL-padded/truncated). Stamped at origin in StampOrigin.
     uint8_t  originHostId[16];
+    char     originHostName[CryptoChannel::HOSTNAME_MAX_BYTES];
     // Sender-assigned counter, monotonic per origin, persisted across restarts.
     uint64_t originSequenceNumber;
     // Random 128-bit per-event identifier. Used for dedup in the activity stream
@@ -68,7 +72,8 @@ struct ClipboardMessage {
 };
 #pragma pack(pop)
 
-static_assert(sizeof(ClipboardMessage) == 157, "ClipboardMessage wire layout must stay 157 bytes");
+static_assert(sizeof(ClipboardMessage) == 157 + CryptoChannel::HOSTNAME_MAX_BYTES,
+    "ClipboardMessage wire layout must stay 157 bytes + HOSTNAME_MAX_BYTES");
 
 // In-memory representation is always native byte order; the wire is always big-endian.
 // HtoN / NtoH swap the multi-byte integer fields in place. Both functions are inverses
@@ -76,7 +81,7 @@ static_assert(sizeof(ClipboardMessage) == 157, "ClipboardMessage wire layout mus
 inline void SwapClipboardMessageByteOrder(ClipboardMessage& msg) {
     msg.flags = htonl(msg.flags);
     msg.timestamp = hton64(msg.timestamp);
-    // hashAlg, reserved0, hashBytes, originHostId — byte sequences, no swap.
+    // hashAlg, reserved0, hashBytes, originHostId, originHostName — byte sequences, no swap.
     msg.originSequenceNumber = hton64(msg.originSequenceNumber);
     // eventGuid, reserved1 — byte sequences, no swap.
     msg.formatId = htonl(msg.formatId);
