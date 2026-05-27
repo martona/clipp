@@ -7,7 +7,7 @@ param(
 
     [string]$VcpkgRoot = $env:VCPKG_ROOT,
 
-    [string]$VcVarsAll = $env:VCVARSALL,
+    [string]$VcVarsAll = "",
 
     [string]$VcVarsArch = "amd64",
 
@@ -226,12 +226,9 @@ $configureArgs = @(
     "-DVCPKG_MANIFEST_DIR=$vcpkgManifestDir",
     "-DVCPKG_INSTALLED_DIR=$vcpkgInstalledDir",
     "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
-    "-DCMAKE_BUILD_TYPE=$BuildType"
+    "-DCMAKE_BUILD_TYPE=$BuildType",
+    "-DVCPKG_INSTALL_OPTIONS=--clean-buildtrees-after-build;--clean-packages-after-build"
 )
-
-if ($env:VCPKG_INSTALL_OPTIONS) {
-    $configureArgs += "-DVCPKG_INSTALL_OPTIONS=$env:VCPKG_INSTALL_OPTIONS"
-}
 
 if (-not (Test-Path $cacheFile)) {
     $configureArgs += "-DCMAKE_TOOLCHAIN_FILE=$toolchainFile"

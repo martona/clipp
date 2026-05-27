@@ -27,7 +27,6 @@ jobs:
 
     env:
       CLIPP_RELEASE_TRIPLET: x64-windows-static
-      VCPKG_INSTALL_OPTIONS: --clean-buildtrees-after-build;--clean-packages-after-build
       VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/vcpkg-cache,readwrite
 
     steps:

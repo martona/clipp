@@ -90,26 +90,32 @@ Parameters (all optional):
 ### macOS
 
 ```sh
-./scripts/build_macos.sh           # incremental
+./scripts/build_macos.sh           # Release build (default)
+./scripts/build_macos.sh --debug   # Debug build
 ./scripts/build_macos.sh --clean   # wipe build/ first
 ```
+
+Flags: `--debug`, `--release`, `--clean`. All optional.
 
 The script:
 
 1. Verifies Xcode Command Line Tools are installed.
 2. Installs missing tools via Homebrew if available.
-3. Clones and bootstraps vcpkg under [`$CLIPP_CACHE_DIR/vcpkg`](#cache-locations) if absent.
+3. Clones and bootstraps vcpkg under [`$CLIPP_CACHE_DIR`](#environment-variables) if absent.
 4. Configures CMake using the Xcode generator (if full Xcode is selected) or Ninja, then builds.
 5. Optionally signs the bundle if [`APPLE_CODESIGN_IDENTITY`](#code-signing) is set.
 
 ### iOS simulator
 
 ```sh
-./scripts/build_ios.sh                        # full build, includes vcpkg setup
+./scripts/build_ios.sh                        # Release build (default), includes vcpkg setup
+./scripts/build_ios.sh --debug                # Debug build
 ./scripts/build_ios.sh --skip-vcpkg           # reuse previously installed deps
 ./scripts/build_ios.sh --disable-code-signing # pass CODE_SIGNING_ALLOWED=NO
 ./scripts/build_ios.sh --clean                # remove build/ios first
 ```
+
+Flags: `--debug`, `--release`, `--disable-code-signing`, `--skip-vcpkg`, `--clean`. All optional.
 
 The script delegates dependency setup to [`scripts/setup_ios_vcpkg.sh`](scripts/setup_ios_vcpkg.sh), then builds the `Clipp` target in `ios/Clipp.xcodeproj` via `xcodebuild`.
 
@@ -140,58 +146,23 @@ CI does not currently build for physical devices; device builds are produced man
 
 ## Environment variables
 
-Most users won't need to set any of these; defaults are listed for reference. The groupings below mirror what each script reads.
+Most users won't need to set any of these; defaults work out of the box.
 
-### vcpkg
-
-| Variable                       | Used by                  | Default                                                                                            | Purpose                                                                              |
-|--------------------------------|--------------------------|----------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------|
-| `VCPKG_ROOT`                   | all                      | macOS/iOS: `$CLIPP_CACHE_DIR/vcpkg` (auto-cloned). Windows: auto-located via `vswhere` and common paths; **not** auto-cloned. | vcpkg checkout to use                                                                |
-| `VCPKG_DEFAULT_BINARY_CACHE`   | macOS, iOS               | `$CLIPP_CACHE_DIR/vcpkg-binary-cache`                                                              | Binary cache directory for prebuilt vcpkg ports                                       |
-| `VCPKG_INSTALLED_DIR`          | macOS, iOS               | macOS: `$CLIPP_CACHE_DIR/vcpkg-installed`. iOS: `$REPO_ROOT/vcpkg-installed`. Windows: fixed to `build\vcpkg_installed` (script-managed, not env-overridable). | Where vcpkg installs ports                                                            |
-| `VCPKG_STAGING_INSTALLED_DIR`  | iOS                      | `$CLIPP_CACHE_DIR/vcpkg-ios-installed`                                                             | Per-triplet staging root before publishing into `VCPKG_INSTALLED_DIR`                |
-| `VCPKG_OVERLAY_TRIPLETS`       | iOS                      | `$REPO_ROOT/src/vcpkg-triplets`                                                                    | Overlay triplet search path (macOS reads this from CMake; iOS sets it via env)        |
-| `VCPKG_BINARY_SOURCES`         | iOS                      | `clear;files,$VCPKG_DEFAULT_BINARY_CACHE,readwrite`                                                | vcpkg binary cache configuration string                                              |
-| `VCPKG_INSTALL_OPTIONS`        | all                      | (unset)                                                                                            | Extra options forwarded to `vcpkg install`. Semicolon-separated on Windows.          |
-| `VCVARSALL`                    | Windows                  | (unset)                                                                                            | Path to `vcvarsall.bat`. Alias for the `-VcVarsAll` script parameter.                |
-
-### Cache locations
-
-| Variable          | Used by    | Default                                                              | Purpose                                                                  |
-|-------------------|------------|----------------------------------------------------------------------|--------------------------------------------------------------------------|
-| `CLIPP_CACHE_DIR` | macOS, iOS | `$XDG_CACHE_HOME/clipp` if set, else `$HOME/Library/Caches/clipp`    | Root for vcpkg checkout, binary cache, and installed deps                |
-| `XDG_CACHE_HOME`  | macOS, iOS | (unset)                                                              | Standard XDG cache root; consulted as a fallback for `CLIPP_CACHE_DIR`   |
-
-### Build configuration
-
-| Variable                    | Used by    | Default                            | Purpose                                                 |
-|-----------------------------|------------|------------------------------------|---------------------------------------------------------|
-| `CLIPP_BUILD_CONFIGURATION` | macOS, iOS | `Release`                          | CMake/Xcode build configuration                         |
-| `BUILD_DIR`                 | macOS, iOS | macOS: `build`. iOS: `build/ios`.  | Output directory for the build                          |
-| `SYMROOT`                   | iOS        | `$BUILD_DIR/Build`                 | Xcode `SYMROOT` for the iOS build                       |
-| `OBJROOT`                   | iOS        | `$BUILD_DIR/Intermediates`         | Xcode `OBJROOT` for the iOS build                       |
-
-### iOS-specific
-
-| Variable                       | Default                  | Purpose                                                                  |
-|--------------------------------|--------------------------|--------------------------------------------------------------------------|
-| `CLIPP_IOS_PROJECT`            | `ios/Clipp.xcodeproj`    | Xcode project path                                                       |
-| `CLIPP_IOS_TARGET`             | `Clipp`                  | Xcode target                                                             |
-| `CLIPP_IOS_SDK`                | `iphonesimulator`        | `xcodebuild` SDK — `iphonesimulator` or `iphoneos`                       |
-| `CLIPP_IOS_DEVICE_TRIPLET`     | `arm64-ios`              | vcpkg triplet used by `setup_ios_vcpkg.sh` for device builds             |
-| `CLIPP_IOS_SIMULATOR_TRIPLET`  | `arm64-ios-simulator`    | vcpkg triplet used by `setup_ios_vcpkg.sh` for simulator builds          |
-
-### Code signing
-
-| Variable                                | Used by    | Default | Purpose                                                                                                          |
-|-----------------------------------------|------------|---------|------------------------------------------------------------------------------------------------------------------|
-| `APPLE_CODESIGN_IDENTITY`               | macOS, iOS | (unset) | Codesign identity hash or common name. Triggers `codesign` in the Ninja path; toggles Xcode signing in the Xcode path. |
-| `APPLE_TEAM_ID`                         | macOS, iOS | (unset) | Apple Developer Team ID; paired with `APPLE_CODESIGN_IDENTITY` for the Xcode-generator path                       |
-| `ARTIFACT_SIGNING_ENDPOINT`             | Windows    | (unset) | TrustedSigning endpoint URL passed to `sign.exe`                                                                  |
-| `ARTIFACT_SIGNING_ACCOUNT`              | Windows    | (unset) | TrustedSigning account name                                                                                       |
-| `ARTIFACT_SIGNING_CERTIFICATE_PROFILE`  | Windows    | (unset) | TrustedSigning certificate profile                                                                                |
+| Variable                                | Used by    | Default                                                                                            | Purpose                                                                                          |
+|-----------------------------------------|------------|----------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------|
+| `CLIPP_CACHE_DIR`                       | macOS, iOS | `$HOME/Library/Caches/clipp`                                                                       | Cache root. Subsumes the vcpkg checkout, binary cache, and (on macOS) the install dir.           |
+| `VCPKG_ROOT`                            | all        | macOS/iOS: `$CLIPP_CACHE_DIR/vcpkg` (auto-cloned). Windows: auto-located via `vswhere` and common paths; **not** auto-cloned. | vcpkg checkout to use (vcpkg's own env var).                                                     |
+| `VCPKG_DEFAULT_BINARY_CACHE`            | macOS, iOS | `$CLIPP_CACHE_DIR/vcpkg-binary-cache`                                                              | Binary cache for prebuilt vcpkg ports (vcpkg's own env var).                                     |
+| `VCPKG_BINARY_SOURCES`                  | iOS        | `clear;files,$VCPKG_DEFAULT_BINARY_CACHE,readwrite`                                                | vcpkg binary cache configuration string (vcpkg's own env var).                                   |
+| `APPLE_CODESIGN_IDENTITY`               | macOS, iOS | (unset)                                                                                            | Codesign identity hash or common name. Triggers `codesign` in the Ninja path; toggles Xcode signing in the Xcode path. |
+| `APPLE_TEAM_ID`                         | macOS, iOS | (unset)                                                                                            | Apple Developer Team ID; paired with `APPLE_CODESIGN_IDENTITY` for the Xcode-generator path.     |
+| `ARTIFACT_SIGNING_ENDPOINT`             | Windows    | (unset)                                                                                            | TrustedSigning endpoint URL passed to `sign.exe`.                                                |
+| `ARTIFACT_SIGNING_ACCOUNT`              | Windows    | (unset)                                                                                            | TrustedSigning account name.                                                                     |
+| `ARTIFACT_SIGNING_CERTIFICATE_PROFILE`  | Windows    | (unset)                                                                                            | TrustedSigning certificate profile.                                                              |
 
 Windows signing is skipped silently unless all three `ARTIFACT_SIGNING_*` variables are set; a warning is emitted if some but not all are present. macOS signing is skipped if `APPLE_CODESIGN_IDENTITY` is unset.
+
+The iOS vcpkg install root is fixed at `$REPO_ROOT/vcpkg-installed` because the Xcode project references that path directly in its header and library search paths.
 
 ## Code signing
 

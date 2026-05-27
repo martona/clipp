@@ -25,9 +25,6 @@ jobs:
       CLIPP_CACHE_DIR: ${{ github.workspace }}/clipp-cache
       VCPKG_ROOT: ${{ github.workspace }}/v
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-cache
-      VCPKG_INSTALLED_DIR: ${{ github.workspace }}/vcpkg-installed
-      VCPKG_STAGING_INSTALLED_DIR: ${{ github.workspace }}/clipp-cache/vcpkg-ios-installed
-      VCPKG_INSTALL_OPTIONS: --clean-buildtrees-after-build;--clean-packages-after-build
       VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/vcpkg-cache,readwrite
 
     steps:

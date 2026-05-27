@@ -7,19 +7,36 @@ cd "$REPO_ROOT"
 
 IDENTITY="${APPLE_CODESIGN_IDENTITY:-}"
 TEAM_ID="${APPLE_TEAM_ID:-}"
-CONFIG="${CLIPP_BUILD_CONFIGURATION:-Release}"
+CONFIG="Release"
+clean=0
 
-if [[ -z "${CLIPP_CACHE_DIR:-}" ]]; then
-    if [[ -n "${XDG_CACHE_HOME:-}" ]]; then
-        CLIPP_CACHE_DIR="$XDG_CACHE_HOME/clipp"
-    else
-        CLIPP_CACHE_DIR="$HOME/Library/Caches/clipp"
-    fi
-fi
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [--debug | --release] [--clean]
 
+Builds the macOS app.
+
+Options:
+  --debug     Build the Debug configuration.
+  --release   Build the Release configuration (default).
+  --clean     Remove the build directory before building.
+EOF
+}
+
+for arg in "$@"; do
+    case "$arg" in
+        --debug) CONFIG="Debug" ;;
+        --release) CONFIG="Release" ;;
+        --clean) clean=1 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "[!] Unknown argument: $arg" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
+CLIPP_CACHE_DIR="${CLIPP_CACHE_DIR:-$HOME/Library/Caches/clipp}"
 VCPKG_ROOT="${VCPKG_ROOT:-$CLIPP_CACHE_DIR/vcpkg}"
 VCPKG_DEFAULT_BINARY_CACHE="${VCPKG_DEFAULT_BINARY_CACHE:-$CLIPP_CACHE_DIR/vcpkg-binary-cache}"
-VCPKG_INSTALLED_DIR="${VCPKG_INSTALLED_DIR:-$CLIPP_CACHE_DIR/vcpkg-installed}"
+VCPKG_INSTALLED_DIR="$CLIPP_CACHE_DIR/vcpkg-installed"
 
 export VCPKG_ROOT
 export VCPKG_DEFAULT_BINARY_CACHE
@@ -31,15 +48,15 @@ DEV_DIR="$(xcode-select -p 2>/dev/null)" || {
 
 if [[ "$DEV_DIR" == */Xcode.app/Contents/Developer ]]; then
     USE_XCODE=1
-    BUILD_DIR="${BUILD_DIR:-build}"
+    BUILD_DIR="build"
     APP_PATH="$BUILD_DIR/$CONFIG/clipp.app"
 else
     USE_XCODE=0
-    BUILD_DIR="${BUILD_DIR:-build}"
+    BUILD_DIR="build"
     APP_PATH="$BUILD_DIR/clipp.app"
 fi
 
-if [[ "${1:-}" == "--clean" ]]; then
+if [[ "$clean" == "1" ]]; then
     echo "[*] Clean flag detected. Nuking build directory..."
     rm -rf "$BUILD_DIR"
 fi
@@ -90,11 +107,8 @@ CMAKE_ARGS=(
     -DVCPKG_MANIFEST_DIR="$REPO_ROOT/src"
     -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR"
     -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE"
+    -DVCPKG_INSTALL_OPTIONS="--clean-buildtrees-after-build;--clean-packages-after-build"
 )
-
-if [[ -n "${VCPKG_INSTALL_OPTIONS:-}" ]]; then
-    CMAKE_ARGS+=("-DVCPKG_INSTALL_OPTIONS=$VCPKG_INSTALL_OPTIONS")
-fi
 
 if [[ "$USE_XCODE" == "1" ]]; then
     echo "[*] Generating Xcode build files..."
@@ -113,7 +127,7 @@ if [[ "$USE_XCODE" == "1" ]]; then
     cmake --build "$BUILD_DIR" --config "$CONFIG"
 else
     echo "[*] Generating command-line build files..."
-    cmake -S "$REPO_ROOT" -B "$BUILD_DIR" -G Ninja "${CMAKE_ARGS[@]}"
+    cmake -S "$REPO_ROOT" -B "$BUILD_DIR" -G Ninja -DCMAKE_BUILD_TYPE="$CONFIG" "${CMAKE_ARGS[@]}"
 
     echo "[*] Building Clipp..."
     cmake --build "$BUILD_DIR"

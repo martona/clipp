@@ -5,23 +5,13 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-CONFIG="${CLIPP_BUILD_CONFIGURATION:-Release}"
-PROJECT="${CLIPP_IOS_PROJECT:-ios/Clipp.xcodeproj}"
-TARGET="${CLIPP_IOS_TARGET:-Clipp}"
-SDK="${CLIPP_IOS_SDK:-iphonesimulator}"
-BUILD_DIR="${BUILD_DIR:-build/ios}"
-if [[ "$BUILD_DIR" != /* ]]; then
-    BUILD_DIR="$REPO_ROOT/$BUILD_DIR"
-fi
-
-SYMROOT="${SYMROOT:-$BUILD_DIR/Build}"
-OBJROOT="${OBJROOT:-$BUILD_DIR/Intermediates}"
-if [[ "$SYMROOT" != /* ]]; then
-    SYMROOT="$REPO_ROOT/$SYMROOT"
-fi
-if [[ "$OBJROOT" != /* ]]; then
-    OBJROOT="$REPO_ROOT/$OBJROOT"
-fi
+CONFIG="Release"
+PROJECT="ios/Clipp.xcodeproj"
+TARGET="Clipp"
+SDK="iphonesimulator"
+BUILD_DIR="$REPO_ROOT/build/ios"
+SYMROOT="$BUILD_DIR/Build"
+OBJROOT="$BUILD_DIR/Intermediates"
 
 DISABLE_CODE_SIGNING=0
 SETUP_VCPKG=1
@@ -29,11 +19,13 @@ clean=0
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [--disable-code-signing] [--skip-vcpkg] [--clean]
+Usage: $(basename "$0") [--debug | --release] [--disable-code-signing] [--skip-vcpkg] [--clean]
 
 Builds the iOS app for the simulator.
 
 Options:
+  --debug                 Build the Debug configuration.
+  --release               Build the Release configuration (default).
   --disable-code-signing  Pass CODE_SIGNING_ALLOWED=NO to xcodebuild.
   --skip-vcpkg            Do not run setup_ios_vcpkg.sh first.
   --clean                 Remove the iOS build directory before building.
@@ -42,6 +34,14 @@ EOF
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --debug)
+            CONFIG="Debug"
+            shift
+            ;;
+        --release)
+            CONFIG="Release"
+            shift
+            ;;
         --disable-code-signing)
             DISABLE_CODE_SIGNING=1
             shift

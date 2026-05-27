@@ -4,25 +4,17 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
-if [[ -z "${CLIPP_CACHE_DIR:-}" ]]; then
-    if [[ -n "${XDG_CACHE_HOME:-}" ]]; then
-        CLIPP_CACHE_DIR="$XDG_CACHE_HOME/clipp"
-    else
-        CLIPP_CACHE_DIR="$HOME/Library/Caches/clipp"
-    fi
-fi
-
+CLIPP_CACHE_DIR="${CLIPP_CACHE_DIR:-$HOME/Library/Caches/clipp}"
 VCPKG_ROOT="${VCPKG_ROOT:-$CLIPP_CACHE_DIR/vcpkg}"
 VCPKG_DEFAULT_BINARY_CACHE="${VCPKG_DEFAULT_BINARY_CACHE:-$CLIPP_CACHE_DIR/vcpkg-binary-cache}"
-VCPKG_INSTALLED_DIR="${VCPKG_INSTALLED_DIR:-$REPO_ROOT/vcpkg-installed}"
-VCPKG_STAGING_INSTALLED_DIR="${VCPKG_STAGING_INSTALLED_DIR:-$CLIPP_CACHE_DIR/vcpkg-ios-installed}"
-VCPKG_OVERLAY_TRIPLETS="${VCPKG_OVERLAY_TRIPLETS:-$REPO_ROOT/src/vcpkg-triplets}"
-IOS_DEVICE_TRIPLET="${CLIPP_IOS_DEVICE_TRIPLET:-arm64-ios}"
-IOS_SIMULATOR_TRIPLET="${CLIPP_IOS_SIMULATOR_TRIPLET:-arm64-ios-simulator}"
+VCPKG_INSTALLED_DIR="$REPO_ROOT/vcpkg-installed"
+VCPKG_STAGING_INSTALLED_DIR="$CLIPP_CACHE_DIR/vcpkg-ios-installed"
+OVERLAY_TRIPLETS="$REPO_ROOT/src/vcpkg-triplets"
+IOS_DEVICE_TRIPLET="arm64-ios"
+IOS_SIMULATOR_TRIPLET="arm64-ios-simulator"
 
 export VCPKG_ROOT
 export VCPKG_DEFAULT_BINARY_CACHE
-export VCPKG_OVERLAY_TRIPLETS
 export VCPKG_BINARY_SOURCES="${VCPKG_BINARY_SOURCES:-clear;files,$VCPKG_DEFAULT_BINARY_CACHE,readwrite}"
 
 usage() {
@@ -141,13 +133,6 @@ else
 fi
 
 extra_options=(--clean-buildtrees-after-build --clean-packages-after-build)
-if [[ -n "${VCPKG_INSTALL_OPTIONS:-}" ]]; then
-    extra_options=()
-    IFS=';' read -r -a requested_options <<< "$VCPKG_INSTALL_OPTIONS"
-    for option in "${requested_options[@]}"; do
-        [[ -n "$option" ]] && extra_options+=("$option")
-    done
-fi
 
 for triplet in "${triplets[@]}"; do
     echo "[*] Installing vcpkg manifest for $triplet..."
@@ -156,7 +141,7 @@ for triplet in "${triplets[@]}"; do
         cd "$REPO_ROOT/src"
         "$VCPKG_ROOT/vcpkg" install \
             --triplet "$triplet" \
-            --overlay-triplets "$VCPKG_OVERLAY_TRIPLETS" \
+            --overlay-triplets "$OVERLAY_TRIPLETS" \
             --x-install-root="$triplet_install_root" \
             "${extra_options[@]}"
     )
