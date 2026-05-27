@@ -203,6 +203,24 @@ void OnClipboardNotification(PlatformWindowHandle hwnd) {
         g_logger.log(__FUNCTION__, Logger::Level::Debug, "Clipboard is empty, contains unsupported format, or came from us");
         return;
     }
+
+    // If the source app marked the clipboard content as private and the user
+    // setting honors those markers, replace the payload with an empty UTF-8
+    // placeholder that carries only the privacy flag. Peers receiving it will
+    // show a "marked private — sync skipped" entry in the activity stream and
+    // will not touch their local clipboard.
+    const bool sourceMarkedPrivate =
+        (clipboardData.meta.flags & NetworkDefs::CLPM_FLAG_SOURCE_MARKED_PRIVATE) != 0;
+    if (sourceMarkedPrivate && g_settings.honorExternalPrivacyMarkers()) {
+        g_logger.log(__FUNCTION__, Logger::Level::Info,
+            "Source marked clipboard content as private and 'honor markers' setting is on; sending empty placeholder.");
+        ClipboardPayload placeholder;
+        placeholder.meta.formatId = CLIPP_FORMAT_UTF8;
+        placeholder.meta.flags = NetworkDefs::CLPM_FLAG_SOURCE_MARKED_PRIVATE;
+        placeholder.SetUncompressedBytes({});
+        clipboardData = std::move(placeholder);
+    }
+
     HostId localHostId;
     g_settings.getHostID(localHostId);  // zero-init HostId on failure is fine for the activity record
     const std::string localHostName = clipp::GetLocalPeerDisplayName("unknown", CryptoChannel::HOSTNAME_MAX_BYTES);

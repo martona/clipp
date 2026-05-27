@@ -54,7 +54,7 @@ bool HasWhitespace(const std::wstring& text) {
 }
 
 bool LooksPrivateText(const std::wstring& text) {
-    return text.size() >= 8 && text.size() <= 256 && !HasWhitespace(text);
+    return !text.empty() && text.size() <= 256 && !HasWhitespace(text);
 }
 
 bool LooksLikeUrl(const std::wstring& text) {
@@ -264,6 +264,17 @@ std::optional<ClipboardActivityDisplayItem> ClipboardActivityStore::BuildDisplay
         display.deviceName = Utf8ToWideString(item.payload->meta.originHostName);
     }
 
+    const bool sourceMarkedPrivate =
+        (item.payload->meta.flags & NetworkDefs::CLPM_FLAG_SOURCE_MARKED_PRIVATE) != 0;
+
+    // Source-marked-private + empty payload = sender's "sync skipped" placeholder.
+    // Render as an information-only entry; the UI suppresses copy-back.
+    if (sourceMarkedPrivate && item.payload->EncodedBytes().empty()) {
+        display.kind = ClipboardActivityPayloadKind::PrivatePlaceholder;
+        display.sourceMarked = true;
+        return display;
+    }
+
     if (IsClippImageFormat(item.payload->meta.formatId)) {
         // Image payloads aren't zstd-compressed, so EncodedBytes() IS the image —
         // expose it via an aliasing shared_ptr so the UI shares the buffer
@@ -283,7 +294,14 @@ std::optional<ClipboardActivityDisplayItem> ClipboardActivityStore::BuildDisplay
 
         display.detailText = *text;
         const std::wstring trimmed = TrimCopy(*text);
-        if (LooksLikeUrl(trimmed)) {
+        if (sourceMarkedPrivate) {
+            // Explicit privacy signal from the source app overrides the heuristic
+            // classification: mask, and record that the marker (not the heuristic)
+            // is responsible so the UI can attach a "private" badge.
+            display.kind = ClipboardActivityPayloadKind::PrivateText;
+            display.sourceMarked = true;
+            display.previewText = L"••••••••";
+        } else if (LooksLikeUrl(trimmed)) {
             display.kind = ClipboardActivityPayloadKind::Link;
             display.previewText = PreviewText(trimmed);
             display.linkHost = ExtractUrlHost(trimmed);

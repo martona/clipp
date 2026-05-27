@@ -112,25 +112,33 @@ void NetworkRuntime::ThreadProc() {
 
 void NetworkRuntime::OnClipboardReceived(std::shared_ptr<const ClipboardPayload> payload) {
     const bool isReplay = (payload->meta.flags & NetworkDefs::CLPM_FLAG_SYNC_REPLAY) != 0;
-    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Received clipboard data from %hs (format: %ls, ID: %u, encoded size: %zu bytes%ls)",
+    const bool isSourceMarkedPrivate = (payload->meta.flags & NetworkDefs::CLPM_FLAG_SOURCE_MARKED_PRIVATE) != 0;
+    // Zero-length payload with the private flag is the sender's "marked private,
+    // sync skipped" placeholder. The activity store should still get the entry
+    // (so the user sees that something happened), but the OS clipboard must not
+    // be touched and the hash guard should not apply (multiple placeholders in
+    // a row would otherwise dedup).
+    const bool isPrivatePlaceholder = isSourceMarkedPrivate && payload->EncodedBytes().empty();
+    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Received clipboard data from %hs (format: %ls, ID: %u, encoded size: %zu bytes%ls%ls)",
         payload->meta.originHostName,
         ClippClipboardFormatNameW(payload->meta.formatId),
         payload->meta.formatId,
         payload->EncodedBytes().size(),
-        isReplay ? L", sync replay" : L"");
+        isReplay ? L", sync replay" : L"",
+        isPrivatePlaceholder ? L", private placeholder" : (isSourceMarkedPrivate ? L", source marked private" : L""));
 #if CLIPP_IOS_CLIPBOARD_RECEIVE_STUB
     CLPIOSReceiveClipboardPayload(std::move(payload));
 #else
     // Sync-replay events are historical and must NOT touch the OS clipboard or
     // the "current clipboard" hash guard — they represent past activity from
     // other devices, not the current paste-buffer state.
-    if (!isReplay && IsClipboardDataCurrent(*payload)) {
+    if (!isReplay && !isPrivatePlaceholder && IsClipboardDataCurrent(*payload)) {
         g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Ignoring clipboard data from %hs because the same contents are already current.", payload->meta.originHostName);
         return;
     }
 
     g_clipboardActivityStore.Add(payload);
-    if (!isReplay) {
+    if (!isReplay && !isPrivatePlaceholder) {
         SetClipboardData(payload, true);
     }
 #endif

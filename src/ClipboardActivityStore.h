@@ -23,6 +23,7 @@ enum class ClipboardActivityPayloadKind {
     Unsupported,
     Text,
     PrivateText,
+    PrivatePlaceholder,
     Link,
     Image,
 };
@@ -43,6 +44,11 @@ struct ClipboardActivityDisplayItem {
     ClipboardActivityDirection direction{ ClipboardActivityDirection::Incoming };
     std::wstring deviceName;
     ClipboardActivityPayloadKind kind{ ClipboardActivityPayloadKind::Unsupported };
+    // True when the kind reflects an explicit OS-level privacy marker on the
+    // payload (CLPM_FLAG_SOURCE_MARKED_PRIVATE), as opposed to the receive-side
+    // single-line-no-whitespace heuristic. UI uses this to distinguish "the
+    // marker propagated" from "we guessed" — e.g. by attaching a small badge.
+    bool sourceMarked{ false };
     std::wstring previewText;
     std::wstring detailText;
     std::wstring linkHost;

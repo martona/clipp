@@ -14,6 +14,7 @@
 #include <utility>
 #include "ClipboardHashGuard.h"
 #include "Logger.h"
+#include "NetworkDefs.h"
 #include "ScopedTimer.h"
 
 static std::thread g_clipboardThread;
@@ -133,6 +134,70 @@ static bool ClipboardHasClippOriginMarker() {
     }
 
     return IsClipboardFormatAvailable(format) != FALSE;
+}
+
+// Chromium / password-manager convention: a clipboard item that should not be
+// retained in any clipboard history (Win+V, cloud sync, third-party managers)
+// is written with both of these registered formats present. Chrome writes the
+// value 0; we don't care about the value, only the presence.
+static UINT CanIncludeInClipboardHistoryFormat() {
+    static const UINT format = RegisterClipboardFormatW(L"CanIncludeInClipboardHistory");
+    return format;
+}
+
+static UINT CanUploadToCloudClipboardFormat() {
+    static const UINT format = RegisterClipboardFormatW(L"CanUploadToCloudClipboard");
+    return format;
+}
+
+static bool ClipboardSourceMarkedPrivate() {
+    const UINT historyFormat = CanIncludeInClipboardHistoryFormat();
+    const UINT cloudFormat = CanUploadToCloudClipboardFormat();
+    if (historyFormat == 0 || cloudFormat == 0) {
+        return false;
+    }
+
+    return IsClipboardFormatAvailable(historyFormat) != FALSE
+        && IsClipboardFormatAvailable(cloudFormat) != FALSE;
+}
+
+static bool WriteClipboardPrivacyMarker(UINT format, const wchar_t* description) {
+    if (format == 0) {
+        LogLastError(__FUNCTION__, L"Failed to register clipboard privacy format");
+        return false;
+    }
+
+    static constexpr uint32_t marker = 0u;
+    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, sizeof(marker));
+    if (!hMem) {
+        LogLastError(__FUNCTION__, description);
+        return false;
+    }
+
+    void* dst = GlobalLock(hMem);
+    if (!dst) {
+        LogLastError(__FUNCTION__, description);
+        GlobalFree(hMem);
+        return false;
+    }
+
+    std::memcpy(dst, &marker, sizeof(marker));
+    GlobalUnlock(hMem);
+
+    if (!::SetClipboardData(format, hMem)) {
+        LogLastError(__FUNCTION__, description);
+        GlobalFree(hMem);
+        return false;
+    }
+
+    return true;
+}
+
+static void SetClipboardSourceMarkedPrivateMarkers() {
+    WriteClipboardPrivacyMarker(CanIncludeInClipboardHistoryFormat(),
+        L"Failed to write CanIncludeInClipboardHistory clipboard marker");
+    WriteClipboardPrivacyMarker(CanUploadToCloudClipboardFormat(),
+        L"Failed to write CanUploadToCloudClipboard clipboard marker");
 }
 
 static unsigned char ScaleMaskComponent(uint32_t pixel, uint32_t mask) {
@@ -978,6 +1043,7 @@ void StopClipboardNotification() {
 ClipboardPayload ReadClipboardData(HWND hwnd) {
     ClipboardPayload payload{};
     payload.meta.formatId = CLIPP_FORMAT_NONE;
+    bool sourceMarkedPrivate = false;
     std::vector<unsigned char> bytes;
 
     bool opened = false;
@@ -988,6 +1054,11 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
                 g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Ignoring clipboard notification for Clipp-originated clipboard contents.");
                 CloseClipboard();
                 break;
+            }
+
+            sourceMarkedPrivate = ClipboardSourceMarkedPrivate();
+            if (sourceMarkedPrivate) {
+                g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Source app marked clipboard content as private (CanIncludeInClipboardHistory + CanUploadToCloudClipboard both present).");
             }
 
             // 1. Try to read Text
@@ -1083,6 +1154,11 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
         g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Ignoring clipboard notification for already-current clipboard contents.");
         payload.meta.formatId = CLIPP_FORMAT_NONE;
         payload.SetEncodedBytes({});
+        return payload;
+    }
+
+    if (sourceMarkedPrivate) {
+        payload.meta.flags |= NetworkDefs::CLPM_FLAG_SOURCE_MARKED_PRIVATE;
     }
 
     return payload;
@@ -1199,6 +1275,16 @@ void SetClipboardData(
 
             if (wroteClipboard && markAsClippOriginated && !SetClippOriginClipboardMarker()) {
                 g_logger.log(__FUNCTION__, Logger::Level::Warning, L"System clipboard was written without Clipp origin marker.");
+            }
+
+            // Propagate source-marked-private signal to downstream consumers:
+            // Win+V history, third-party clipboard managers, and cloud clipboard
+            // sync all honor the CanIncludeInClipboardHistory and
+            // CanUploadToCloudClipboard registered formats. Mirroring the
+            // sender's privacy intent keeps the protection end-to-end.
+            if (wroteClipboard
+                && (payload->meta.flags & NetworkDefs::CLPM_FLAG_SOURCE_MARKED_PRIVATE) != 0) {
+                SetClipboardSourceMarkedPrivateMarkers();
             }
 
             if (wroteClipboard && markAsClippOriginated) {

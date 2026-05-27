@@ -70,6 +70,8 @@ std::wstring PayloadKindLabel(ClipboardActivityPayloadKind kind) {
         return CLP_W(CLP_UI_TEXT);
     case ClipboardActivityPayloadKind::PrivateText:
         return CLP_W(CLP_UI_PRIVATE_TEXT);
+    case ClipboardActivityPayloadKind::PrivatePlaceholder:
+        return CLP_W(CLP_UI_PRIVATE_PLACEHOLDER_TITLE);
     case ClipboardActivityPayloadKind::Link:
         return CLP_W(CLP_UI_LINK);
     case ClipboardActivityPayloadKind::Image:
@@ -216,6 +218,9 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t it
     }
 
     const bool isOutgoing = display->direction == ClipboardActivityDirection::Outgoing;
+    const bool isPrivatePlaceholder =
+        display->kind == ClipboardActivityPayloadKind::PrivatePlaceholder;
+    const bool showCopyAction = !isPrivatePlaceholder;
 
     Grid row;
     row.HorizontalAlignment(HorizontalAlignment::Stretch);
@@ -248,6 +253,8 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t it
     copyIcon.HorizontalAlignment(HorizontalAlignment::Center);
     copyIcon.Opacity(0.0);
     copyIcon.IsHitTestVisible(false);
+    // Placeholder rows have no copyable content; suppress the hover affordance.
+    copyIcon.Visibility(showCopyAction ? Visibility::Visible : Visibility::Collapsed);
 
     Grid header;
     ColumnDefinition metaColumn;
@@ -285,21 +292,57 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t it
             host.TextWrapping(TextWrapping::WrapWholeWords);
             content.Children().Append(host);
         } else if (display->kind == ClipboardActivityPayloadKind::PrivateText ||
+                   display->kind == ClipboardActivityPayloadKind::PrivatePlaceholder ||
                    display->kind == ClipboardActivityPayloadKind::Unsupported) {
+            StackPanel labelRow;
+            labelRow.Orientation(Orientation::Horizontal);
+            labelRow.Spacing(8);
+
             TextBlock kindLabel;
             kindLabel.Text(PayloadKindLabel(display->kind));
             kindLabel.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
             kindLabel.TextWrapping(TextWrapping::WrapWholeWords);
-            content.Children().Append(kindLabel);
+            kindLabel.VerticalAlignment(VerticalAlignment::Center);
+            labelRow.Children().Append(kindLabel);
+
+            if (display->sourceMarked) {
+                // Small pill that distinguishes "marker-driven" private items
+                // from heuristic-driven ones. Reader can tell at a glance whether
+                // the source app explicitly asked for privacy or the receive-side
+                // heuristic guessed.
+                Border badge;
+                badge.Padding(ThicknessHelper::FromLengths(8, 1, 8, 1));
+                badge.CornerRadius(CornerRadius{ 8 });
+                badge.Background(MakeBrush(40, 198, 116, 0));
+                badge.VerticalAlignment(VerticalAlignment::Center);
+
+                TextBlock badgeText;
+                badgeText.Text(CLP_W(CLP_UI_PRIVATE_BADGE));
+                badgeText.FontSize(11);
+                badgeText.Opacity(0.95);
+                badge.Child(badgeText);
+                labelRow.Children().Append(badge);
+            }
+
+            content.Children().Append(labelRow);
         }
 
-        TextBlock preview;
-        preview.Text(display->previewText.empty() ? PayloadKindLabel(display->kind) : display->previewText);
-        preview.TextWrapping(TextWrapping::WrapWholeWords);
-        preview.IsTextSelectionEnabled(false);
-        preview.MaxLines(8);
-        preview.TextTrimming(TextTrimming::WordEllipsis);
-        content.Children().Append(preview);
+        if (display->kind == ClipboardActivityPayloadKind::PrivatePlaceholder) {
+            TextBlock detail;
+            detail.Text(CLP_W(CLP_UI_PRIVATE_PLACEHOLDER_DETAIL));
+            detail.FontSize(12);
+            detail.Opacity(0.7);
+            detail.TextWrapping(TextWrapping::WrapWholeWords);
+            content.Children().Append(detail);
+        } else {
+            TextBlock preview;
+            preview.Text(display->previewText.empty() ? PayloadKindLabel(display->kind) : display->previewText);
+            preview.TextWrapping(TextWrapping::WrapWholeWords);
+            preview.IsTextSelectionEnabled(false);
+            preview.MaxLines(8);
+            preview.TextTrimming(TextTrimming::WordEllipsis);
+            content.Children().Append(preview);
+        }
     }
 
     const auto setCopyIconVisible = [copyIcon](bool visible) {
@@ -315,33 +358,40 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t it
     rowButton.BorderThickness(ThicknessHelper::FromLengths(0, 0, 0, 0));
     rowButton.Background(MakeBrush(0, 0, 0, 0));
     rowButton.Content(bubble);
-    rowButton.Click([this, itemID](auto const&, auto const&) {
-        CopyActivityItem(itemID);
-    });
-    rowButton.PointerEntered([setCopyIconVisible](auto const&, auto const&) {
-        setCopyIconVisible(true);
-    });
-    rowButton.PointerExited([setCopyIconVisible](auto const&, auto const&) {
-        setCopyIconVisible(false);
-    });
-    rowButton.GotFocus([setCopyIconVisible](auto const&, auto const&) {
-        setCopyIconVisible(true);
-    });
-    rowButton.LostFocus([setCopyIconVisible](auto const&, auto const&) {
-        setCopyIconVisible(false);
-    });
 
-    MenuFlyout contextMenu;
-    MenuFlyoutItem copyMenuItem;
-    copyMenuItem.Text(winrt::hstring{ CLP_W(CLP_UI_COPY) });
-    copyMenuItem.Click([this, itemID](auto const&, auto const&) {
-        CopyActivityItem(itemID);
-    });
-    contextMenu.Items().Append(copyMenuItem);
-    rowButton.ContextFlyout(contextMenu);
-    ToolTipService::SetToolTip(rowButton, winrt::box_value(winrt::hstring{ CLP_W(CLP_UI_COPY) }));
-    Automation::AutomationProperties::SetName(rowButton, winrt::hstring{ metaText });
-    Automation::AutomationProperties::SetHelpText(rowButton, winrt::hstring{ CLP_W(CLP_UI_COPY) });
+    if (showCopyAction) {
+        rowButton.Click([this, itemID](auto const&, auto const&) {
+            CopyActivityItem(itemID);
+        });
+        rowButton.PointerEntered([setCopyIconVisible](auto const&, auto const&) {
+            setCopyIconVisible(true);
+        });
+        rowButton.PointerExited([setCopyIconVisible](auto const&, auto const&) {
+            setCopyIconVisible(false);
+        });
+        rowButton.GotFocus([setCopyIconVisible](auto const&, auto const&) {
+            setCopyIconVisible(true);
+        });
+        rowButton.LostFocus([setCopyIconVisible](auto const&, auto const&) {
+            setCopyIconVisible(false);
+        });
+
+        MenuFlyout contextMenu;
+        MenuFlyoutItem copyMenuItem;
+        copyMenuItem.Text(winrt::hstring{ CLP_W(CLP_UI_COPY) });
+        copyMenuItem.Click([this, itemID](auto const&, auto const&) {
+            CopyActivityItem(itemID);
+        });
+        contextMenu.Items().Append(copyMenuItem);
+        rowButton.ContextFlyout(contextMenu);
+        ToolTipService::SetToolTip(rowButton, winrt::box_value(winrt::hstring{ CLP_W(CLP_UI_COPY) }));
+        Automation::AutomationProperties::SetName(rowButton, winrt::hstring{ metaText });
+        Automation::AutomationProperties::SetHelpText(rowButton, winrt::hstring{ CLP_W(CLP_UI_COPY) });
+    } else {
+        // Placeholder rows are informational — no click, no copy menu, no tooltip.
+        rowButton.IsTabStop(false);
+        Automation::AutomationProperties::SetName(rowButton, winrt::hstring{ metaText });
+    }
 
     bubble.Children().Append(content);
     row.Children().Append(rowButton);
@@ -464,6 +514,14 @@ void ClippPage::ScrollActivityToTop() const {
 void ClippPage::CopyActivityItem(uint64_t itemID) {
     auto payload = activityStore_.PayloadReference(itemID);
     if (!payload) {
+        return;
+    }
+
+    // Source-marked-private placeholder payloads carry no content and exist
+    // only to inform the user that something happened. Writing an empty
+    // clipboard would be both useless and destructive of whatever's there now.
+    if ((payload->meta.flags & NetworkDefs::CLPM_FLAG_SOURCE_MARKED_PRIVATE) != 0
+        && payload->EncodedBytes().empty()) {
         return;
     }
 
