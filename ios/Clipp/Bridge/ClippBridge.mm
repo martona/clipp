@@ -499,7 +499,8 @@ CLPSettingsSnapshot* LoadSettingsSnapshot(NSError** error) {
                                                                     listenerIP:ToNSString(g_settings.listenerIp())
                                                                    multicastIP:ToNSString(g_settings.multicastIp())
                                                                         hostID:ToNSString(hostID.ToHexString())
-                                                     hasHostIDCollisionWarning:MDNSHasHostIDCollisionWarning()];
+                                                     hasHostIDCollisionWarning:MDNSHasHostIDCollisionWarning()
+                                                   honorExternalPrivacyMarkers:g_settings.honorExternalPrivacyMarkers() ? YES : NO];
 }
 
 CLPDiagnosticLogRunColor ToBridgeLogRunColor(TerminalLogBuffer::Color color) {
@@ -1030,7 +1031,8 @@ void CLPIOSReceiveClipboardPayload(std::shared_ptr<const ClipboardPayload> paylo
                                             listenerIP:(NSString*)listenerIP
                                            multicastIP:(NSString*)multicastIP
                                                 hostID:(NSString*)hostID
-                             hasHostIDCollisionWarning:(BOOL)hasHostIDCollisionWarning {
+                             hasHostIDCollisionWarning:(BOOL)hasHostIDCollisionWarning
+                           honorExternalPrivacyMarkers:(BOOL)honorExternalPrivacyMarkers {
     self = [super init];
     if (self) {
         _clipboardHistoryMemoryLimitBytes = clipboardHistoryMemoryLimitBytes;
@@ -1042,6 +1044,7 @@ void CLPIOSReceiveClipboardPayload(std::shared_ptr<const ClipboardPayload> paylo
         _multicastIP = [multicastIP copy];
         _hostID = [hostID copy];
         _hasHostIDCollisionWarning = hasHostIDCollisionWarning;
+        _honorExternalPrivacyMarkers = honorExternalPrivacyMarkers;
     }
     return self;
 }
@@ -1163,6 +1166,19 @@ void CLPIOSReceiveClipboardPayload(std::shared_ptr<const ClipboardPayload> paylo
     }
 
     RestartNetworkRuntime(nullptr);
+    return LoadSettingsSnapshot(error);
+}
+
++ (CLPSettingsSnapshot*)updateHonorExternalPrivacyMarkers:(BOOL)honor
+                                                      error:(NSError**)error {
+    const bool desired = honor == YES;
+    if (desired != g_settings.honorExternalPrivacyMarkers()) {
+        if (!g_settings.set_honorExternalPrivacyMarkers(desired)) {
+            AssignError(error, kClippSettingsErrorBase + 16, @"Unable to save privacy marker setting.");
+            return nil;
+        }
+    }
+
     return LoadSettingsSnapshot(error);
 }
 

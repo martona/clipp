@@ -72,6 +72,11 @@
 #define CLP_UI_UNLIMITED "Unlimited"
 #define CLP_UI_CLIPBOARD_HISTORY_SETTINGS_APPLIED "Clipboard history settings applied."
 
+#define CLP_UI_PRIVACY "Privacy"
+#define CLP_UI_HONOR_PRIVACY_MARKERS "Honor 'don't sync' requests from other apps"
+#define CLP_UI_HONOR_PRIVACY_MARKERS_HELP "When other apps mark clipboard items as private (passwords from Chrome, password managers, etc.), Clipp will not sync the content to your other devices."
+#define CLP_UI_PRIVACY_SETTINGS_APPLIED "Privacy settings applied."
+
 #define CLP_UI_LIVE_DIAGNOSTIC_OUTPUT "Live diagnostic output from Clipp."
 #define CLP_UI_COPY_LOG_LINES_FORMAT "Copy %d lines"
 

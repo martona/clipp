@@ -14,6 +14,7 @@ namespace {
     constexpr wchar_t kClipboardHistoryMaxAgeSecondsName[] = L"ClipboardHistoryMaxAgeSeconds";
     constexpr wchar_t kClipboardHistoryMaxItemsName[] = L"ClipboardHistoryMaxItems";
     constexpr wchar_t kClipboardSyncMaxItemsName[] = L"ClipboardSyncMaxItems";
+    constexpr wchar_t kHonorExternalPrivacyMarkersName[] = L"HonorExternalPrivacyMarkers";
     constexpr wchar_t kOriginSequenceFloorName[] = L"OriginSequenceFloor";
     constexpr wchar_t kEncryptedNetworkKeyName[] = L"EncryptedNetworkKey";
     constexpr wchar_t kHostIDName[] = L"HostID";
@@ -59,7 +60,8 @@ Settings::Settings()
       clipboardHistoryMemoryLimitBytes_(DefaultClipboardHistoryMemoryLimitBytes),
       clipboardHistoryMaxAgeSeconds_(DefaultClipboardHistoryMaxAgeSeconds),
       clipboardHistoryMaxItems_(DefaultClipboardHistoryMaxItems),
-      clipboardSyncMaxItems_(DefaultClipboardSyncMaxItems) {
+      clipboardSyncMaxItems_(DefaultClipboardSyncMaxItems),
+      honorExternalPrivacyMarkers_(DefaultHonorExternalPrivacyMarkers) {
     LoadCache();
 }
 
@@ -106,6 +108,11 @@ uint64_t Settings::clipboardHistoryMaxItems() const {
 uint64_t Settings::clipboardSyncMaxItems() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return clipboardSyncMaxItems_;
+}
+
+bool Settings::honorExternalPrivacyMarkers() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return honorExternalPrivacyMarkers_;
 }
 
 bool Settings::set_multicastIp(const std::string& value) {
@@ -201,6 +208,15 @@ bool Settings::set_clipboardSyncMaxItems(uint64_t value) {
     return true;
 }
 
+bool Settings::set_honorExternalPrivacyMarkers(bool value) {
+    if (!WriteUint32Value(kHonorExternalPrivacyMarkersName, value ? 1 : 0)) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    honorExternalPrivacyMarkers_ = value;
+    return true;
+}
+
 uint64_t Settings::nextOriginSequenceNumber() {
     std::lock_guard<std::mutex> lock(mutex_);
     const uint64_t next = ++originSequenceCounter_;
@@ -256,6 +272,7 @@ bool Settings::LoadCache() {
     uint64_t clipboardHistoryMaxAgeSeconds = DefaultClipboardHistoryMaxAgeSeconds;
     uint64_t clipboardHistoryMaxItems = DefaultClipboardHistoryMaxItems;
     uint64_t clipboardSyncMaxItems = DefaultClipboardSyncMaxItems;
+    int honorExternalPrivacyMarkers = DefaultHonorExternalPrivacyMarkers ? 1 : 0;
     uint64_t originSequenceFloor = 0;
 
     if (ReadStringValue(kListenerIpName, ip) && IsValidListenerIp(ip)) {
@@ -284,6 +301,9 @@ bool Settings::LoadCache() {
     }
     if (ReadUint64Value(kClipboardSyncMaxItemsName, clipboardSyncMaxItems)) {
         clipboardSyncMaxItems_ = clipboardSyncMaxItems;
+    }
+    if (ReadUint32Value(kHonorExternalPrivacyMarkersName, honorExternalPrivacyMarkers)) {
+        honorExternalPrivacyMarkers_ = (honorExternalPrivacyMarkers != 0);
     }
 
     // Origin sequence counter: load the persisted floor (the value the previous

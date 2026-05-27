@@ -202,6 +202,7 @@ NS_SWIFT_NAME(SettingsSnapshot)
 @property(nonatomic, copy, readonly) NSString* multicastIP;
 @property(nonatomic, copy, readonly) NSString* hostID;
 @property(nonatomic, assign, readonly) BOOL hasHostIDCollisionWarning;
+@property(nonatomic, assign, readonly) BOOL honorExternalPrivacyMarkers;
 
 - (instancetype)initWithClipboardHistoryMemoryLimitBytes:(unsigned long long)clipboardHistoryMemoryLimitBytes
                          clipboardHistoryMaxAgeSeconds:(unsigned long long)clipboardHistoryMaxAgeSeconds
@@ -211,7 +212,8 @@ NS_SWIFT_NAME(SettingsSnapshot)
                                             listenerIP:(NSString*)listenerIP
                                            multicastIP:(NSString*)multicastIP
                                                 hostID:(NSString*)hostID
-                             hasHostIDCollisionWarning:(BOOL)hasHostIDCollisionWarning NS_DESIGNATED_INITIALIZER;
+                             hasHostIDCollisionWarning:(BOOL)hasHostIDCollisionWarning
+                           honorExternalPrivacyMarkers:(BOOL)honorExternalPrivacyMarkers NS_DESIGNATED_INITIALIZER;
 - (instancetype)init NS_UNAVAILABLE;
 
 @end
@@ -230,6 +232,8 @@ NS_SWIFT_NAME(SettingsBridge)
                                           multicastIP:(NSString*)multicastIP
                                                 error:(NSError**)error NS_SWIFT_NAME(updateNetwork(tcpPort:udpPort:listenerIP:multicastIP:));
 + (nullable CLPSettingsSnapshot*)resetHostIDWithError:(NSError**)error NS_SWIFT_NAME(resetHostID());
++ (nullable CLPSettingsSnapshot*)updateHonorExternalPrivacyMarkers:(BOOL)honor
+                                                              error:(NSError**)error NS_SWIFT_NAME(updateHonorExternalPrivacyMarkers(_:));
 
 @end
 

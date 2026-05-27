@@ -32,6 +32,8 @@ private:
     void RefreshClipboardHistoryControls();
     void UpdateClipboardHistoryValueLabels();
     void ApplyClipboardHistorySettingChange();
+    void RefreshPrivacyControls();
+    void ApplyPrivacySettingChange();
 
     static winrt::hstring ToHString(const std::string& value);
 
@@ -49,6 +51,7 @@ private:
     winrt::Windows::UI::Xaml::Controls::TextBlock historyMemoryValue_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBlock historyAgeValue_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBlock historyItemValue_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::CheckBox honorPrivacyMarkersCheck_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBlock statusMessage_{ nullptr };
     bool loadingSettings_{ false };
 };

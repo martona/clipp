@@ -376,6 +376,53 @@ void SettingsPage::BuildView() {
 
     content.Children().InsertAt(2, historySection);
 
+    TextBlock privacyHeader;
+    privacyHeader.Text(CLP_W(CLP_UI_PRIVACY));
+    privacyHeader.FontSize(16);
+    privacyHeader.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+
+    Grid privacySection;
+    privacySection.CornerRadius(CornerRadius{ 4 });
+    privacySection.BorderThickness(ThicknessHelper::FromLengths(1, 1, 1, 1));
+    privacySection.BorderBrush(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(50, 150, 150, 150)));
+    privacySection.Padding(ThicknessHelper::FromLengths(16, 12, 16, 12));
+    privacySection.RowSpacing(6);
+
+    ColumnDefinition privacyColumn;
+    privacyColumn.Width(GridLength{ 1, GridUnitType::Star });
+    privacySection.ColumnDefinitions().Append(privacyColumn);
+
+    RowDefinition privacyCheckRow;
+    privacyCheckRow.Height(GridLength{ 1, GridUnitType::Auto });
+    privacySection.RowDefinitions().Append(privacyCheckRow);
+    RowDefinition privacyHelpRow;
+    privacyHelpRow.Height(GridLength{ 1, GridUnitType::Auto });
+    privacySection.RowDefinitions().Append(privacyHelpRow);
+
+    honorPrivacyMarkersCheck_ = CheckBox();
+    honorPrivacyMarkersCheck_.Content(winrt::box_value(winrt::hstring(CLP_W(CLP_UI_HONOR_PRIVACY_MARKERS))));
+    honorPrivacyMarkersCheck_.Checked([this](auto const&, auto const&) {
+        ApplyPrivacySettingChange();
+    });
+    honorPrivacyMarkersCheck_.Unchecked([this](auto const&, auto const&) {
+        ApplyPrivacySettingChange();
+    });
+    Grid::SetRow(honorPrivacyMarkersCheck_, 0);
+    Grid::SetColumn(honorPrivacyMarkersCheck_, 0);
+    privacySection.Children().Append(honorPrivacyMarkersCheck_);
+
+    TextBlock privacyHelp;
+    privacyHelp.Text(CLP_W(CLP_UI_HONOR_PRIVACY_MARKERS_HELP));
+    privacyHelp.FontSize(12);
+    privacyHelp.Opacity(0.75);
+    privacyHelp.TextWrapping(TextWrapping::WrapWholeWords);
+    Grid::SetRow(privacyHelp, 1);
+    Grid::SetColumn(privacyHelp, 0);
+    privacySection.Children().Append(privacyHelp);
+
+    content.Children().InsertAt(3, privacyHeader);
+    content.Children().InsertAt(4, privacySection);
+
     TextBlock hostIDHeader;
     hostIDHeader.Text(CLP_W(CLP_UI_HOST_ID));
     hostIDHeader.FontSize(16);
@@ -452,6 +499,7 @@ void SettingsPage::LoadSettingsIntoFields() {
     listenerIpField_.Text(ToHString(g_settings.listenerIp()));
     multicastIpField_.Text(ToHString(g_settings.multicastIp()));
     RefreshClipboardHistoryControls();
+    RefreshPrivacyControls();
     loadingSettings_ = false;
 
     RefreshHostIDDisplay();
@@ -622,6 +670,33 @@ void SettingsPage::ApplyClipboardHistorySettingChange() {
         g_settings.clipboardHistoryMaxItems());
 
     statusMessage_.Text(CLP_W(CLP_UI_CLIPBOARD_HISTORY_SETTINGS_APPLIED));
+    ShowStatusMessage();
+}
+
+void SettingsPage::RefreshPrivacyControls() {
+    if (!honorPrivacyMarkersCheck_) {
+        return;
+    }
+
+    honorPrivacyMarkersCheck_.IsChecked(winrt::Windows::Foundation::IReference<bool>(g_settings.honorExternalPrivacyMarkers()));
+}
+
+void SettingsPage::ApplyPrivacySettingChange() {
+    if (loadingSettings_ || !honorPrivacyMarkersCheck_) {
+        return;
+    }
+
+    const auto checkedRef = honorPrivacyMarkersCheck_.IsChecked();
+    const bool desired = checkedRef ? checkedRef.Value() : false;
+    if (desired == g_settings.honorExternalPrivacyMarkers()) {
+        return;
+    }
+
+    if (!g_settings.set_honorExternalPrivacyMarkers(desired)) {
+        return;
+    }
+
+    statusMessage_.Text(CLP_W(CLP_UI_PRIVACY_SETTINGS_APPLIED));
     ShowStatusMessage();
 }
 

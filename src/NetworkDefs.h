@@ -35,6 +35,21 @@ inline uint64_t ntoh64(uint64_t v) {
 // current clipboard contents.
 constexpr uint32_t CLPM_FLAG_SYNC_REPLAY = 0x00000001u;
 
+// CLPM_FLAG_SOURCE_MARKED_PRIVATE marks a clipboard message whose source app
+// indicated privacy via OS-level clipboard markers (e.g. Chrome / PasswordSafe
+// on Windows setting CanIncludeInClipboardHistory + CanUploadToCloudClipboard,
+// macOS apps setting NSPasteboardContentsCurrentHostOnly +
+// org.nspasteboard.ConcealedType, or iOS apps using UIPasteboard.localOnly).
+//
+// May accompany a non-empty payload (the user's "honor markers" setting allowed
+// sync of the marked content) or a zero-length payload (the setting blocked
+// sync; the message is a placeholder so receivers can show an activity-stream
+// entry without exposing the content). Receivers honoring the flag mask the
+// activity entry, propagate equivalent platform markers when writing to the
+// local clipboard, and — for the zero-length variant — skip the clipboard
+// write entirely.
+constexpr uint32_t CLPM_FLAG_SOURCE_MARKED_PRIVATE = 0x00000002u;
+
 #pragma pack(push, 1)
 struct ClipboardMessage {
     // Per-message metadata flags (CLPM_FLAG_*).

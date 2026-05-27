@@ -433,6 +433,23 @@ private struct SettingsPanelView: View {
             }
 
             Section {
+                Toggle(CLP_UI_HONOR_PRIVACY_MARKERS, isOn: $model.honorExternalPrivacyMarkers)
+                    .onChange(of: model.honorExternalPrivacyMarkers) { _, newValue in
+                        model.applyPrivacySettings(newValue)
+                    }
+
+                Text(CLP_UI_HONOR_PRIVACY_MARKERS_HELP)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text(CLP_UI_PRIVACY)
+            } footer: {
+                if model.privacyStatusMessage != nil {
+                    SettingsStatusText(message: model.privacyStatusMessage, isError: model.privacyStatusIsError)
+                }
+            }
+
+            Section {
                 SettingsTextFieldRow(
                     title: CLP_UI_TCP_PORT,
                     text: $model.tcpPort,
@@ -655,12 +672,15 @@ private final class SettingsViewModel: ObservableObject {
     @Published var multicastIP = ""
     @Published var hostID = ""
     @Published var hasHostIDCollisionWarning = false
+    @Published var honorExternalPrivacyMarkers = true
     @Published var historyStatusMessage: String?
     @Published var historyStatusIsError = false
     @Published var networkStatusMessage: String?
     @Published var networkStatusIsError = false
     @Published var hostIDStatusMessage: String?
     @Published var hostIDStatusIsError = false
+    @Published var privacyStatusMessage: String?
+    @Published var privacyStatusIsError = false
 
     private var loadingSnapshot = false
     private var storedTcpPort = ""
@@ -744,6 +764,22 @@ private final class SettingsViewModel: ObservableObject {
         }
     }
 
+    func applyPrivacySettings(_ honor: Bool) {
+        guard !loadingSnapshot else {
+            return
+        }
+
+        do {
+            let snapshot = try SettingsBridge.updateHonorExternalPrivacyMarkers(honor)
+            apply(snapshot: snapshot)
+            privacyStatusIsError = false
+            privacyStatusMessage = CLP_UI_PRIVACY_SETTINGS_APPLIED
+        } catch {
+            privacyStatusIsError = true
+            privacyStatusMessage = error.localizedDescription
+        }
+    }
+
     private func apply(snapshot: SettingsSnapshot) {
         loadingSnapshot = true
         historyMemoryIndex = Double(stopIndex(SettingsLimitStop.memoryStops, snapshot.clipboardHistoryMemoryLimitBytes))
@@ -760,6 +796,7 @@ private final class SettingsViewModel: ObservableObject {
         multicastIP = storedMulticastIP
         hostID = snapshot.hostID
         hasHostIDCollisionWarning = snapshot.hasHostIDCollisionWarning
+        honorExternalPrivacyMarkers = snapshot.honorExternalPrivacyMarkers
         loadingSnapshot = false
     }
 
@@ -767,6 +804,7 @@ private final class SettingsViewModel: ObservableObject {
         historyStatusMessage = nil
         networkStatusMessage = nil
         hostIDStatusMessage = nil
+        privacyStatusMessage = nil
     }
 
     private func parsePort(_ text: String) -> Int? {

@@ -29,6 +29,7 @@ extern ClipboardActivityStore g_clipboardActivityStore;
 - (instancetype)initWithOwner:(MacOSSettingsPage*)owner;
 - (void)historySliderChanged:(id)sender;
 - (void)resetHostID:(id)sender;
+- (void)honorPrivacyMarkersChanged:(id)sender;
 @end
 
 @implementation MacOSSettingsPageFieldDelegate
@@ -60,6 +61,13 @@ extern ClipboardActivityStore g_clipboardActivityStore;
     (void)sender;
     if (owner_ != nullptr) {
         owner_->OnResetHostID();
+    }
+}
+
+- (void)honorPrivacyMarkersChanged:(id)sender {
+    (void)sender;
+    if (owner_ != nullptr) {
+        owner_->OnHonorPrivacyMarkersChanged();
     }
 }
 
@@ -342,6 +350,10 @@ void MacOSSettingsPage::OnResetHostID() {
     ResetHostID();
 }
 
+void MacOSSettingsPage::OnHonorPrivacyMarkersChanged() {
+    ApplyPrivacySettingChange();
+}
+
 void MacOSSettingsPage::BuildView() {
     NSScrollView* scrollView = [[NSScrollView alloc] initWithFrame:NSZeroRect];
     scrollView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -405,6 +417,36 @@ void MacOSSettingsPage::BuildView() {
     AddSettingRow(section, MacOSMakeLabel(CLP_NS(CLP_UI_MULTICAST_IP)), multicastIpField_, listenerIpField_, rowConstraints);
     [rowConstraints addObject:[multicastIpField_.bottomAnchor constraintEqualToAnchor:section.bottomAnchor constant:-kSectionInsetY]];
 
+    NSTextField* privacyHeader = [NSTextField labelWithString:CLP_NS(CLP_UI_PRIVACY)];
+    privacyHeader.translatesAutoresizingMaskIntoConstraints = NO;
+    privacyHeader.font = [NSFont systemFontOfSize:16 weight:NSFontWeightSemibold];
+    privacyHeader.textColor = [NSColor labelColor];
+
+    NSBox* privacySection = MacOSMakeGroupBox();
+
+    honorPrivacyMarkersCheckbox_ = [NSButton checkboxWithTitle:CLP_NS(CLP_UI_HONOR_PRIVACY_MARKERS)
+                                                        target:fieldDelegate_
+                                                        action:@selector(honorPrivacyMarkersChanged:)];
+    honorPrivacyMarkersCheckbox_.translatesAutoresizingMaskIntoConstraints = NO;
+    [privacySection addSubview:honorPrivacyMarkersCheckbox_];
+
+    NSTextField* privacyHelp = MacOSMakeWrappingLabel(CLP_NS(CLP_UI_HONOR_PRIVACY_MARKERS_HELP),
+                                                      12.0,
+                                                      [NSColor secondaryLabelColor]);
+    [privacySection addSubview:privacyHelp];
+
+    NSMutableArray<NSLayoutConstraint*>* privacyConstraints = [NSMutableArray array];
+    [privacyConstraints addObjectsFromArray:@[
+        [honorPrivacyMarkersCheckbox_.leadingAnchor constraintEqualToAnchor:privacySection.leadingAnchor constant:kSectionInsetX],
+        [honorPrivacyMarkersCheckbox_.trailingAnchor constraintLessThanOrEqualToAnchor:privacySection.trailingAnchor constant:-kSectionInsetX],
+        [honorPrivacyMarkersCheckbox_.topAnchor constraintEqualToAnchor:privacySection.topAnchor constant:kSectionInsetY],
+
+        [privacyHelp.leadingAnchor constraintEqualToAnchor:privacySection.leadingAnchor constant:kSectionInsetX],
+        [privacyHelp.trailingAnchor constraintEqualToAnchor:privacySection.trailingAnchor constant:-kSectionInsetX],
+        [privacyHelp.topAnchor constraintEqualToAnchor:honorPrivacyMarkersCheckbox_.bottomAnchor constant:6.0],
+        [privacyHelp.bottomAnchor constraintEqualToAnchor:privacySection.bottomAnchor constant:-kSectionInsetY],
+    ]];
+
     NSTextField* hostIDHeader = [NSTextField labelWithString:CLP_NS(CLP_UI_HOST_ID)];
     hostIDHeader.translatesAutoresizingMaskIntoConstraints = NO;
     hostIDHeader.font = [NSFont systemFontOfSize:16 weight:NSFontWeightSemibold];
@@ -428,6 +470,8 @@ void MacOSSettingsPage::BuildView() {
     [contentRoot addSubview:heading];
     [contentRoot addSubview:historyHeader];
     [contentRoot addSubview:historySection];
+    [contentRoot addSubview:privacyHeader];
+    [contentRoot addSubview:privacySection];
     [contentRoot addSubview:networkHeader];
     [contentRoot addSubview:section];
     [contentRoot addSubview:hostIDHeader];
@@ -457,9 +501,17 @@ void MacOSSettingsPage::BuildView() {
         [historySection.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
         [historySection.topAnchor constraintEqualToAnchor:historyHeader.bottomAnchor constant:16.0],
 
+        [privacyHeader.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
+        [privacyHeader.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
+        [privacyHeader.topAnchor constraintEqualToAnchor:historySection.bottomAnchor constant:18.0],
+
+        [privacySection.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
+        [privacySection.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
+        [privacySection.topAnchor constraintEqualToAnchor:privacyHeader.bottomAnchor constant:16.0],
+
         [networkHeader.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
         [networkHeader.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
-        [networkHeader.topAnchor constraintEqualToAnchor:historySection.bottomAnchor constant:18.0],
+        [networkHeader.topAnchor constraintEqualToAnchor:privacySection.bottomAnchor constant:18.0],
 
         [section.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
         [section.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
@@ -494,6 +546,7 @@ void MacOSSettingsPage::BuildView() {
     ]];
     [NSLayoutConstraint activateConstraints:historyConstraints];
     [NSLayoutConstraint activateConstraints:rowConstraints];
+    [NSLayoutConstraint activateConstraints:privacyConstraints];
     [NSLayoutConstraint activateConstraints:hostIDConstraints];
 }
 
@@ -508,6 +561,7 @@ void MacOSSettingsPage::LoadSettingsIntoFields() {
     MacOSSetFieldText(listenerIpField_, g_settings.listenerIp());
     MacOSSetFieldText(multicastIpField_, g_settings.multicastIp());
     RefreshClipboardHistoryControls();
+    RefreshPrivacyControls();
     loadingSettings_ = false;
 
     RefreshHostIDDisplay();
@@ -673,6 +727,34 @@ void MacOSSettingsPage::ApplyClipboardHistorySettingChange() {
         g_settings.clipboardHistoryMaxItems());
 
     MacOSSetFieldText(statusMessage_, CLP_NS(CLP_UI_CLIPBOARD_HISTORY_SETTINGS_APPLIED));
+    ShowStatusMessage();
+}
+
+void MacOSSettingsPage::RefreshPrivacyControls() {
+    if (honorPrivacyMarkersCheckbox_ == nil) {
+        return;
+    }
+
+    honorPrivacyMarkersCheckbox_.state = g_settings.honorExternalPrivacyMarkers()
+        ? NSControlStateValueOn
+        : NSControlStateValueOff;
+}
+
+void MacOSSettingsPage::ApplyPrivacySettingChange() {
+    if (loadingSettings_ || honorPrivacyMarkersCheckbox_ == nil) {
+        return;
+    }
+
+    const bool desired = honorPrivacyMarkersCheckbox_.state == NSControlStateValueOn;
+    if (desired == g_settings.honorExternalPrivacyMarkers()) {
+        return;
+    }
+
+    if (!g_settings.set_honorExternalPrivacyMarkers(desired)) {
+        return;
+    }
+
+    MacOSSetFieldText(statusMessage_, CLP_NS(CLP_UI_PRIVACY_SETTINGS_APPLIED));
     ShowStatusMessage();
 }
 

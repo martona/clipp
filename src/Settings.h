@@ -23,6 +23,9 @@ public:
     // persist on every flush. A crash loses at most this many numbers; the next
     // session resumes above them, avoiding any collision with the prior session.
     static constexpr uint64_t OriginSequenceBatchSize = 500;
+    // Default for honorExternalPrivacyMarkers: respect "don't sync" markers
+    // set by other apps (e.g. Chrome / password managers) on the OS clipboard.
+    static constexpr bool DefaultHonorExternalPrivacyMarkers = true;
 
     Settings();
 
@@ -39,6 +42,7 @@ public:
     uint64_t clipboardHistoryMaxAgeSeconds() const;
     uint64_t clipboardHistoryMaxItems() const;
     uint64_t clipboardSyncMaxItems() const;
+    bool honorExternalPrivacyMarkers() const;
 
     bool set_multicastIp(const std::string& value);
 	bool set_listenerIp(const std::string& value);
@@ -49,6 +53,7 @@ public:
     bool set_clipboardHistoryMaxAgeSeconds(uint64_t value);
     bool set_clipboardHistoryMaxItems(uint64_t value);
     bool set_clipboardSyncMaxItems(uint64_t value);
+    bool set_honorExternalPrivacyMarkers(bool value);
 
     // Atomically increments the per-origin sequence counter and returns the next
     // value. Persists every OriginSequenceBatchSize calls. On startup the counter
@@ -83,6 +88,7 @@ private:
     uint64_t clipboardHistoryMaxAgeSeconds_;
     uint64_t clipboardHistoryMaxItems_;
     uint64_t clipboardSyncMaxItems_;
+    bool honorExternalPrivacyMarkers_;
     // In-memory origin sequence counter. Highest value yielded so far.
     uint64_t originSequenceCounter_{ 0 };
     // The next persisted floor — counter values up to (but not including) this
