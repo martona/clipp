@@ -12,21 +12,34 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: windows-ci-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   build:
-    name: Windows build test
-    runs-on: windows-latest
+    name: Windows build test (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: windows-latest
+            triplet: x64-windows-static
+            vcvars_arch: amd64
+          - arch: arm64
+            runner: windows-11-arm
+            triplet: arm64-windows-static
+            vcvars_arch: arm64
+
+    concurrency:
+      group: windows-ci-${{ matrix.arch }}-${{ github.ref }}
+      cancel-in-progress: true
 
     defaults:
       run:
         shell: pwsh
 
     env:
-      CLIPP_RELEASE_TRIPLET: x64-windows-static
+      CLIPP_RELEASE_TRIPLET: ${{ matrix.triplet }}
       VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/vcpkg-cache,readwrite
 
     steps:
@@ -76,12 +89,12 @@ jobs:
         uses: actions/cache@v5
         with:
           path: vcpkg-cache
-          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.CLIPP_RELEASE_TRIPLET }}-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ matrix.triplet }}-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.CLIPP_RELEASE_TRIPLET }}-
+            ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ matrix.triplet }}-
 
       - name: Build Release
-        run: .\scripts\build_windows.ps1 -BuildType Release -Triplet $env:CLIPP_RELEASE_TRIPLET
+        run: .\scripts\build_windows.ps1 -BuildType Release -Triplet $env:CLIPP_RELEASE_TRIPLET -VcVarsArch ${{ matrix.vcvars_arch }}
 
       - name: Verify Windows artifacts
         run: |
@@ -98,9 +111,9 @@ jobs:
         run: |
           $exe = ".\build\windows-release\clipp-win32.exe"
           $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
-          $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $installPath = & $vswhere -latest -products * -property installationPath
           $vcvars = Join-Path $installPath "VC\Auxiliary\Build\vcvarsall.bat"
-          $dump = & cmd.exe /d /s /c "call `"$vcvars`" amd64 >nul && dumpbin /dependents `"$exe`""
+          $dump = & cmd.exe /d /s /c "call `"$vcvars`" ${{ matrix.vcvars_arch }} >nul && dumpbin /dependents `"$exe`""
           $dump
 
           $blocked = $dump | Select-String -Pattern "VCRUNTIME|MSVCP|ucrtbase|libsodium|xxhash|zstd|lodepng" -CaseSensitive:$false

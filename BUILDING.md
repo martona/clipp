@@ -18,12 +18,12 @@ This document covers building Clipp for Windows, macOS, and iOS from a source ch
 | Platform | Architecture        | Status                    | Build entry point                                                            |
 |----------|---------------------|---------------------------|------------------------------------------------------------------------------|
 | Windows  | amd64               | tested in CI              | `scripts\build_windows.ps1`                                                  |
-| Windows  | arm64               | untested (CI in progress) | `scripts\build_windows.ps1 -VcVarsArch arm64 -Triplet arm64-windows-static`  |
+| Windows  | arm64               | tested in CI              | `scripts\build_windows.ps1 -VcVarsArch arm64 -Triplet arm64-windows-static`  |
 | macOS    | arm64               | tested in CI              | `scripts/build_macos.sh`                                                     |
 | iOS      | arm64 simulator     | tested in CI              | `scripts/build_ios.sh`                                                       |
 | iOS      | arm64 device        | manual Xcode only         | open `ios/Clipp.xcodeproj` in Xcode                                          |
 
-Intel Macs are not supported: the build's minimum deployment target is macOS 14.0, which Apple ships for Apple Silicon only. CI coverage for the Windows arm64 row is planned in a follow-up change.
+Intel Macs are not supported: the build's minimum deployment target is macOS 14.0, which Apple ships for Apple Silicon only.
 
 ## Prerequisites
 
