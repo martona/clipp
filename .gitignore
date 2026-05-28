@@ -111,3 +111,4 @@ compile_commands.json
 # Other files to ignore
 *.patch
 *.diff
+.claude/
