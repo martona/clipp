@@ -1,0 +1,325 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (no v prefix, e.g. 0.0.0.1)'
+        required: true
+        type: string
+      publish:
+        description: 'Publish immediately (otherwise creates a draft)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write       # create releases and upload assets
+  id-token: write       # sigstore OIDC for attestation
+  attestations: write   # write build provenance attestation
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  resolve-version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.compute.outputs.version }}
+      tag: ${{ steps.compute.outputs.tag }}
+      draft: ${{ steps.compute.outputs.draft }}
+    steps:
+      - id: compute
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            tag="${GITHUB_REF_NAME}"
+            version="${tag#v}"
+            # Tag-push releases still start as drafts so they can be reviewed
+            # in the UI before flipping the publish toggle.
+            draft="true"
+          else
+            version="${{ inputs.version }}"
+            tag="v${version}"
+            if [[ "${{ inputs.publish }}" == "true" ]]; then
+              draft="false"
+            else
+              draft="true"
+            fi
+          fi
+          if [[ -z "$version" || "$version" =~ [[:space:]] ]]; then
+            echo "::error::Invalid version: '$version'"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "draft=$draft" >> "$GITHUB_OUTPUT"
+          echo "Resolved: version=$version tag=$tag draft=$draft"
+
+  build-windows:
+    name: Build Windows (${{ matrix.arch }})
+    needs: resolve-version
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: windows-latest
+            triplet: x64-windows-static
+            vcvars_arch: amd64
+          - arch: arm64
+            runner: windows-11-arm
+            triplet: arm64-windows-static
+            vcvars_arch: arm64
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CLIPP_RELEASE_TRIPLET: ${{ matrix.triplet }}
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/vcpkg-cache,readwrite
+    steps:
+      - name: Checkout clipp
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Read vcpkg baseline
+        id: vcpkg-baseline
+        run: |
+          $manifest = Get-Content -Raw src\vcpkg.json | ConvertFrom-Json
+          $baseline = $manifest.'builtin-baseline'
+          if (-not $baseline) {
+            throw "src\vcpkg.json must define builtin-baseline for CI."
+          }
+          "ref=$baseline" >> $env:GITHUB_OUTPUT
+
+      - name: Set vcpkg short root
+        run: |
+          $workspaceRoot = [System.IO.Path]::GetPathRoot($env:GITHUB_WORKSPACE)
+          if (-not $workspaceRoot) {
+            throw "Could not determine workspace drive from GITHUB_WORKSPACE='$env:GITHUB_WORKSPACE'."
+          }
+          $vcpkgRoot = Join-Path $workspaceRoot "v"
+          if (Test-Path $vcpkgRoot) {
+            throw "vcpkg short root already exists: $vcpkgRoot"
+          }
+          New-Item -ItemType Directory -Path $vcpkgRoot | Out-Null
+          "VCPKG_ROOT=$vcpkgRoot" >> $env:GITHUB_ENV
+          Write-Host "Using VCPKG_ROOT=$vcpkgRoot"
+
+      - name: Checkout vcpkg
+        run: |
+          git clone --no-tags https://github.com/microsoft/vcpkg.git $env:VCPKG_ROOT
+          git -C $env:VCPKG_ROOT checkout --detach ${{ steps.vcpkg-baseline.outputs.ref }}
+
+      - name: Bootstrap vcpkg
+        run: |
+          $bootstrap = Join-Path $env:VCPKG_ROOT "bootstrap-vcpkg.bat"
+          & $bootstrap -disableMetrics
+
+      - name: Prepare vcpkg binary cache
+        run: New-Item -ItemType Directory -Force vcpkg-cache | Out-Null
+
+      - name: Cache vcpkg binaries
+        uses: actions/cache@v5
+        with:
+          path: vcpkg-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ matrix.triplet }}-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ matrix.triplet }}-
+
+      - name: Build Release
+        run: .\scripts\build_windows.ps1 -BuildType Release -Triplet $env:CLIPP_RELEASE_TRIPLET -VcVarsArch ${{ matrix.vcvars_arch }} -DisableCodeSigning
+
+      - name: Verify Windows artifacts
+        run: |
+          $exe = ".\build\windows-release\clipp.exe"
+          $shim = ".\build\windows-release\clipp.com"
+          if (-not (Test-Path $exe)) {
+            throw "Missing expected executable: $exe"
+          }
+          if (-not (Test-Path $shim)) {
+            throw "Missing expected console shim: $shim"
+          }
+
+      - name: Verify static dependency closure
+        run: |
+          $exe = ".\build\windows-release\clipp.exe"
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          $installPath = & $vswhere -latest -products * -property installationPath
+          $vcvars = Join-Path $installPath "VC\Auxiliary\Build\vcvarsall.bat"
+          $dump = & cmd.exe /d /s /c "call `"$vcvars`" ${{ matrix.vcvars_arch }} >nul && dumpbin /dependents `"$exe`""
+          $dump
+
+          $blocked = $dump | Select-String -Pattern "VCRUNTIME|MSVCP|ucrtbase|libsodium|xxhash|zstd|lodepng" -CaseSensitive:$false
+          if ($blocked) {
+            throw "Release exe imports non-system runtime/dependency DLLs: $($blocked -join '; ')"
+          }
+
+      - name: Package artifacts
+        run: |
+          $ver = "${{ needs.resolve-version.outputs.version }}"
+          $arch = "${{ matrix.arch }}"
+          $src = ".\build\windows-release"
+          $stage = ".\release-stage"
+          New-Item -ItemType Directory -Path $stage | Out-Null
+
+          $binZip = Join-Path $stage "clipp-$ver-windows-$arch.zip"
+          Compress-Archive -Path "$src\clipp.exe","$src\clipp.com" -DestinationPath $binZip
+          Write-Host "Created $binZip"
+
+          $pdbs = @(Get-ChildItem -Path "$src\*.pdb")
+          if ($pdbs.Count -eq 0) {
+            throw "No PDBs found in $src — symbol shipment is required."
+          }
+          $pdbZip = Join-Path $stage "clipp-$ver-windows-$arch-symbols.zip"
+          Compress-Archive -Path ($pdbs | ForEach-Object { $_.FullName }) -DestinationPath $pdbZip
+          Write-Host "Created $pdbZip with $($pdbs.Count) PDB(s)"
+
+          Get-ChildItem $stage | Format-Table Name, Length
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.arch }}
+          path: release-stage/*
+          if-no-files-found: error
+          retention-days: 1
+
+  build-macos:
+    name: Build macOS (arm64)
+    needs: resolve-version
+    runs-on: macos-latest
+    env:
+      CLIPP_CACHE_DIR: ${{ github.workspace }}/clipp-cache
+      VCPKG_ROOT: ${{ github.workspace }}/v
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-cache
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/vcpkg-cache,readwrite
+    steps:
+      - name: Checkout clipp
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: brew install autoconf autoconf-archive automake libtool ninja
+
+      - name: Read vcpkg baseline
+        id: vcpkg-baseline
+        run: |
+          baseline="$(python3 - <<'PY'
+          import json
+          with open("src/vcpkg.json", encoding="utf-8") as manifest_file:
+              manifest = json.load(manifest_file)
+          print(manifest.get("builtin-baseline", ""))
+          PY
+          )"
+          if [[ -z "$baseline" ]]; then
+            echo "src/vcpkg.json must define builtin-baseline for CI." >&2
+            exit 1
+          fi
+          echo "ref=$baseline" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout vcpkg
+        run: |
+          git clone --no-tags https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" checkout --detach "${{ steps.vcpkg-baseline.outputs.ref }}"
+
+      - name: Bootstrap vcpkg
+        run: |
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+
+      - name: Prepare vcpkg binary cache
+        run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+
+      - name: Cache vcpkg binaries
+        uses: actions/cache@v5
+        with:
+          path: vcpkg-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-vcpkg-
+
+      - name: Build Release
+        run: ./scripts/build_macos.sh
+
+      - name: Verify macOS app bundle
+        run: |
+          app="build/Release/Clipp.app"
+          if [[ ! -d "$app" ]]; then
+            echo "Expected Clipp.app at $app but it is missing." >&2
+            find build -name 'Clipp.app' -type d -print
+            exit 1
+          fi
+          for path in \
+            "$app/Contents/MacOS/clipp" \
+            "$app/Contents/Resources/Clipp.icns" \
+            "$app/Contents/Resources/ClippMenuBarTemplate.png" \
+            "$app/Contents/Resources/Clipboard4DevAspect-macos-1024-transparent.png" \
+            "$app/Contents/Info.plist"
+          do
+            if [[ ! -e "$path" ]]; then
+              echo "Missing expected bundle path: $path" >&2
+              exit 1
+            fi
+          done
+          if [[ ! -x "$app/Contents/MacOS/clipp" ]]; then
+            echo "App executable is not executable: $app/Contents/MacOS/clipp" >&2
+            exit 1
+          fi
+
+      - name: Package artifact
+        run: |
+          ver="${{ needs.resolve-version.outputs.version }}"
+          mkdir -p release-stage
+          # ditto (not zip) preserves macOS metadata correctly; --sequesterRsrc keeps
+          # the archive shape macOS expects; --keepParent puts Clipp.app at the root.
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent \
+            "build/Release/Clipp.app" \
+            "release-stage/clipp-$ver-macos-arm64.zip"
+          ls -la release-stage/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: release-stage/*
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Create release
+    needs: [resolve-version, build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: |
+          ls -la artifacts/
+          echo "Total: $(ls artifacts/ | wc -l) files"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: 'artifacts/*'
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.resolve-version.outputs.tag }}
+          name: ${{ needs.resolve-version.outputs.tag }}
+          draft: ${{ needs.resolve-version.outputs.draft == 'true' }}
+          prerelease: false
+          generate_release_notes: true
+          files: artifacts/*
+          fail_on_unmatched_files: true
