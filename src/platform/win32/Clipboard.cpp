@@ -150,7 +150,65 @@ static UINT CanUploadToCloudClipboardFormat() {
     return format;
 }
 
+// Remote-session clipboard redirectors (RDP and friends) set
+// CanIncludeInClipboardHistory and CanUploadToCloudClipboard on every
+// redirected clipboard write, regardless of the source app — they treat
+// remote-session content as not-for-history by default. Those markers
+// therefore aren't a meaningful "the source app marked this private" signal
+// when one of these processes owns the clipboard, and trusting them would
+// flag every RDP-pasted item as private.
+//
+// `rdpclip.exe` is the redirector on the RDP server side (when Clipp runs on
+// the RDP host); `mstsc.exe` / `msrdc.exe` are the redirectors on the RDP
+// client side (when Clipp runs on the local box that RDP'd out). Both
+// directions matter.
+static bool ClipboardOwnerIsRemoteSessionRedirector() {
+    const HWND owner = GetClipboardOwner();
+    if (owner == nullptr) {
+        return false;
+    }
+
+    DWORD pid = 0;
+    GetWindowThreadProcessId(owner, &pid);
+    if (pid == 0) {
+        return false;
+    }
+
+    const HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (proc == nullptr) {
+        return false;
+    }
+
+    wchar_t path[MAX_PATH] = {};
+    DWORD size = MAX_PATH;
+    bool isRedirector = false;
+    if (QueryFullProcessImageNameW(proc, 0, path, &size)) {
+        const wchar_t* base = wcsrchr(path, L'\\');
+        const wchar_t* name = base != nullptr ? base + 1 : path;
+
+        static constexpr const wchar_t* kKnownRedirectors[] = {
+            L"rdpclip.exe", // Microsoft RDP server-side redirector
+            L"mstsc.exe",   // Microsoft Remote Desktop Connection (client)
+            L"msrdc.exe",   // Microsoft Remote Desktop (newer client)
+        };
+        for (const wchar_t* known : kKnownRedirectors) {
+            if (_wcsicmp(name, known) == 0) {
+                isRedirector = true;
+                break;
+            }
+        }
+    }
+    CloseHandle(proc);
+    return isRedirector;
+}
+
 static bool ClipboardSourceMarkedPrivate() {
+    // If a remote-session redirector wrote the clipboard, the privacy markers
+    // it sets are session-policy, not a source-app signal. Treat as unmarked.
+    if (ClipboardOwnerIsRemoteSessionRedirector()) {
+        return false;
+    }
+
     const UINT historyFormat = CanIncludeInClipboardHistoryFormat();
     const UINT cloudFormat = CanUploadToCloudClipboardFormat();
     if (historyFormat == 0 || cloudFormat == 0) {
