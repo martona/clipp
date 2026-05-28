@@ -39,6 +39,7 @@ if (APPLE)
     endif()
 
     option(CLIPP_MACOS_ENABLE_CODE_SIGNING "Enable macOS code signing for Xcode generator builds" OFF)
+    option(CLIPP_MACOS_ENABLE_HARDENED_RUNTIME "Enable the macOS hardened runtime (required for notarization)" OFF)
     set(CLIPP_MACOS_DEVELOPMENT_TEAM "" CACHE STRING "Apple development team ID for signing")
     set(CLIPP_MACOS_CODE_SIGN_IDENTITY "" CACHE STRING "Apple code signing identity")
 endif()
@@ -269,7 +270,21 @@ elseif (APPLE)
                 XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "${CLIPP_MACOS_CODE_SIGN_IDENTITY}"
                 XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Manual"
                 XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${CLIPP_MACOS_DEVELOPMENT_TEAM}"
+                # Explicit entitlements file. Without this, Xcode auto-injects
+                # com.apple.security.get-task-allow=true, which makes notarization
+                # fail. The file pins get-task-allow=false; add other entitlements
+                # here if/when we need them.
+                XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/macos/Clipp.entitlements"
             )
+            if (CLIPP_MACOS_ENABLE_HARDENED_RUNTIME)
+                # Hardened runtime + secure timestamp are notarization prerequisites.
+                # OTHER_CODE_SIGN_FLAGS passes --timestamp through to codesign; the
+                # ENABLE_HARDENED_RUNTIME attribute is what adds --options=runtime.
+                set_target_properties(clipp PROPERTIES
+                    XCODE_ATTRIBUTE_ENABLE_HARDENED_RUNTIME "YES"
+                    XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS "--timestamp"
+                )
+            endif()
         else()
             set_target_properties(clipp PROPERTIES
                 XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
