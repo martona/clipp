@@ -250,12 +250,17 @@ jobs:
 
       - name: Verify macOS app bundle
         run: |
-          app="build/Release/Clipp.app"
-          if [[ ! -d "$app" ]]; then
-            echo "Expected Clipp.app at $app but it is missing." >&2
+          # build_macos.sh chooses the output path based on whether xcode-select
+          # points at Xcode.app (build/Release/Clipp.app) or the Command Line
+          # Tools (build/Clipp.app). GitHub runners default to the CLT.
+          app="$(find build -maxdepth 3 -name 'Clipp.app' -type d -print -quit)"
+          if [[ -z "$app" || ! -d "$app" ]]; then
+            echo "Could not find Clipp.app under build/." >&2
             find build -name 'Clipp.app' -type d -print
             exit 1
           fi
+          echo "Found app bundle at: $app"
+          echo "APP_PATH=$app" >> "$GITHUB_ENV"
           for path in \
             "$app/Contents/MacOS/clipp" \
             "$app/Contents/Resources/Clipp.icns" \
@@ -280,7 +285,7 @@ jobs:
           # ditto (not zip) preserves macOS metadata correctly; --sequesterRsrc keeps
           # the archive shape macOS expects; --keepParent puts Clipp.app at the root.
           /usr/bin/ditto -c -k --sequesterRsrc --keepParent \
-            "build/Release/Clipp.app" \
+            "$APP_PATH" \
             "release-stage/clipp-$ver-macos-arm64.zip"
           ls -la release-stage/
 
