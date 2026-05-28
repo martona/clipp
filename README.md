@@ -83,6 +83,22 @@ Download the disk image or zip for Apple Silicon from the [latest release](https
 
 iOS distribution is not yet set up. Until TestFlight or App Store builds are published, the only way to install on a physical device is to build from source via Xcode (see [BUILDING.md](BUILDING.md#ios-device)).
 
+### Verifying downloads
+
+Every release zip is attested via Sigstore — you can confirm it's the unmodified output of this repo's [release workflow](.github/workflows/_release.yml) before running anything:
+
+```sh
+gh attestation verify clipp-<version>-<os>-<arch>.zip --repo martona/clipp
+```
+
+Requires the [GitHub CLI](https://cli.github.com/). The verification ties the zip's SHA256 to the exact CI run that built it, on the exact commit. Tampering anywhere in the chain — replaced upload, swapped artifact, modified zip contents — makes verification fail.
+
+Windows binaries inside the zip are additionally Authenticode-signed via Microsoft Trusted Signing, which you can inspect via Properties → Digital Signatures or:
+
+```powershell
+Get-AuthenticodeSignature .\clipp.exe
+```
+
 ## Usage
 
 ### First run
