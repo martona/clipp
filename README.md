@@ -69,8 +69,6 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Installation
 
-Prebuilt binaries are not yet published. The instructions below describe what installation will look like once releases are set up; in the meantime, see [Building From Source](#building-from-source).
-
 ### Windows
 
 Download the zip for your architecture from the [latest release](https://github.com/martona/clipp/releases/latest), extract it anywhere, and run `clipp.exe`. The app writes to HKCU\Software\Clipp under the registry, and registers itself to auto-start with Windows, but otherwise leaves your system alone. To undo the latter (and stop Clipp from automatically starting), just use the Exit option in either the tray menu or the main app window. Launch via `clipp.com` instead of `clipp.exe` if you want clipp's stdout attached when starting from `cmd` or PowerShell — useful for debugging, but most users won't need it.
@@ -97,6 +95,14 @@ Windows binaries inside the zip are additionally Authenticode-signed via Microso
 
 ```powershell
 Get-AuthenticodeSignature .\clipp.exe
+```
+
+macOS bundles are Developer ID-signed and notarized by Apple, with the notarization ticket stapled into the `.app`. Gatekeeper validates this offline on first launch, so no warning dialog appears. To inspect:
+
+```sh
+spctl --assess --type execute --verbose Clipp.app
+stapler validate Clipp.app
+codesign -dvvv Clipp.app
 ```
 
 ## Usage
@@ -142,7 +148,7 @@ This section covers runtime issues. For build problems, see [BUILDING.md's troub
 
 **Windows: clipp doesn't appear in the system tray.** Windows hides tray icons by default. Click the ^ arrow next to the clock and drag the Clipp icon out of the overflow area to keep it visible.
 
-**macOS: Gatekeeper warning on first launch of a self-built binary.** Right-click the app and choose *Open* once for unsigned local builds. Notarized release builds (once published) won't trigger this.
+**macOS: Gatekeeper warning on first launch of a self-built binary.** Right-click the app and choose *Open* once for unsigned local builds. Notarized release builds don't trigger this.
 
 ## Fervently Anticipated Questions
 

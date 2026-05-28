@@ -61,6 +61,12 @@ if (NOT _clipp_version_count EQUAL 4)
     message(FATAL_ERROR
         "CLIPP_VERSION must be W.X.Y.Z (4 dot-separated integers); got '${CLIPP_VERSION}'")
 endif()
+foreach(_part IN LISTS _clipp_version_parts)
+    if (NOT _part MATCHES "^[0-9]+$")
+        message(FATAL_ERROR
+            "CLIPP_VERSION components must be non-negative integers; got '${_part}' in '${CLIPP_VERSION}'")
+    endif()
+endforeach()
 list(GET _clipp_version_parts 0 CLIPP_VERSION_MAJOR)
 list(GET _clipp_version_parts 1 CLIPP_VERSION_MINOR)
 list(GET _clipp_version_parts 2 CLIPP_VERSION_PATCH)
