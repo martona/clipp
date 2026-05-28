@@ -49,6 +49,30 @@ project(clipp LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Version (W.X.Y.Z). Passed as -DCLIPP_VERSION=...; defaults to 0.0.0.0 so plain
+# `cmake ...` / `./scripts/build_*` runs without any version flag still configure.
+if (NOT DEFINED CLIPP_VERSION OR CLIPP_VERSION STREQUAL "")
+    set(CLIPP_VERSION "0.0.1.4")
+endif()
+
+string(REPLACE "." ";" _clipp_version_parts "${CLIPP_VERSION}")
+list(LENGTH _clipp_version_parts _clipp_version_count)
+if (NOT _clipp_version_count EQUAL 4)
+    message(FATAL_ERROR
+        "CLIPP_VERSION must be W.X.Y.Z (4 dot-separated integers); got '${CLIPP_VERSION}'")
+endif()
+list(GET _clipp_version_parts 0 CLIPP_VERSION_MAJOR)
+list(GET _clipp_version_parts 1 CLIPP_VERSION_MINOR)
+list(GET _clipp_version_parts 2 CLIPP_VERSION_PATCH)
+list(GET _clipp_version_parts 3 CLIPP_VERSION_BUILD)
+set(CLIPP_VERSION_3PART "${CLIPP_VERSION_MAJOR}.${CLIPP_VERSION_MINOR}.${CLIPP_VERSION_PATCH}")
+message(STATUS "clipp version: ${CLIPP_VERSION} (3-part: ${CLIPP_VERSION_3PART})")
+
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/version.h.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/version.h"
+    @ONLY)
+
 if (MSVC AND WIN32)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     # Use /Z7 (debug info embedded in each .obj) instead of /Zi (separate
@@ -120,7 +144,10 @@ set(CLIPP_THIRD_PARTY_LIBS
 )
 
 function(clipp_apply_common_target_settings target_name)
-    target_include_directories(${target_name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_include_directories(${target_name} PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${CMAKE_CURRENT_BINARY_DIR}/generated"   # generated version.h lives here
+    )
     target_link_libraries(${target_name} PRIVATE ${CLIPP_THIRD_PARTY_LIBS})
 
     if (MSVC)
@@ -132,6 +159,16 @@ if (WIN32)
     enable_language(RC)
 
     set(CLIPP_WINDOWS_OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/windows-$<LOWER_CASE:$<CONFIG>>")
+
+    # Substitute @CLIPP_VERSION_*@ into the resource script. The generated .rc
+    # references "resource.h" and "resources\\..." relative paths; rc.exe finds
+    # them via /i include paths (clipp_apply_common_target_settings adds src/
+    # for the main exe; the shim adds it explicitly below).
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/clipp-win32.rc.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/clipp-win32.rc"
+        @ONLY)
+    set(CLIPP_WIN32_RC "${CMAKE_CURRENT_BINARY_DIR}/generated/clipp-win32.rc")
 
     file(GLOB CLIPP_WIN32_PLATFORM_SOURCES CONFIGURE_DEPENDS
         "src/platform/win32/*.cpp"
@@ -154,7 +191,7 @@ if (WIN32)
     add_executable(clipp-win32 WIN32
         ${CLIPP_COMMON_SOURCES}
         ${CLIPP_WIN32_PLATFORM_SOURCES}
-        "src/clipp-win32.rc"
+        "${CLIPP_WIN32_RC}"
         # CMake auto-recognizes .manifest sources and routes them to mt.exe
         # at link time. Replaces a hand-rolled /MANIFEST:EMBED + /MANIFESTINPUT
         # link-option pair that worked in Release (where CMake's MT step is
@@ -189,8 +226,11 @@ if (WIN32)
 
     add_executable(clipp-win32-shim
         "src/clipp-win32-shim/clipp-win32-shim.cpp"
-        "src/clipp-win32.rc"
+        "${CLIPP_WIN32_RC}"
     )
+    # The generated .rc lives outside src/, so the rc compiler needs an explicit
+    # /i path to find "resource.h" and the resources\\*.{ico,png} references.
+    target_include_directories(clipp-win32-shim PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_compile_definitions(clipp-win32-shim PRIVATE WIN32 UNICODE _UNICODE _CONSOLE CLIPP_RESOURCE_SHIM)
     if (MSVC)
         target_compile_options(clipp-win32-shim PRIVATE /utf-8)
@@ -256,11 +296,17 @@ elseif (APPLE)
         ${SERVICEMANAGEMENT_FRAMEWORK}
     )
 
+    # CMake substitutes ${MACOSX_BUNDLE_*} target properties into Info.plist.in
+    # automatically at build time (no separate configure_file needed). The 3-part
+    # form is what Apple requires for CFBundleShortVersionString; the 4-part full
+    # version goes in CFBundleVersion.
     set_target_properties(clipp PROPERTIES
         MACOSX_BUNDLE_BUNDLE_NAME "Clipp"
         MACOSX_BUNDLE_GUI_IDENTIFIER "net.clipp.app"
         MACOSX_BUNDLE_ICON_FILE "Clipp.icns"
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/macos/Info.plist.in"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${CLIPP_VERSION_3PART}"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${CLIPP_VERSION}"
         XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "net.clipp.app"
     )
 

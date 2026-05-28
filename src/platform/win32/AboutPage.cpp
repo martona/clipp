@@ -2,6 +2,7 @@
 
 #include "resource.h"
 #include "platform/uistrings.h"
+#include "version.h"
 
 #include <cstdint>
 #include <utility>
@@ -157,7 +158,9 @@ AboutPage::AboutPage(std::function<void()> diagnosticsCallback)
     content.Padding(ThicknessHelper::FromUniformLength(24));
     content.Spacing(14);
 
-    content.Children().Append(CreateTextBlock(CLP_W(CLP_UI_ABOUT_TITLE), 28, 1.0, true));
+    content.Children().Append(CreateTextBlock(
+        CLP_W(CLP_UI_ABOUT_TITLE) L" v" CLP_W(CLIPP_VERSION_STRING_3PART),
+        28, 1.0, true));
     content.Children().Append(CreateTextBlock(
         CLP_W(CLP_UI_TAGLINE),
         14,

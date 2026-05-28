@@ -83,7 +83,10 @@
 #define CLP_UI_LIVE_DIAGNOSTIC_OUTPUT "Live diagnostic output from Clipp."
 #define CLP_UI_COPY_LOG_LINES_FORMAT "Copy %d lines"
 
-#define CLP_UI_ABOUT_TITLE "Clipp v1.0"
+// Just the product name; About screens compose "<title> v<version>" at the use
+// site using the platform's version source (CLIPP_VERSION_STRING_3PART from
+// version.h for Windows/macOS, Bundle.main for iOS).
+#define CLP_UI_ABOUT_TITLE "Clipp"
 #define CLP_UI_TAGLINE "Secure cross-platform clipboard sync for trusted devices."
 #define CLP_UI_PROJECT "Project"
 #define CLP_UI_COPYRIGHT "Copyright (C) 2026 Marton Anka"

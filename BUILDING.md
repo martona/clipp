@@ -8,9 +8,9 @@ This document covers building Clipp for Windows, macOS, and iOS from a source ch
 - [Prerequisites](#prerequisites)
 - [Building](#building)
 - [Build outputs](#build-outputs)
+- [Versioning](#versioning)
 - [Environment variables](#environment-variables)
 - [Code signing](#code-signing)
-- [Visual Studio standalone project](#visual-studio-standalone-project)
 - [Troubleshooting](#troubleshooting)
 
 ## Tested platforms
@@ -86,17 +86,19 @@ Parameters (all optional):
 | `-VcpkgRoot`   | auto-located                  | vcpkg root directory                                                         |
 | `-Generator`   | auto (Ninja → NMake)          | CMake generator override                                                     |
 | `-Parallel`    | `[Environment]::ProcessorCount` | Parallel build jobs                                                        |
+| `-Version`     | (unset → CMake default)       | Stamp the binary with this version (`W.X.Y.Z`). See [Versioning](#versioning). |
 | `-DisableCodeSigning` | (off)                  | Skip artifact signing even if all `ARTIFACT_SIGNING_*` env vars are set. CI uses this. |
 
 ### macOS
 
 ```sh
-./scripts/build_macos.sh           # Release build (default)
-./scripts/build_macos.sh --debug   # Debug build
-./scripts/build_macos.sh --clean   # wipe build/ first
+./scripts/build_macos.sh                       # Release build (default)
+./scripts/build_macos.sh --debug               # Debug build
+./scripts/build_macos.sh --clean               # wipe build/ first
+./scripts/build_macos.sh --version 1.2.3.4     # stamp the bundle with this version
 ```
 
-Flags: `--debug`, `--release`, `--clean`. All optional.
+Flags: `--debug`, `--release`, `--clean`, `--version W.X.Y.Z`, `--notarize`. All optional. See [Versioning](#versioning) for the version flag's behavior.
 
 The script:
 
@@ -145,6 +147,38 @@ CI does not currently build for physical devices; device builds are produced man
 
 `clipp.com` is a small console shim that re-launches `clipp.exe` with stdio attached — useful when running from `cmd.exe` / PowerShell where the GUI subsystem detaches by default.
 
+## Versioning
+
+The project version is a 4-part `W.X.Y.Z` string. The canonical default lives in the `set(CLIPP_VERSION "...")` line near the top of [`CMakeLists.txt`](CMakeLists.txt); the build scripts pass that through to the compiler so all Windows/macOS builds pick it up automatically. Override per-invocation with `--version W.X.Y.Z` on macOS or `-Version W.X.Y.Z` on Windows.
+
+Where it ends up:
+
+| Platform | Build-time source                                    | Stamped into                                                          |
+|----------|------------------------------------------------------|-----------------------------------------------------------------------|
+| Windows  | `-DCLIPP_VERSION=...` from build script              | `clipp.exe` / `clipp.com` `VERSIONINFO` resource; `version.h`         |
+| macOS    | same                                                 | `Clipp.app/Contents/Info.plist` `CFBundle*Version`; `version.h`       |
+| iOS      | `ios/Info.plist` (read at runtime via `Bundle.main`) | The two iOS bundles' `CFBundleShortVersionString` / `CFBundleVersion` |
+
+iOS doesn't share the CMake pipeline (Xcode drives the iOS build), so its version is held separately in [`ios/Info.plist`](ios/Info.plist) and [`ios/ClippShareExtension/Info.plist`](ios/ClippShareExtension/Info.plist). The iOS app reads `CFBundleShortVersionString` at runtime via `Bundle.main`, so updating the plist is all that's required to refresh the About screen.
+
+### Bumping for a release
+
+To set the version everywhere in one shot, run from macOS:
+
+```sh
+./scripts/bump_version.sh 1.2.3.4
+```
+
+This rewrites the `CLIPP_VERSION` default in `CMakeLists.txt` and stamps the two iOS plists' `CFBundleShortVersionString` (3-part: `1.2.3`) and `CFBundleVersion` (full 4-part) keys. The script does not commit or tag — review with `git diff`, then:
+
+```sh
+git commit -am "Bump version to 1.2.3.4"
+git tag v1.2.3.4
+git push && git push --tags
+```
+
+Pushing the tag triggers the release workflow. The script needs macOS for `/usr/libexec/PlistBuddy`.
+
 ## Environment variables
 
 Most users won't need to set any of these; defaults work out of the box.
@@ -184,18 +218,6 @@ Set `APPLE_CODESIGN_IDENTITY` to a codesign identity hash or common name. The Ni
 ### iOS
 
 Pass `--disable-code-signing` to `build_ios.sh` for simulator builds. Device builds use Xcode's automatic or manual signing configured through `ios/Clipp.xcodeproj`.
-
-## Visual Studio standalone project
-
-For working in Visual Studio without going through CMake, open the solution at [`clipp.slnx`](clipp.slnx). It wraps three project files with the build dependencies wired up:
-
-- [`src/clipp-win32.vcxproj`](src/clipp-win32.vcxproj) — the main executable
-- [`src/clipp-win32-darkmode32/darkmode32.vcxproj`](src/clipp-win32-darkmode32/darkmode32.vcxproj) — the dark-mode static lib
-- [`src/clipp-win32-shim/clipp-win32-shim.vcxproj`](src/clipp-win32-shim/clipp-win32-shim.vcxproj) — the console shim
-
-Open `clipp.slnx` rather than any individual `.vcxproj`; the projects are not standalone (they depend on each other via the solution).
-
-This path is a developer convenience, **not** the source of truth: the CMake build wins. If you add or remove source files in `src/`, update both `CMakeLists.txt` (where explicit entries exist) and the relevant `.vcxproj` — the `.vcxproj` files do not pick up new files automatically.
 
 ## Troubleshooting
 

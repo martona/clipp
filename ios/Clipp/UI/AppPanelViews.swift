@@ -996,6 +996,12 @@ private struct DiagnosticsTextView: UIViewRepresentable {
     }
 }
 
+// Read the iOS bundle's CFBundleShortVersionString at runtime so the About
+// screen tracks whatever the current Info.plist says. The plist value is
+// manually maintained for iOS releases (no CMake driver on the iOS side).
+private let clippAppVersion: String =
+    (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "0.0.0"
+
 private struct AboutPanelView: View {
     let openDiagnostics: () -> Void
 
@@ -1010,7 +1016,7 @@ private struct AboutPanelView: View {
                         .accessibilityHidden(true)
 
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(CLP_UI_ABOUT_TITLE)
+                        Text("\(CLP_UI_ABOUT_TITLE) v\(clippAppVersion)")
                             .font(.title2.weight(.semibold))
 
                         Text(CLP_UI_TAGLINE)

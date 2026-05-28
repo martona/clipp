@@ -8,36 +8,48 @@ cd "$REPO_ROOT"
 IDENTITY="${APPLE_CODESIGN_IDENTITY:-}"
 TEAM_ID="${APPLE_TEAM_ID:-}"
 CONFIG="Release"
+VERSION=""
 clean=0
 notarize=0
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [--debug | --release] [--clean] [--notarize]
+Usage: $(basename "$0") [--debug | --release] [--clean] [--notarize] [--version W.X.Y.Z]
 
 Builds the macOS app.
 
 Options:
-  --debug      Build the Debug configuration.
-  --release    Build the Release configuration (default).
-  --clean      Remove the build directory before building.
-  --notarize   After signing, submit to Apple's notary service and staple.
-               Requires APPLE_CODESIGN_IDENTITY to be a Developer ID Application
-               cert and the App Store Connect API credentials in env:
-                 APPLE_API_KEY_PATH   (path to AuthKey_XXXX.p8)
-                 APPLE_API_KEY_ID     (10-char key id)
-                 APPLE_API_ISSUER_ID  (team issuer UUID)
+  --debug          Build the Debug configuration.
+  --release        Build the Release configuration (default).
+  --clean          Remove the build directory before building.
+  --version VER    Stamp the binary and bundle with this version (W.X.Y.Z).
+                   Omit to let CMake default to 0.0.0.0 (local dev builds).
+  --notarize       After signing, submit to Apple's notary service and staple.
+                   Requires APPLE_CODESIGN_IDENTITY to be a Developer ID Application
+                   cert and the App Store Connect API credentials in env:
+                     APPLE_API_KEY_PATH   (path to AuthKey_XXXX.p8)
+                     APPLE_API_KEY_ID     (10-char key id)
+                     APPLE_API_ISSUER_ID  (team issuer UUID)
 EOF
 }
 
-for arg in "$@"; do
-    case "$arg" in
-        --debug) CONFIG="Debug" ;;
-        --release) CONFIG="Release" ;;
-        --clean) clean=1 ;;
-        --notarize) notarize=1 ;;
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --debug) CONFIG="Debug"; shift ;;
+        --release) CONFIG="Release"; shift ;;
+        --clean) clean=1; shift ;;
+        --notarize) notarize=1; shift ;;
+        --version)
+            if [[ -z "${2:-}" ]]; then
+                echo "[!] --version requires a value (e.g. --version 1.2.3.4)" >&2
+                exit 2
+            fi
+            VERSION="$2"
+            shift 2
+            ;;
+        --version=*) VERSION="${1#--version=}"; shift ;;
         -h|--help) usage; exit 0 ;;
-        *) echo "[!] Unknown argument: $arg" >&2; usage >&2; exit 2 ;;
+        *) echo "[!] Unknown argument: $1" >&2; usage >&2; exit 2 ;;
     esac
 done
 
@@ -132,6 +144,10 @@ CMAKE_ARGS=(
     -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE"
     -DVCPKG_INSTALL_OPTIONS="--clean-buildtrees-after-build;--clean-packages-after-build"
 )
+
+if [[ -n "$VERSION" ]]; then
+    CMAKE_ARGS+=(-DCLIPP_VERSION="$VERSION")
+fi
 
 if [[ "$USE_XCODE" == "1" ]]; then
     echo "[*] Generating Xcode build files..."

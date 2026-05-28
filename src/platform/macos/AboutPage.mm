@@ -4,6 +4,7 @@
 
 #include "UiHelpers.h"
 #include "platform/uistrings.h"
+#include "version.h"
 
 #include <utility>
 
@@ -147,7 +148,8 @@ void MacOSAboutPage::BuildView() {
     contentStack.distribution = NSStackViewDistributionFill;
     contentStack.spacing = 14.0;
 
-    NSTextField* heading = [NSTextField labelWithString:CLP_NS(CLP_UI_ABOUT_TITLE)];
+    NSTextField* heading = [NSTextField labelWithString:
+        CLP_NS(CLP_UI_ABOUT_TITLE) @" v" CLP_NS(CLIPP_VERSION_STRING_3PART)];
     heading.translatesAutoresizingMaskIntoConstraints = NO;
     heading.font = [NSFont systemFontOfSize:28 weight:NSFontWeightSemibold];
     heading.textColor = [NSColor labelColor];

@@ -10,6 +10,7 @@
 #include "SettingsPage.h"
 #include "TerminalLogView.h"
 #include "platform/uistrings.h"
+#include "version.h"
 
 #import <AppKit/AppKit.h>
 #import <ServiceManagement/ServiceManagement.h>
@@ -846,7 +847,7 @@ static void LogReflectorCallback(const std::wstring& line) {
     }
     alert.messageText = CLP_NS(CLP_UI_ABOUT_CLIPP);
     alert.informativeText =
-        CLP_NS(CLP_UI_ABOUT_TITLE) @"\n"
+        CLP_NS(CLP_UI_ABOUT_TITLE) @" v" CLP_NS(CLIPP_VERSION_STRING_3PART) @"\n"
         CLP_NS(CLP_UI_TAGLINE) @"\n\n"
         CLP_NS(CLP_UI_COPYRIGHT) @"\n"
         CLP_NS(CLP_UI_MIT_LICENSE) @"\n\n"

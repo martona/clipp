@@ -1,0 +1,126 @@
+// Microsoft Visual C++ generated resource script.
+// CMake-templated from clipp-win32.rc.in. Do not edit the generated .rc directly.
+//
+#include "resource.h"
+
+#define APSTUDIO_READONLY_SYMBOLS
+/////////////////////////////////////////////////////////////////////////////
+//
+// Generated from the TEXTINCLUDE 2 resource.
+//
+#include "winres.h"
+
+/////////////////////////////////////////////////////////////////////////////
+#undef APSTUDIO_READONLY_SYMBOLS
+
+/////////////////////////////////////////////////////////////////////////////
+// English (United States) resources
+
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_ENU)
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+#pragma code_page(1252)
+
+#ifdef APSTUDIO_INVOKED
+/////////////////////////////////////////////////////////////////////////////
+//
+// TEXTINCLUDE
+//
+
+1 TEXTINCLUDE
+BEGIN
+    "resource.h\0"
+END
+
+2 TEXTINCLUDE
+BEGIN
+    "#include ""winres.h""\r\n"
+    "\0"
+END
+
+3 TEXTINCLUDE
+BEGIN
+    "\r\n"
+    "\0"
+END
+
+#endif    // APSTUDIO_INVOKED
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Icon
+//
+
+IDI_CLIPP_ICON          ICON                    "resources\\Clipboard4DevAspect-macos-1024-transparent.ico"
+
+#ifndef CLIPP_RESOURCE_SHIM
+/////////////////////////////////////////////////////////////////////////////
+//
+// Binary resources
+//
+
+IDB_CLIPP_ABOUT_IMAGE   RCDATA                  "resources\\Clipboard4DevAspect-macos-1024-transparent.png"
+#endif
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Version
+//
+
+#ifdef CLIPP_RESOURCE_SHIM
+#define CLIPP_RESOURCE_FILE_DESCRIPTION "clipp.com"
+#define CLIPP_RESOURCE_INTERNAL_NAME "clipp.com"
+#define CLIPP_RESOURCE_ORIGINAL_FILENAME "clipp.com"
+#else
+#define CLIPP_RESOURCE_FILE_DESCRIPTION "clipp.exe"
+#define CLIPP_RESOURCE_INTERNAL_NAME "clipp.exe"
+#define CLIPP_RESOURCE_ORIGINAL_FILENAME "clipp.exe"
+#endif
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION @CLIPP_VERSION_MAJOR@,@CLIPP_VERSION_MINOR@,@CLIPP_VERSION_PATCH@,@CLIPP_VERSION_BUILD@
+ PRODUCTVERSION @CLIPP_VERSION_MAJOR@,@CLIPP_VERSION_MINOR@,@CLIPP_VERSION_PATCH@,@CLIPP_VERSION_BUILD@
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "Marton Anka"
+            VALUE "FileDescription", CLIPP_RESOURCE_FILE_DESCRIPTION
+            VALUE "FileVersion", "@CLIPP_VERSION@"
+            VALUE "InternalName", CLIPP_RESOURCE_INTERNAL_NAME
+            VALUE "LegalCopyright", "Copyright (C) 2026 Marton Anka"
+            VALUE "OriginalFilename", CLIPP_RESOURCE_ORIGINAL_FILENAME
+            VALUE "ProductName", "clipp"
+            VALUE "ProductVersion", "@CLIPP_VERSION@"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
+
+#endif    // English (United States) resources
+/////////////////////////////////////////////////////////////////////////////
+
+
+
+#ifndef APSTUDIO_INVOKED
+/////////////////////////////////////////////////////////////////////////////
+//
+// Generated from the TEXTINCLUDE 3 resource.
+//
+
+
+/////////////////////////////////////////////////////////////////////////////
+#endif    // not APSTUDIO_INVOKED
+

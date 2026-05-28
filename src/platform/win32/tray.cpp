@@ -7,6 +7,7 @@
 #include "resource.h"
 #include "xaml_dialog.h"
 #include "platform/uistrings.h"
+#include "version.h"
 #include "clipp-win32-darkmode32/DMSubclass.h"
 #pragma comment(lib, "darkmode32.lib")
 
@@ -83,7 +84,7 @@ LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             case ID_TRAY_ABOUT:
                 DarkMode::DarkMessageBox(
                     g_trayWindow,
-                    CLP_W(CLP_UI_ABOUT_TITLE) L"\n"
+                    CLP_W(CLP_UI_ABOUT_TITLE) L" v" CLP_W(CLIPP_VERSION_STRING_3PART) L"\n"
                     CLP_W(CLP_UI_TAGLINE) L"\n\n"
                     CLP_W(CLP_UI_COPYRIGHT) L"\n"
                     CLP_W(CLP_UI_MIT_LICENSE) L"\n\n"

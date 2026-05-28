@@ -40,9 +40,9 @@
 	<key>CFBundlePackageType</key>
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>CFBundleShortVersionString</key>
-	<string>$(MARKETING_VERSION)</string>
+	<string>0.0.1</string>
 	<key>CFBundleVersion</key>
-	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<string>0.0.1.4</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSBonjourServices</key>

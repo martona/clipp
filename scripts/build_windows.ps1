@@ -15,6 +15,8 @@ param(
 
     [int]$Parallel = [Environment]::ProcessorCount,
 
+    [string]$Version = "",
+
     [switch]$DisableCodeSigning
 )
 
@@ -231,6 +233,10 @@ $configureArgs = @(
     "-DCMAKE_BUILD_TYPE=$BuildType",
     "-DVCPKG_INSTALL_OPTIONS=--clean-buildtrees-after-build;--clean-packages-after-build"
 )
+
+if ($Version) {
+    $configureArgs += "-DCLIPP_VERSION=$Version"
+}
 
 if (-not (Test-Path $cacheFile)) {
     $configureArgs += "-DCMAKE_TOOLCHAIN_FILE=$toolchainFile"
