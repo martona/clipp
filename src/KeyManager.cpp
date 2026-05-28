@@ -137,7 +137,7 @@
         CFDictionaryAddValue(query, kSecReturnData, kCFBooleanTrue);
         CFDictionaryAddValue(query, kSecMatchLimit, kSecMatchLimitOne);
         AddNoAuthenticationPrompt(query);
-        SetNetworkKeySynchronizable(query, kSecAttrSynchronizableAny);
+        SetNetworkKeySynchronizable(query, kCFBooleanFalse);
 
         OSStatus status = SecItemCopyMatching(query, outData);
         CFRelease(query);
@@ -176,8 +176,8 @@
         }
 
         CFDictionaryAddValue(addQuery, kSecValueData, plainData);
-        CFDictionaryAddValue(addQuery, kSecAttrAccessible, kSecAttrAccessibleAfterFirstUnlock);
-        SetNetworkKeySynchronizable(addQuery, kCFBooleanTrue);
+        CFDictionaryAddValue(addQuery, kSecAttrAccessible, kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly);
+        SetNetworkKeySynchronizable(addQuery, kCFBooleanFalse);
 
         OSStatus status = SecItemAdd(addQuery, nullptr);
         CFRelease(addQuery);
@@ -186,8 +186,8 @@
             CFMutableDictionaryRef fallbackQuery = CreateNetworkKeyQuery(account);
             if (fallbackQuery != nullptr) {
                 CFDictionaryAddValue(fallbackQuery, kSecValueData, plainData);
-                CFDictionaryAddValue(fallbackQuery, kSecAttrAccessible, kSecAttrAccessibleAfterFirstUnlock);
-                SetNetworkKeySynchronizable(fallbackQuery, kCFBooleanTrue);
+                CFDictionaryAddValue(fallbackQuery, kSecAttrAccessible, kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly);
+                SetNetworkKeySynchronizable(fallbackQuery, kCFBooleanFalse);
                 status = SecItemAdd(fallbackQuery, nullptr);
                 CFRelease(fallbackQuery);
             }
