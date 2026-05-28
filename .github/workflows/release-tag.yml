@@ -1,0 +1,51 @@
+name: Release (tag)
+
+# Auto-fires when a v* tag is pushed (typically by `git tag v1.2.3.4 && git
+# push --tags`, or by GitHub UI tag creation). Always creates a draft so the
+# release can be reviewed before publication — flip via `gh release edit
+# --draft=false v1.2.3.4` or the UI's Publish button.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.compute.outputs.version }}
+      tag: ${{ steps.compute.outputs.tag }}
+    steps:
+      - id: compute
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          if [[ -z "$version" || "$version" =~ [[:space:]] ]]; then
+            echo "::error::Invalid version derived from tag '$tag'"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Resolved: version=$version tag=$tag"
+
+  pipeline:
+    name: Build, sign, publish
+    needs: resolve
+    uses: ./.github/workflows/_release.yml
+    with:
+      version: ${{ needs.resolve.outputs.version }}
+      tag: ${{ needs.resolve.outputs.tag }}
+      draft: true
+    secrets: inherit

@@ -1,69 +1,39 @@
-name: Release
+name: Release pipeline (reusable)
+
+# Build + sign + package + attest + publish. Invoked from release-manual.yml
+# and release-tag.yml; not directly triggerable. Callers compute version/tag/
+# draft and pass them in.
 
 on:
-  push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
+  workflow_call:
     inputs:
       version:
-        description: 'Version (no v prefix, e.g. 0.0.0.1)'
         required: true
         type: string
-      publish:
-        description: 'Publish immediately (otherwise creates a draft)'
+        description: 'W.X.Y.Z (no v prefix)'
+      tag:
+        required: true
+        type: string
+        description: 'Full tag name including v prefix (e.g. v1.2.3.4)'
+      draft:
+        required: true
         type: boolean
-        default: false
+        description: 'Create the GitHub release as a draft (not published)'
 
 permissions:
-  contents: write       # create releases and upload assets
-  id-token: write       # sigstore OIDC for attestation
+  contents: write       # create release + upload assets
+  id-token: write       # sigstore OIDC for attestation + Azure OIDC for signing
   attestations: write   # write build provenance attestation
 
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  resolve-version:
-    name: Resolve version
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.compute.outputs.version }}
-      tag: ${{ steps.compute.outputs.tag }}
-      draft: ${{ steps.compute.outputs.draft }}
-    steps:
-      - id: compute
-        shell: bash
-        run: |
-          if [[ "${{ github.event_name }}" == "push" ]]; then
-            tag="${GITHUB_REF_NAME}"
-            version="${tag#v}"
-            # Tag-push releases still start as drafts so they can be reviewed
-            # in the UI before flipping the publish toggle.
-            draft="true"
-          else
-            version="${{ inputs.version }}"
-            tag="v${version}"
-            if [[ "${{ inputs.publish }}" == "true" ]]; then
-              draft="false"
-            else
-              draft="true"
-            fi
-          fi
-          if [[ -z "$version" || "$version" =~ [[:space:]] ]]; then
-            echo "::error::Invalid version: '$version'"
-            exit 1
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "draft=$draft" >> "$GITHUB_OUTPUT"
-          echo "Resolved: version=$version tag=$tag draft=$draft"
-
   build-windows:
     name: Build Windows (${{ matrix.arch }})
-    needs: resolve-version
     runs-on: ${{ matrix.runner }}
+    # environment: scope the OIDC token's `subject` claim to
+    # repo:martona/clipp:environment:release-signing. The Azure-side federated
+    # credential matches on that claim, so both manual and tag triggers
+    # authenticate through the same federated identity.
+    environment: release-signing
     strategy:
       fail-fast: false
       matrix:
@@ -134,7 +104,7 @@ jobs:
             ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ matrix.triplet }}-
 
       - name: Build Release
-        run: .\scripts\build_windows.ps1 -BuildType Release -Triplet $env:CLIPP_RELEASE_TRIPLET -VcVarsArch ${{ matrix.vcvars_arch }} -Version "${{ needs.resolve-version.outputs.version }}" -DisableCodeSigning
+        run: .\scripts\build_windows.ps1 -BuildType Release -Triplet $env:CLIPP_RELEASE_TRIPLET -VcVarsArch ${{ matrix.vcvars_arch }} -Version "${{ inputs.version }}" -DisableCodeSigning
 
       - name: Verify Windows artifacts
         run: |
@@ -161,9 +131,6 @@ jobs:
             throw "Release exe imports non-system runtime/dependency DLLs: $($blocked -join '; ')"
           }
 
-      # OIDC federated auth — no client-secret stored. Requires id-token: write
-      # (already granted at the workflow level for attestation) and a federated
-      # identity credential configured on the Azure side for this repo/branch.
       - name: Azure login (Trusted Signing)
         uses: azure/login@v2
         with:
@@ -195,7 +162,7 @@ jobs:
 
       - name: Package artifacts
         run: |
-          $ver = "${{ needs.resolve-version.outputs.version }}"
+          $ver = "${{ inputs.version }}"
           $arch = "${{ matrix.arch }}"
           $src = ".\build\windows-release"
           $stage = ".\release-stage"
@@ -225,7 +192,6 @@ jobs:
 
   build-macos:
     name: Build macOS (arm64)
-    needs: resolve-version
     runs-on: macos-latest
     env:
       CLIPP_CACHE_DIR: ${{ github.workspace }}/clipp-cache
@@ -278,7 +244,7 @@ jobs:
             ${{ runner.os }}-${{ runner.arch }}-vcpkg-
 
       - name: Build Release
-        run: ./scripts/build_macos.sh --version "${{ needs.resolve-version.outputs.version }}"
+        run: ./scripts/build_macos.sh --version "${{ inputs.version }}"
 
       - name: Verify macOS app bundle
         run: |
@@ -321,7 +287,7 @@ jobs:
 
       - name: Package artifact
         run: |
-          ver="${{ needs.resolve-version.outputs.version }}"
+          ver="${{ inputs.version }}"
           mkdir -p release-stage
           # ditto (not zip) preserves macOS metadata correctly; --sequesterRsrc keeps
           # the archive shape macOS expects; --keepParent puts Clipp.app at the root.
@@ -338,9 +304,9 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  release:
+  publish:
     name: Create release
-    needs: [resolve-version, build-windows, build-macos]
+    needs: [build-windows, build-macos]
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
@@ -362,9 +328,9 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.resolve-version.outputs.tag }}
-          name: ${{ needs.resolve-version.outputs.tag }}
-          draft: ${{ needs.resolve-version.outputs.draft == 'true' }}
+          tag_name: ${{ inputs.tag }}
+          name: ${{ inputs.tag }}
+          draft: ${{ inputs.draft }}
           prerelease: false
           generate_release_notes: true
           files: artifacts/*

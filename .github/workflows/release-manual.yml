@@ -1,0 +1,63 @@
+name: Release (manual)
+
+# Operator-triggered release. Default to draft; flip the `publish` input to
+# release immediately. Delegates the heavy lifting to _release.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (no v prefix, e.g. 0.0.0.1)'
+        required: true
+        type: string
+      publish:
+        description: 'Publish immediately (otherwise creates a draft)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.compute.outputs.version }}
+      tag: ${{ steps.compute.outputs.tag }}
+      draft: ${{ steps.compute.outputs.draft }}
+    steps:
+      - id: compute
+        shell: bash
+        run: |
+          version="${{ inputs.version }}"
+          tag="v${version}"
+          if [[ "${{ inputs.publish }}" == "true" ]]; then
+            draft="false"
+          else
+            draft="true"
+          fi
+          if [[ -z "$version" || "$version" =~ [[:space:]] ]]; then
+            echo "::error::Invalid version: '$version'"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "draft=$draft" >> "$GITHUB_OUTPUT"
+          echo "Resolved: version=$version tag=$tag draft=$draft"
+
+  pipeline:
+    name: Build, sign, publish
+    needs: resolve
+    uses: ./.github/workflows/_release.yml
+    with:
+      version: ${{ needs.resolve.outputs.version }}
+      tag: ${{ needs.resolve.outputs.tag }}
+      draft: ${{ needs.resolve.outputs.draft == 'true' }}
+    secrets: inherit
