@@ -193,6 +193,9 @@ jobs:
   build-macos:
     name: Build macOS (arm64)
     runs-on: macos-latest
+    # Same release-signing environment as the Windows job — protection rules
+    # (if/when added) apply to both platforms uniformly.
+    environment: release-signing
     env:
       CLIPP_CACHE_DIR: ${{ github.workspace }}/clipp-cache
       VCPKG_ROOT: ${{ github.workspace }}/v
@@ -243,8 +246,37 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-vcpkg-
 
-      - name: Build Release
-        run: ./scripts/build_macos.sh --version "${{ inputs.version }}"
+      # Imports the Developer ID Application cert into a temporary keychain
+      # scoped to this job. The action auto-cleans the keychain on job exit
+      # via its post-step, so the runner ends up in the same state it started.
+      - name: Import code signing certificate
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_P12_PASSWORD }}
+          keychain-password: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+
+      - name: Write App Store Connect API key
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          umask 077
+          printf '%s' "$APPLE_API_KEY_P8" > "${{ runner.temp }}/authkey.p8"
+          # Quick sanity-check: notarytool errors are noisy if the key is
+          # missing the PEM markers (e.g. someone double-base64'd it).
+          if ! grep -q "BEGIN PRIVATE KEY" "${{ runner.temp }}/authkey.p8"; then
+            echo "::error::APPLE_API_KEY_P8 secret doesn't look like a PEM .p8 file"
+            exit 1
+          fi
+
+      - name: Build Release (signed + notarized)
+        env:
+          APPLE_CODESIGN_IDENTITY: ${{ vars.APPLE_CODESIGN_IDENTITY }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          APPLE_API_KEY_PATH: ${{ runner.temp }}/authkey.p8
+          APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ vars.APPLE_API_ISSUER_ID }}
+        run: ./scripts/build_macos.sh --version "${{ inputs.version }}" --notarize
 
       - name: Verify macOS app bundle
         run: |
