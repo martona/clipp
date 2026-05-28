@@ -92,7 +92,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>windowscodecs.lib;ShCore.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>windowscodecs.lib;ShCore.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableDpiAwareness>true</EnableDpiAwareness>
@@ -119,7 +119,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>windowscodecs.lib;ShCore.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>windowscodecs.lib;ShCore.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableDpiAwareness>true</EnableDpiAwareness>
@@ -141,7 +141,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>windowscodecs.lib;ShCore.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>windowscodecs.lib;ShCore.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableDpiAwareness>true</EnableDpiAwareness>
@@ -169,7 +169,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>windowscodecs.lib;ShCore.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>windowscodecs.lib;ShCore.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableDpiAwareness>true</EnableDpiAwareness>
@@ -196,6 +196,7 @@
     <ClCompile Include="NetworkRuntime.cpp" />
     <ClCompile Include="platform\win32\Clipboard.cpp" />
     <ClCompile Include="platform\win32\AutoStart.cpp" />
+    <ClCompile Include="platform\win32\CrashHandler.cpp" />
     <ClCompile Include="KeyManager.cpp" />
     <ClCompile Include="Logger.cpp" />
     <ClCompile Include="Peer.cpp" />
@@ -228,6 +229,7 @@
     <ClInclude Include="platform\uiClippPage.h" />
     <ClInclude Include="platform\uiSettingsPage.h" />
     <ClInclude Include="platform\win32\AutoStart.h" />
+    <ClInclude Include="platform\win32\CrashHandler.h" />
     <ClInclude Include="platform\win32\NetworkItem.h" />
     <ClInclude Include="platform\win32\NetworkView.h" />
     <ClInclude Include="platform\win32\NetworkPage.h" />

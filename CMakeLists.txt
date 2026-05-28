@@ -178,6 +178,7 @@ if (WIN32)
         Normaliz
         windowscodecs
         dnsapi
+        dbghelp      # MiniDumpWriteDump for the on-crash handler.
     )
     if (MSVC)
         target_link_options(clipp-win32 PRIVATE

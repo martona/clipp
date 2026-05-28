@@ -28,6 +28,7 @@
     #include <io.h>
     #include <fcntl.h>
     #include <Windows.h>
+    #include "platform/win32/CrashHandler.h"
 #else
     #include <termios.h>
     #include <unistd.h>
@@ -417,8 +418,16 @@ static bool ApplyCommandLineOptions(int argc, char* argv[], int& exitCode) {
 }
 
 int main(int argc, char* argv[]) {
-	
+
     InitializeConsoleOutput();
+
+#ifdef _WIN32
+    // Install before any other initialization so it catches the broadest range
+    // of startup-time crashes too. Writes minidumps to %LOCALAPPDATA%\Clipp\
+    // crashdumps\ on unhandled exceptions, std::terminate, pure-virtual calls,
+    // and invalid CRT parameter callbacks.
+    clipp::InstallCrashHandler();
+#endif
 
     int optionExitCode = 0;
     if (!ApplyCommandLineOptions(argc, argv, optionExitCode)) {
