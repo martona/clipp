@@ -250,13 +250,22 @@ jobs:
 
       - name: Verify macOS app bundle
         run: |
+          echo "::group::Workspace state"
+          echo "PWD=$(pwd)"
+          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+          ls -la build/ 2>&1 || echo "(no build/ directory in $(pwd))"
+          echo "::endgroup::"
+
           # build_macos.sh chooses the output path based on whether xcode-select
           # points at Xcode.app (build/Release/Clipp.app) or the Command Line
           # Tools (build/Clipp.app). GitHub runners default to the CLT.
-          app="$(find build -maxdepth 3 -name 'Clipp.app' -type d -print -quit)"
+          # Use the same find pattern as macos-ci.yml — lowercase matches via
+          # case-insensitive APFS, no -maxdepth so we never miss it.
+          app="$(find build -name 'clipp.app' -type d -print -quit)"
           if [[ -z "$app" || ! -d "$app" ]]; then
-            echo "Could not find Clipp.app under build/." >&2
-            find build -name 'Clipp.app' -type d -print
+            echo "::error::Could not find Clipp.app under build/"
+            echo "--- build/ tree (top 100 entries) ---" >&2
+            find build -print 2>&1 | head -100 >&2 || true
             exit 1
           fi
           echo "Found app bundle at: $app"
