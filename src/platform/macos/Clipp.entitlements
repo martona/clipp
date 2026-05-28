@@ -2,9 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- Explicit false (rather than absent) so the value is visible in
-         codesign --display --entitlements and not silently re-injected by
-         Xcode's signing flow. Required for notarization. -->
     <key>com.apple.security.get-task-allow</key>
     <false/>
 </dict>
