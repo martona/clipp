@@ -99,6 +99,7 @@ xcuserdata/
 
 # CMake / Out-of-source builds
 build/
+build-mas/
 build-xcode/
 CMakeCache.txt
 CMakeFiles/

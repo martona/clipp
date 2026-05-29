@@ -308,12 +308,12 @@ elseif (APPLE)
     # version goes in CFBundleVersion.
     set_target_properties(clipp PROPERTIES
         MACOSX_BUNDLE_BUNDLE_NAME "Clipp"
-        MACOSX_BUNDLE_GUI_IDENTIFIER "net.clipp.app"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "net.clipp.ios"
         MACOSX_BUNDLE_ICON_FILE "Clipp.icns"
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/macos/Info.plist.in"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${CLIPP_VERSION_3PART}"
         MACOSX_BUNDLE_BUNDLE_VERSION "${CLIPP_VERSION}"
-        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "net.clipp.app"
+        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "net.clipp.ios"
     )
 
     if (CMAKE_GENERATOR STREQUAL "Xcode")

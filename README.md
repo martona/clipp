@@ -178,7 +178,6 @@ Clipp is currently **early-stage public preview**: it works for the cases I use 
 
 - The wire protocol is subject to breaking changes.
 - iOS distribution (TestFlight / App Store) is not yet set up; iOS users currently need Xcode to install on a device.
-- Documentation outside the README and [BUILDING.md](BUILDING.md) is sparse.
 - Bug reports are welcome, but expect a single-maintainer response time.
 
 Clipp is actively developed.

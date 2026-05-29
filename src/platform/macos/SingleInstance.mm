@@ -23,7 +23,7 @@ std::atomic_int g_controlServerSocket{ -1 };
 }
 
 static std::string MacOSControlSocketPath() {
-    return "/tmp/net.clipp.app." + std::to_string(static_cast<long long>(geteuid())) + ".sock";
+    return "/tmp/net.clipp.ios." + std::to_string(static_cast<long long>(geteuid())) + ".sock";
 }
 
 static bool FillMacOSControlSocketAddress(sockaddr_un& address, const std::string& socketPath) {

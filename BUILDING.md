@@ -1,6 +1,6 @@
 # Building Clipp From Source
 
-This document covers building Clipp for Windows, macOS, and iOS from a source checkout. For most cases, the build is a one-liner from the [`scripts/`](scripts) directory — the rest of this document covers prerequisites, environment overrides, and the cases where you need to bypass the scripts.
+This document covers building Clipp for Windows, macOS, and iOS from a source checkout. For most cases, the build is a one-liner from the [`scripts/`](scripts) directory — the rest of this document covers prerequisites, environment overrides, and the cases where you need to bypass the scripts. Cutting and publishing a release — versioning, the signing and notarization pipeline, and App Store submission — is covered separately in [RELEASING.md](RELEASING.md).
 
 ## Contents
 
@@ -20,6 +20,7 @@ This document covers building Clipp for Windows, macOS, and iOS from a source ch
 | Windows  | amd64               | tested in CI              | `scripts\build_windows.ps1`                                                  |
 | Windows  | arm64               | tested in CI              | `scripts\build_windows.ps1 -VcVarsArch arm64 -Triplet arm64-windows-static`  |
 | macOS    | arm64               | tested in CI              | `scripts/build_macos.sh`                                                     |
+| macOS (App Store) | arm64      | manual                    | `scripts/build_macos_mas.sh`                                                 |
 | iOS      | arm64 simulator     | tested in CI              | `scripts/build_ios.sh`                                                       |
 | iOS      | arm64 device        | manual Xcode only         | open `ios/Clipp.xcodeproj` in Xcode                                          |
 
@@ -108,6 +109,18 @@ The script:
 4. Configures CMake using the Xcode generator (if full Xcode is selected) or Ninja, then builds.
 5. Optionally signs the bundle if [`APPLE_CODESIGN_IDENTITY`](#code-signing) is set.
 
+### macOS (Mac App Store)
+
+A Mac App Store build must be **sandboxed** — a different bundle than the Developer ID one `build_macos.sh` produces. To build and exercise the sandboxed app locally, with no certificates required, use the separate script:
+
+```sh
+./scripts/build_macos_mas.sh
+```
+
+With no flags it builds and ad-hoc signs against [`Clipp.mas.entitlements`](src/platform/macos/Clipp.mas.entitlements) (app sandbox + client/server networking) into `build-mas/`, so you can confirm the app behaves under the sandbox. It uses a separate build directory from `build_macos.sh`, so the two coexist without CMake reconfigure thrash. `--debug`, `--release`, `--clean`, and `--version W.X.Y.Z` behave as for `build_macos.sh`.
+
+Signing for distribution and uploading to the App Store (`--sign`, `--package`, `--upload`), the certificates and provisioning profile involved, and the submission flow are covered in [RELEASING.md](RELEASING.md).
+
 ### iOS simulator
 
 ```sh
@@ -141,6 +154,7 @@ CI does not currently build for physical devices; device builds are produced man
 | Windows              | `build\windows-<config>\clipp.exe` + `clipp.com` + `clipp.pdb`             |
 | macOS (Ninja)        | `build/clipp.app`                                                          |
 | macOS (Xcode)        | `build/<Config>/clipp.app` (e.g. `build/Release/clipp.app`)                |
+| macOS (App Store)    | `build-mas/<Config>/Clipp.app` (sandboxed; ad-hoc signed for local testing) + `build-mas/Clipp.pkg` (signed installer, `--package`) |
 | iOS simulator        | `build/ios/Build/<Config>-iphonesimulator/Clipp.app`                       |
 
 `<config>` is the lower-cased build type on Windows (`release`, `debug`) and the literal Xcode configuration name on macOS/iOS (`Release`, `Debug`).
@@ -161,23 +175,11 @@ Where it ends up:
 
 iOS doesn't share the CMake pipeline (Xcode drives the iOS build), so its version is held separately in [`ios/Info.plist`](ios/Info.plist) and [`ios/ClippShareExtension/Info.plist`](ios/ClippShareExtension/Info.plist). The iOS app reads `CFBundleShortVersionString` at runtime via `Bundle.main`, so updating the plist is all that's required to refresh the About screen.
 
+The Mac App Store build (`build_macos_mas.sh`) is an exception: App Store Connect rejects a `CFBundleVersion` with more than three integers, so the script rewrites it down to the 4th component alone (`105` from `1.0.4.105`) — a value that still increments per release. `CFBundleShortVersionString` (the user-visible `1.0.4`) is left untouched. The Developer ID build from `build_macos.sh` keeps the full 4-part `CFBundleVersion`.
+
 ### Bumping for a release
 
-To set the version everywhere in one shot, run from macOS:
-
-```sh
-./scripts/bump_version.sh 1.2.3.4
-```
-
-This rewrites the `CLIPP_VERSION` default in `CMakeLists.txt` and stamps the two iOS plists' `CFBundleShortVersionString` (3-part: `1.2.3`) and `CFBundleVersion` (full 4-part) keys. The script does not commit or tag — review with `git diff`, then:
-
-```sh
-git commit -am "Bump version to 1.2.3.4"
-git tag v1.2.3.4
-git push && git push --tags
-```
-
-Pushing the tag triggers the release workflow. The script needs macOS for `/usr/libexec/PlistBuddy`.
+Setting the version across every file (`./scripts/bump_version.sh W.X.Y.Z`), tagging, and the pipeline a tag triggers are covered in [RELEASING.md](RELEASING.md#versioning-and-bumping).
 
 ## Environment variables
 
@@ -201,23 +203,9 @@ The iOS vcpkg install root is fixed at `$REPO_ROOT/vcpkg-installed` because the 
 
 ## Code signing
 
-### Windows
+Local builds are unsigned by default and run fine for development. On macOS an unsigned bundle just needs `xattr -dr com.apple.quarantine path/to/clipp.app` after copying (see [Troubleshooting](#troubleshooting)); for iOS simulator builds, pass `--disable-code-signing` to `build_ios.sh`, and iOS device builds use Xcode's signing configured through `ios/Clipp.xcodeproj`.
 
-The Windows build invokes `sign.exe` (Microsoft TrustedSigning CLI) when all of `ARTIFACT_SIGNING_ENDPOINT`, `ARTIFACT_SIGNING_ACCOUNT`, and `ARTIFACT_SIGNING_CERTIFICATE_PROFILE` are set. `sign.exe` must be available on `PATH` — install it as a .NET global tool:
-
-```powershell
-dotnet tool install --global --prerelease sign
-```
-
-`sign.exe` authenticates against Azure to reach the TrustedSigning service. The usual developer setup requires the Azure CLI installed and an active session (`az login`) against an account configured for code signing. Configuring the Azure side is out of scope for this document.
-
-### macOS
-
-Set `APPLE_CODESIGN_IDENTITY` to a codesign identity hash or common name. The Ninja path signs the bundle with `codesign --force --deep` after the build and runs `codesign --verify --deep --strict` to confirm. The Xcode path enables `CLIPP_MACOS_ENABLE_CODE_SIGNING=ON` and forwards `APPLE_CODESIGN_IDENTITY` and `APPLE_TEAM_ID` into the Xcode build settings via `CLIPP_MACOS_CODE_SIGN_IDENTITY` and `CLIPP_MACOS_DEVELOPMENT_TEAM`.
-
-### iOS
-
-Pass `--disable-code-signing` to `build_ios.sh` for simulator builds. Device builds use Xcode's automatic or manual signing configured through `ios/Clipp.xcodeproj`.
+The build scripts *do* sign when the relevant credentials are present in the environment — `APPLE_CODESIGN_IDENTITY` (macOS Developer ID), the `ARTIFACT_SIGNING_*` variables (Windows Trusted Signing), or the `APPLE_*_3RDPARTY` set (Mac App Store). That signing infrastructure — Trusted Signing, Developer ID plus notarization, and Mac App Store certificates — along with the release process that drives it, is documented in [RELEASING.md](RELEASING.md).
 
 ## Troubleshooting
 
