@@ -136,7 +136,7 @@ void Logger::writeLine(const wchar_t* function, Level level, const wchar_t* mess
         recentLogLines_.pop_front();
     }
 
-    std::wcout << wstr;
+    std::wcerr << wstr;
 #if defined(__APPLE__) && (TARGET_OS_IPHONE || TARGET_OS_SIMULATOR)
     const std::wstring debugStr = tsStr + L" [" + lvlStr + L"] [" + fnStr + L"] " + msgStr + L"\n";
     const std::string debugUtf8 = WideToUtf8(debugStr);
@@ -175,6 +175,8 @@ int Logger::LevelPriority(Level level) {
         return 3;
     case Level::Error:
         return 4;
+    case Level::Off:
+        return 5;
     default:
         return 0;
     }
@@ -192,6 +194,8 @@ const wchar_t* Logger::LevelToString(Level level) {
         return L"warning";
     case Level::Error:
         return L"error";
+    case Level::Off:
+        return L"off";
     default:
         return L"unknown";
     }

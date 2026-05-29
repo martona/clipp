@@ -148,7 +148,7 @@ void NetworkPage::BuildNetworkSecretSection(winrt::Windows::UI::Xaml::Controls::
         const std::string networkName = g_settings.networkName();
         g_logger.log(__FUNCTION__, Logger::Level::Debug, "Generating key with secret (network name: %s)", networkName.c_str());
         std::string newPassword = winrt::to_string(pwd);
-        std::string netNameAndPassword = uiClippPage::BuildKeyDerivationInput(networkName, newPassword);
+        std::string netNameAndPassword = KeyManager::BuildKeyDerivationInput(networkName, newPassword);
         keyDerivationWorker_.RequestKeyDerivation(netNameAndPassword);
         sodium_memzero(newPassword.data(), newPassword.capacity());
         sodium_memzero(netNameAndPassword.data(), netNameAndPassword.capacity());

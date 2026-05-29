@@ -957,7 +957,7 @@ void CLPIOSReceiveClipboardPayload(std::shared_ptr<const ClipboardPayload> paylo
         return nil;
     }
 
-    std::string keyInput = uiClippPage::BuildKeyDerivationInput(networkNameUtf8, secretUtf8);
+    std::string keyInput = KeyManager::BuildKeyDerivationInput(networkNameUtf8, secretUtf8);
     sodium_memzero(secretUtf8.data(), secretUtf8.capacity());
 
     KeyManager::NetworkKey networkKey{};

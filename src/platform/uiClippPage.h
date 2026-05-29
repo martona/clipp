@@ -88,22 +88,6 @@ inline std::wstring DisplayHostNameOrUnknown(std::wstring_view hostName) {
     return hostName.empty() ? CLP_W(CLP_UI_UNKNOWN_HOST) : std::wstring(hostName);
 }
 
-inline std::string BuildKeyDerivationInput(std::string_view networkName, std::string_view password) {
-    const std::string canonicalNetworkName = CanonicalizeKeyDerivationText(networkName);
-    const std::string canonicalPassword = CanonicalizeKeyDerivationText(password);
-    g_logger.log("BuildKeyDerivationInput",
-                 Logger::Level::Debug,
-                 "Generating network key input with network name: %s",
-                 canonicalNetworkName.c_str());
-
-    std::string input;
-    input.reserve(canonicalNetworkName.size() + 1 + canonicalPassword.size());
-    input.append(canonicalNetworkName);
-    input.push_back('|');
-    input.append(canonicalPassword);
-    return input;
-}
-
 class KeyDerivationWorker {
 public:
     using ResultHandler = std::function<void(const KeyManager::NetworkKey&)>;

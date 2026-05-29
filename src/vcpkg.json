@@ -2,6 +2,7 @@
   "name": "clipp-win32",
   "version": "0.1.0",
   "dependencies": [
+    "cli11",
     "libsodium",
     "xxhash",
     "zstd"

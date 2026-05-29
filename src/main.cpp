@@ -10,6 +10,7 @@
 #include "platform.h"
 
 #include "Logger.h"
+#include "Cli.h"
 #include "KeyManager.h"
 #include "NetworkRuntime.h"
 #include "Peer.h"
@@ -28,7 +29,6 @@
     #include <io.h>
     #include <fcntl.h>
     #include <Windows.h>
-    #include "platform/win32/CrashHandler.h"
 #else
     #include <termios.h>
     #include <unistd.h>
@@ -160,43 +160,6 @@ bool InitializeConsoleOutput() {
 #endif
 }
 
-static std::string ReadLine(const std::string & prompt) {
-    std::cout << prompt.c_str();
-    std::string input;
-    std::getline(std::cin, input);
-    return input;
-}
-
-static std::string ReadHiddenLine(const std::string & prompt) {
-    std::cout << prompt.c_str();
-    std::string input;
-
-    #ifdef _WIN32
-        HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
-        DWORD mode = 0;
-        GetConsoleMode(hStdin, &mode);
-        SetConsoleMode(hStdin, mode & (~ENABLE_ECHO_INPUT));
-
-        std::getline(std::cin, input);
-
-        SetConsoleMode(hStdin, mode);
-    #else
-        termios oldt;
-        tcgetattr(STDIN_FILENO, &oldt);
-
-        termios newt = oldt;
-        newt.c_lflag &= ~ECHO;
-        tcsetattr(STDIN_FILENO, TCSANOW, &newt);
-
-        std::getline(std::cin, input);
-
-        tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
-    #endif
-
-    std::cout << std::endl;
-    return input;
-}
-
 void OnClipboardNotification(PlatformWindowHandle hwnd) {
     g_logger.log(__FUNCTION__, Logger::Level::Debug, "Clipboard notification received");
     auto clipboardData = ReadClipboardData(hwnd);
@@ -236,211 +199,17 @@ void OnClipboardNotification(PlatformWindowHandle hwnd) {
         static_cast<unsigned long long>(payload->meta.uncompressedDataSize));
 }
 
-void PrintNetworkFingerprint(const std::array<unsigned char, KeyManager::NetworkKeySize>& networkKey) {
-    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Network fingerprint: %ls", g_keyManager.GetNetworkFingerprintHash(&networkKey).c_str());
-}
-
-bool InitializeSodium() {
-    if (sodium_init() < 0) {
-        g_logger.log(__FUNCTION__, Logger::Level::Error, "Fatal: libsodium failed to initialize!");
-        return false;
-    }
-    g_logger.log(__FUNCTION__, Logger::Level::Debug, "libsodium initialized successfully.");
-    return true;
-}
-
-int RunSetKeyCommand() {
-    std::array<unsigned char, KeyManager::NetworkKeySize> networkKey{};
-    std::string keyInput = ReadHiddenLine("Enter a password to derive network key from: ");
-    if (keyInput.empty()) {
-        g_logger.log(__FUNCTION__, Logger::Level::Error, "No input provided.");
-        return 1;
-    }
-    std::string netNameAndPassword = g_settings.networkName();
-    netNameAndPassword += "|";
-    netNameAndPassword += keyInput;
-    bool keyDerived = g_keyManager.DeriveNetworkKey(netNameAndPassword, networkKey);
-    sodium_memzero(keyInput.data(), keyInput.capacity());
-    sodium_memzero(netNameAndPassword.data(), netNameAndPassword.capacity());
-    if (!keyDerived) {
-        g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to derive network key from password.");
-        return 1;
-    }
-
-    PrintNetworkFingerprint(networkKey);
-
-    std::string errorMessage;
-    if (!g_keyManager.SetNetworkKey(networkKey, &errorMessage)) {
-        g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to store network key: %s", errorMessage.c_str());
-        return 1;
-    }
-
-    g_logger.log(__FUNCTION__, Logger::Level::Info, "Network key saved successfully.");
-    return 0;
-}
-
-int RunSetNameCommand() {
-    std::string input = ReadLine("Enter network name: ");
-    if (input.empty()) {
-        g_logger.log(__FUNCTION__, Logger::Level::Error, "No input provided.");
-        return 1;
-    }
-
-    if (!g_settings.set_networkName(input)) {
-        g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to store network name.");
-        return 1;
-    }
-
-    g_logger.log(__FUNCTION__, Logger::Level::Info, "Network name saved successfully.");
-    return 0;
-}
-
-int RunResetHostIDCommand() {
-    HostId hostID;
-    if (!g_settings.resetHostID(hostID)) {
-        g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to reset host ID.");
-        return 1;
-    }
-
-    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Host ID reset successfully: %ls", hostID.ToHexWString().c_str());
-    return 0;
-}
-
-namespace {
-    struct CommandLineCommand {
-        std::string_view name;
-        int (*handler)();
-    };
-
-    constexpr CommandLineCommand kCommandLineCommands[] = {
-        {"setkey", RunSetKeyCommand},
-        {"setname", RunSetNameCommand},
-        {"resethostid", RunResetHostIDCommand},
-    };
-
-    bool IsCommandLineOption(std::string_view arg) {
-        return arg.size() >= 2 && arg[0] == '-' && arg[1] == '-';
-    }
-
-    bool ParseLogLevel(std::string_view arg, Logger::Level& level) {
-        if (arg == "error") {
-            level = Logger::Level::Error;
-            return true;
-        }
-        if (arg == "warn" || arg == "warning") {
-            level = Logger::Level::Warning;
-            return true;
-        }
-        if (arg == "info") {
-            level = Logger::Level::Info;
-            return true;
-        }
-        if (arg == "debug") {
-            level = Logger::Level::Debug;
-            return true;
-        }
-        if (arg == "ddebug") {
-            level = Logger::Level::DDebug;
-            return true;
-        }
-
-        return false;
-    }
-}
-
-static bool TryRunCommandLineCommand(int argc, char* argv[], int& exitCode) {
-    for (int i = 1; i < argc; ++i) {
-        if (argv[i] == nullptr) {
-            continue;
-        }
-
-        const std::string_view commandName(argv[i]);
-        if (commandName == "--loglevel") {
-            ++i;
-            continue;
-        }
-        if (commandName == "--clipboard-diagnostics") {
-            continue;
-        }
-        if (IsCommandLineOption(commandName)) {
-            continue;
-        }
-
-        for (const CommandLineCommand& command : kCommandLineCommands) {
-            if (commandName == command.name) {
-                exitCode = command.handler();
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    return false;
-}
-
-static bool ApplyCommandLineOptions(int argc, char* argv[], int& exitCode) {
-    for (int i = 1; i < argc; ++i) {
-        if (argv[i] == nullptr) {
-            continue;
-        }
-
-        const std::string_view option(argv[i]);
-        if (option == "--loglevel") {
-            if (i + 1 >= argc || argv[i + 1] == nullptr || IsCommandLineOption(argv[i + 1])) {
-                g_logger.log(__FUNCTION__, Logger::Level::Error, "--loglevel requires one of: error, warn, info, debug, ddebug");
-                exitCode = 1;
-                return false;
-            }
-
-            Logger::Level level{};
-            const std::string_view levelName(argv[++i]);
-            if (!ParseLogLevel(levelName, level)) {
-                g_logger.log(__FUNCTION__, Logger::Level::Error, "Invalid --loglevel value '%.*s'. Expected one of: error, warn, info, debug, ddebug",
-                    static_cast<int>(levelName.size()), levelName.data());
-                exitCode = 1;
-                return false;
-            }
-
-            g_logger.SetMinimumLevel(level);
-            continue;
-        }
-
-        if (IsCommandLineOption(option)) {
-            g_logger.log(__FUNCTION__, Logger::Level::Error, "Unknown command line option '%.*s'",
-                static_cast<int>(option.size()), option.data());
-            exitCode = 1;
-            return false;
-        }
-    }
-
-    return true;
-}
-
 int main(int argc, char* argv[]) {
 
     InitializeConsoleOutput();
 
-#ifdef _WIN32
-    // Install before any other initialization so it catches the broadest range
-    // of startup-time crashes too. Writes minidumps to %LOCALAPPDATA%\Clipp\
-    // crashdumps\ on unhandled exceptions, std::terminate, pure-virtual calls,
-    // and invalid CRT parameter callbacks.
-    clipp::InstallCrashHandler();
-#endif
-
-    int optionExitCode = 0;
-    if (!ApplyCommandLineOptions(argc, argv, optionExitCode)) {
-        return optionExitCode;
-    }
-
-    if (!InitializeSodium()) {
-        return 1;
-    }
-
-    int commandExitCode = 0;
-    if (TryRunCommandLineCommand(argc, argv, commandExitCode)) {
-        return commandExitCode;
+    // Command-line mode: if a recognized subcommand (key/hostid) ran, return its
+    // exit code. Otherwise any global options (e.g. --loglevel) have been applied
+    // and we fall through to the GUI. Run() installs the crash handler internally
+    // once the log level is decided, so its "installed" line stays out of command
+    // output while still guarding the GUI loop below.
+    if (auto commandExitCode = clipp::cli::Run(argc, argv)) {
+        return *commandExitCode;
     }
 
     g_logger.log(__FUNCTION__, Logger::Level::Info, L"==================================================================");

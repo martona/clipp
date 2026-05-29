@@ -142,11 +142,13 @@ file(GLOB CLIPP_COMMON_SOURCES CONFIGURE_DEPENDS
 find_package(unofficial-sodium CONFIG REQUIRED)
 find_package(xxHash CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
+find_package(CLI11 CONFIG REQUIRED)
 
 set(CLIPP_THIRD_PARTY_LIBS
     unofficial-sodium::sodium
     xxHash::xxhash
     zstd::libzstd
+    CLI11::CLI11   # header-only; lands on clipp-win32 + macOS clipp via the common settings
 )
 
 function(clipp_apply_common_target_settings target_name)

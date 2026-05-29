@@ -486,7 +486,7 @@ void MacOSNetworkPage::DerivePasswordFromCurrentField() {
 
     const std::string networkName = g_settings.networkName();
     std::string password = MacOSToStdString(passwordField_.stringValue);
-    std::string keyInput = uiClippPage::BuildKeyDerivationInput(networkName, password);
+    std::string keyInput = KeyManager::BuildKeyDerivationInput(networkName, password);
     keyDerivationWorker_->RequestKeyDerivation(keyInput);
     sodium_memzero(password.data(), password.capacity());
     sodium_memzero(keyInput.data(), keyInput.capacity());

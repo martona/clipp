@@ -9,6 +9,7 @@
 #include <sstream>
 #include <vector>
 #include <sodium.h>
+#include "Logger.h"
 #include "platform.h"
 #include "utils.h"
 
@@ -542,6 +543,22 @@ bool KeyManager::DeriveNetworkKey(const std::string& password, NetworkKey& outKe
         return false;
     }
     return true;
+}
+
+std::string KeyManager::BuildKeyDerivationInput(std::string_view networkName, std::string_view password) {
+    const std::string canonicalNetworkName = CanonicalizeKeyDerivationText(networkName);
+    const std::string canonicalPassword = CanonicalizeKeyDerivationText(password);
+    g_logger.log("BuildKeyDerivationInput",
+                 Logger::Level::Debug,
+                 "Generating network key input with network name: %s",
+                 canonicalNetworkName.c_str());
+
+    std::string input;
+    input.reserve(canonicalNetworkName.size() + 1 + canonicalPassword.size());
+    input.append(canonicalNetworkName);
+    input.push_back('|');
+    input.append(canonicalPassword);
+    return input;
 }
 
 static std::wstring FormatHash(const unsigned char* hash, size_t hashLen) {

@@ -16,6 +16,9 @@ public:
         Info,
         Warning,
         Error,
+        // Sentinel above Error; used only as a minimum threshold to silence all
+        // output (e.g. command-line mode). No message is ever logged at this level.
+        Off,
     };
 
     using LogReflectorCallback = void(*)(const std::wstring& line);
