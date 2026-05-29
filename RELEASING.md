@@ -80,9 +80,11 @@ gh release edit v1.2.3.4 --draft=false
 
 | Job | Runner(s) | Produces |
 |-----|-----------|----------|
-| `build-windows` (matrix: amd64, arm64) | `windows-latest`, `windows-11-arm` | Built unsigned, then Trusted-Signing-signed; `clipp-<ver>-windows-<arch>.zip` (exe + com) and `clipp-<ver>-windows-<arch>-symbols.zip` (PDBs) |
+| `build-windows` (matrix: amd64, arm64) | `windows-latest`, `windows-11-arm` | Built unsigned, then Trusted-Signing-signed; `clipp-<ver>-windows-<arch>.zip` (exe + com), `clipp-<ver>-windows-<arch>-symbols.zip` (PDBs), and `clipp-<ver>-windows-<arch>.msix` (signed, sideloadable) |
 | `build-macos` (arm64) | `macos-latest` | `build_macos.sh --notarize` → Developer ID-signed, notarized, stapled `clipp-<ver>-macos-arm64.zip` |
 | `publish` | `ubuntu-latest` | Downloads artifacts, writes a build-provenance attestation, creates the GitHub release |
+
+The Windows `.msix` is the same package `scripts/package_windows_msix.ps1` builds — packed unsigned (`-NoSign`) after the exe/com are signed (so it embeds the signed binaries and derives its `Publisher` from them), then signed by a second Trusted Signing step. Because Trusted Signing chains to a public root, users can `Add-AppxPackage` it directly with no certificate import.
 
 Both build jobs run in the **`release-signing`** GitHub Environment, which scopes the OIDC token's `subject` claim (`repo:martona/clipp:environment:release-signing`). The Azure federated credential matches on that claim, so tag and manual triggers authenticate identically without a stored client secret. Each build job verifies its output before signing — the Windows job additionally asserts a static dependency closure (fails if `clipp.exe` imports `VCRUNTIME`/`MSVCP`/`ucrtbase`/`libsodium`/… instead of linking them statically).
 

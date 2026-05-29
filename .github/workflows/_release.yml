@@ -160,6 +160,35 @@ jobs:
               Write-Host "[+] $f signed by: $($sig.SignerCertificate.Subject)"
           }
 
+      # MSIX runs after the exe/com are signed: the package embeds the signed binaries
+      # and the script derives the manifest Publisher from the signed clipp.exe. Pack
+      # unsigned here (Windows PowerShell, because the logo downscaling uses
+      # System.Drawing), then sign the .msix with the same Trusted Signing account.
+      - name: Package MSIX (unsigned)
+        shell: powershell
+        run: .\scripts\package_windows_msix.ps1 -Arch ${{ matrix.arch }} -Version "${{ inputs.version }}" -NoSign
+
+      - name: Sign MSIX
+        uses: azure/trusted-signing-action@v0
+        with:
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_CERTIFICATE_PROFILE }}
+          files-folder: ${{ github.workspace }}\build\msix
+          files-folder-filter: msix
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify MSIX signature
+        run: |
+          $msix = ".\build\msix\clipp-${{ inputs.version }}-${{ matrix.arch }}.msix"
+          $sig = Get-AuthenticodeSignature $msix
+          if ($sig.Status -ne 'Valid') {
+              throw "MSIX signature is not Valid: $($sig.Status) ($($sig.StatusMessage))"
+          }
+          Write-Host "[+] $msix signed by: $($sig.SignerCertificate.Subject)"
+
       - name: Package artifacts
         run: |
           $ver = "${{ inputs.version }}"
@@ -179,6 +208,11 @@ jobs:
           $pdbZip = Join-Path $stage "clipp-$ver-windows-$arch-symbols.zip"
           Compress-Archive -Path ($pdbs | ForEach-Object { $_.FullName }) -DestinationPath $pdbZip
           Write-Host "Created $pdbZip with $($pdbs.Count) PDB(s)"
+
+          $msix = ".\build\msix\clipp-$ver-$arch.msix"
+          if (-not (Test-Path $msix)) { throw "Signed MSIX not found: $msix" }
+          Copy-Item $msix (Join-Path $stage "clipp-$ver-windows-$arch.msix")
+          Write-Host "Staged $msix"
 
           Get-ChildItem $stage | Format-Table Name, Length
 

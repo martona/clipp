@@ -9,6 +9,7 @@
   clipp.com as clipp.exe), generates the PNG logo set + a resources.pri index, fills in
   the AppxManifest template, runs makeappx, and signs the package with Azure Trusted
   Signing. Reuses the same ARTIFACT_SIGNING_* env vars + 'az login' as build_windows.ps1.
+  (-NoSign packs without signing -- for CI, where the workflow signs the .msix instead.)
 
   For STORE submission you do NOT sign here: upload the unsigned .msix and the Store
   re-signs it, and the manifest Identity/Publisher must be the Partner Center values.
@@ -40,7 +41,11 @@ param(
     # For the Store, set Name/Publisher to the values Partner Center assigns.
     [string]$IdentityName = 'Clipp',
     [string]$Publisher = '',
-    [string]$PublisherDisplayName = 'Clipp'
+    [string]$PublisherDisplayName = 'Clipp',
+
+    # Pack only, leaving the .msix unsigned -- for CI, where the workflow signs it with the
+    # Azure Trusted Signing action. Locally you normally omit this (the script signs).
+    [switch]$NoSign
 )
 
 $ErrorActionPreference = 'Stop'
@@ -58,13 +63,16 @@ $manifestTemplate = Join-Path $repoRoot 'src\platform\win32\msix\AppxManifest.xm
 # MSIX ProcessorArchitecture names differ from our vcpkg/vcvars arch names.
 $msixArch = if ($Arch -eq 'amd64') { 'x64' } else { 'arm64' }
 
-# Trusted Signing is mandatory; fail fast before building the layout and packing.
-if (-not (Get-Command sign.exe -ErrorAction SilentlyContinue)) {
-    throw "sign.exe (the Trusted Signing CLI) is not on PATH. Install it: dotnet tool install --global --prerelease sign"
-}
-foreach ($name in 'ARTIFACT_SIGNING_ENDPOINT', 'ARTIFACT_SIGNING_ACCOUNT', 'ARTIFACT_SIGNING_CERTIFICATE_PROFILE') {
-    if (-not [Environment]::GetEnvironmentVariable($name)) {
-        throw "Signing requires $name (the same vars build_windows.ps1 uses). Run 'az login' and set the ARTIFACT_SIGNING_* vars."
+# Trusted Signing is mandatory unless -NoSign (CI signs the .msix with the Trusted
+# Signing action instead). Fail fast before building the layout and packing.
+if (-not $NoSign) {
+    if (-not (Get-Command sign.exe -ErrorAction SilentlyContinue)) {
+        throw "sign.exe (the Trusted Signing CLI) is not on PATH. Install it: dotnet tool install --global --prerelease sign"
+    }
+    foreach ($name in 'ARTIFACT_SIGNING_ENDPOINT', 'ARTIFACT_SIGNING_ACCOUNT', 'ARTIFACT_SIGNING_CERTIFICATE_PROFILE') {
+        if (-not [Environment]::GetEnvironmentVariable($name)) {
+            throw "Signing requires $name (the same vars build_windows.ps1 uses). Run 'az login' and set the ARTIFACT_SIGNING_* vars."
+        }
     }
 }
 
@@ -218,25 +226,35 @@ if ($LASTEXITCODE -ne 0) { throw "makeappx failed ($LASTEXITCODE)." }
 Write-Host "[*] Packed: $msix"
 
 # --- sign (Azure Trusted Signing) --------------------------------------------
-# Reuse build_windows.ps1's exact invocation (sign.exe), pointed at the .msix. No local
-# cert: the signature chains to a publicly-trusted root, so Add-AppxPackage needs no
-# import. The manifest Publisher was set to this cert's subject above.
-$signArgs = @(
-    'code', 'artifact-signing',
-    '-b', $OutDir,
-    '-ase', $env:ARTIFACT_SIGNING_ENDPOINT,
-    '-asa', $env:ARTIFACT_SIGNING_ACCOUNT,
-    (Split-Path -Leaf $msix),
-    '-v', 'Information',
-    '-ascp', $env:ARTIFACT_SIGNING_CERTIFICATE_PROFILE
-)
-& sign.exe @signArgs
-if ($LASTEXITCODE -ne 0) { throw "sign.exe (Trusted Signing) failed ($LASTEXITCODE)." }
-Write-Host '[*] Signed with Azure Trusted Signing.'
+if ($NoSign) {
+    Write-Host '[*] -NoSign: leaving the .msix unsigned (the workflow signs it).'
+}
+else {
+    # Reuse build_windows.ps1's exact invocation (sign.exe), pointed at the .msix. No local
+    # cert: the signature chains to a publicly-trusted root, so Add-AppxPackage needs no
+    # import. The manifest Publisher was set to this cert's subject above.
+    $signArgs = @(
+        'code', 'artifact-signing',
+        '-b', $OutDir,
+        '-ase', $env:ARTIFACT_SIGNING_ENDPOINT,
+        '-asa', $env:ARTIFACT_SIGNING_ACCOUNT,
+        (Split-Path -Leaf $msix),
+        '-v', 'Information',
+        '-ascp', $env:ARTIFACT_SIGNING_CERTIFICATE_PROFILE
+    )
+    & sign.exe @signArgs
+    if ($LASTEXITCODE -ne 0) { throw "sign.exe (Trusted Signing) failed ($LASTEXITCODE)." }
+    Write-Host '[*] Signed with Azure Trusted Signing.'
+}
 
 Write-Host ''
 Write-Host "[*] Done: $msix"
 Write-Host "[*] Logo PNGs left for inspection in: $layoutImages"
+
+if ($NoSign) {
+    Write-Host '[*] Package is UNSIGNED (-NoSign) -- sign it before install/distribution.'
+    return
+}
 
 Write-Host ''
 Write-Host 'Sideload-test (no cert import needed; Trusted Signing chains to a trusted root):'
