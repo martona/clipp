@@ -11,17 +11,33 @@ int wmain(int argc, wchar_t* argv[]) {
     // 1. Hook the signal handler to act as a shield
     SetConsoleCtrlHandler(IgnoreSignalsHandler, TRUE);
 
-    // 2. Get the full path of the shim (e.g., C:\path\clipp.com)
+    // 2. Get the full path of the shim (e.g., C:\path\clipp.com, or C:\path\clipp.exe
+    //    when packaged for MSIX, where the shim itself is renamed clipp.exe).
     wchar_t pathBuffer[MAX_PATH]{};
     GetModuleFileNameW(NULL, pathBuffer, MAX_PATH);
-    std::wstring exePath(pathBuffer);
+    std::wstring selfPath(pathBuffer);
 
-    // 3. Swap the .com extension for .exe
-    size_t extPos = exePath.find_last_of(L".");
-    if (extPos != std::wstring::npos) {
-        exePath = exePath.substr(0, extPos) + L".exe";
+    // 3. Resolve the target to launch.
+    //    Non-packaged: the shim is clipp.com and launches its sibling clipp.exe (the GUI).
+    //    Packaged (MSIX): MSIX requires the alias target to end in .exe, so the shim is
+    //    itself clipp.exe and the GUI is renamed clippmain.exe. If our own name already
+    //    ends in .exe, launch clippmain.exe in the same folder -- otherwise the swap
+    //    below would point us back at ourselves.
+    size_t extPos = selfPath.find_last_of(L'.');
+    bool selfIsExe = (extPos != std::wstring::npos) &&
+                     (lstrcmpiW(selfPath.c_str() + extPos, L".exe") == 0);
+
+    std::wstring exePath;
+    if (selfIsExe) {
+        size_t slashPos = selfPath.find_last_of(L"\\/");
+        std::wstring dir = (slashPos != std::wstring::npos)
+            ? selfPath.substr(0, slashPos + 1)
+            : std::wstring();
+        exePath = dir + L"clippmain.exe";
+    } else if (extPos != std::wstring::npos) {
+        exePath = selfPath.substr(0, extPos) + L".exe";
     } else {
-        exePath += L".exe";
+        exePath = selfPath + L".exe";
     }
 
     // 4. Pass along the exact command line arguments the user typed
