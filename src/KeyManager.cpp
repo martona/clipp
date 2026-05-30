@@ -574,16 +574,15 @@ bool KeyManager::LoadRootNetworkKey(std::string* errorMessage) {
     std::vector<unsigned char> keyBlob;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!settings_.getNetworkKey(keyBlob)) {
-            if (errorMessage != nullptr) {
-                *errorMessage = "Failed to read network key from settings";
-            }
-            return false;
-        }
+        settings_.getNetworkKey(keyBlob);
     }
+    // No key configured yet. getNetworkKey returns false for an absent value and
+    // true-with-empty for a cleared one (and Windows vs Linux disagree on which);
+    // both mean "no usable key". Treat as benign -- leave errorMessage EMPTY so
+    // callers (e.g. `key show`) report "(none)" and exit 0, exactly like the macOS
+    // errSecItemNotFound branch above. (A 0600 file has no SSH-keychain-style
+    // "present but unreadable" state, so there is no loud-error case to surface.)
     if (keyBlob.empty()) {
-        // No key stored yet. Benign -- mirrors the macOS errSecItemNotFound branch:
-        // leave errorMessage empty so callers report "(none)", not a read failure.
         return false;
     }
     if (keyBlob.size() != NetworkKeySize) {
