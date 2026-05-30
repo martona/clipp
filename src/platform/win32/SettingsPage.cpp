@@ -301,26 +301,16 @@ void SettingsPage::BuildView() {
     section.ColumnDefinitions().Append(fieldColumn);
 
     tcpPortField_ = MakeTextBox(5, 110);
-    udpPortField_ = MakeTextBox(5, 110);
     listenerIpField_ = MakeTextBox(15, 190);
-    multicastIpField_ = MakeTextBox(15, 190);
 
     AddSettingRow(section, 0, MakeLabel(CLP_W(CLP_UI_TCP_PORT)), tcpPortField_);
-    AddSettingRow(section, 1, MakeLabel(CLP_W(CLP_UI_UDP_PORT)), udpPortField_);
-    AddSettingRow(section, 2, MakeLabel(CLP_W(CLP_UI_LISTENER_IP)), listenerIpField_);
-    AddSettingRow(section, 3, MakeLabel(CLP_W(CLP_UI_MULTICAST_IP)), multicastIpField_);
+    AddSettingRow(section, 1, MakeLabel(CLP_W(CLP_UI_LISTENER_IP)), listenerIpField_);
 
     tcpPortField_.LostFocus([this](auto const&, auto const&) {
         ValidateTcpPort();
     });
-    udpPortField_.LostFocus([this](auto const&, auto const&) {
-        ValidateUdpPort();
-    });
     listenerIpField_.LostFocus([this](auto const&, auto const&) {
         ValidateListenerIp();
-    });
-    multicastIpField_.LostFocus([this](auto const&, auto const&) {
-        ValidateMulticastIp();
     });
 
     content.Children().Append(section);
@@ -489,15 +479,13 @@ void SettingsPage::BuildView() {
 }
 
 void SettingsPage::LoadSettingsIntoFields() {
-    if (!tcpPortField_ || !udpPortField_ || !listenerIpField_ || !multicastIpField_) {
+    if (!tcpPortField_ || !listenerIpField_) {
         return;
     }
 
     loadingSettings_ = true;
     tcpPortField_.Text(winrt::to_hstring(g_settings.tcpPort()));
-    udpPortField_.Text(winrt::to_hstring(g_settings.mdnsPort()));
     listenerIpField_.Text(ToHString(g_settings.listenerIp()));
-    multicastIpField_.Text(ToHString(g_settings.multicastIp()));
     RefreshClipboardHistoryControls();
     RefreshPrivacyControls();
     loadingSettings_ = false;
@@ -532,20 +520,6 @@ void SettingsPage::ValidateTcpPort() {
     tcpPortField_.Text(winrt::to_hstring(g_settings.tcpPort()));
 }
 
-void SettingsPage::ValidateUdpPort() {
-    int port = 0;
-    const int currentValue = g_settings.mdnsPort();
-    if (!uiSettingsPage::TryParsePort(winrt::to_string(udpPortField_.Text()), port)) {
-        udpPortField_.Text(winrt::to_hstring(currentValue));
-        return;
-    }
-
-    if (port != currentValue && g_settings.set_mdnsPort(port)) {
-        ApplyNetworkSettingChange();
-    }
-    udpPortField_.Text(winrt::to_hstring(g_settings.mdnsPort()));
-}
-
 void SettingsPage::ValidateListenerIp() {
     const std::string value = uiSettingsPage::TrimAscii(winrt::to_string(listenerIpField_.Text()));
     const std::string currentValue = g_settings.listenerIp();
@@ -558,20 +532,6 @@ void SettingsPage::ValidateListenerIp() {
         ApplyNetworkSettingChange();
     }
     listenerIpField_.Text(ToHString(g_settings.listenerIp()));
-}
-
-void SettingsPage::ValidateMulticastIp() {
-    const std::string value = uiSettingsPage::TrimAscii(winrt::to_string(multicastIpField_.Text()));
-    const std::string currentValue = g_settings.multicastIp();
-    if (!Settings::IsValidMulticastIp(value)) {
-        multicastIpField_.Text(ToHString(currentValue));
-        return;
-    }
-
-    if (value != currentValue && g_settings.set_multicastIp(value)) {
-        ApplyNetworkSettingChange();
-    }
-    multicastIpField_.Text(ToHString(g_settings.multicastIp()));
 }
 
 void SettingsPage::RefreshHostIDDisplay() {

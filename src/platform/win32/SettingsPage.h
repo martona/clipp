@@ -23,9 +23,7 @@ private:
     void ShowStatusMessage();
 
     void ValidateTcpPort();
-    void ValidateUdpPort();
     void ValidateListenerIp();
-    void ValidateMulticastIp();
     void RefreshHostIDDisplay();
     void RefreshHostIDWarning();
     void ResetHostID();
@@ -39,9 +37,7 @@ private:
 
     winrt::Windows::UI::Xaml::Controls::Grid root_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBox tcpPortField_{ nullptr };
-    winrt::Windows::UI::Xaml::Controls::TextBox udpPortField_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBox listenerIpField_{ nullptr };
-    winrt::Windows::UI::Xaml::Controls::TextBox multicastIpField_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBlock hostIDValue_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::Button resetHostIDButton_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBlock hostIDWarning_{ nullptr };

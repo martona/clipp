@@ -10,9 +10,7 @@
 
 class Settings {
 public:
-    static constexpr int DefaultMdnsPort = 15353;
     static constexpr int DefaultTcpPort = 15353;
-    static constexpr const char* DefaultMulticastIp = "239.255.10.10";
     static constexpr const char* DefaultListenerIp = "0.0.0.0";
     static constexpr uint64_t UnlimitedClipboardHistoryLimit = 0;
     static constexpr uint64_t DefaultClipboardHistoryMemoryLimitBytes = 256ull * 1024ull * 1024ull;
@@ -31,11 +29,8 @@ public:
 
     static bool IsValidPort(int value);
     static bool IsValidListenerIp(const std::string& value);
-    static bool IsValidMulticastIp(const std::string& value);
 
-    std::string multicastIp() const;
 	std::string listenerIp() const;
-    int mdnsPort() const;
     int tcpPort() const;
     std::string networkName() const;
     uint64_t clipboardHistoryMemoryLimitBytes() const;
@@ -44,9 +39,7 @@ public:
     uint64_t clipboardSyncMaxItems() const;
     bool honorExternalPrivacyMarkers() const;
 
-    bool set_multicastIp(const std::string& value);
 	bool set_listenerIp(const std::string& value);
-    bool set_mdnsPort(int value);
     bool set_tcpPort(int value);
     bool set_networkName(const std::string& value);
     bool set_clipboardHistoryMemoryLimitBytes(uint64_t value);
@@ -79,9 +72,7 @@ private:
     static bool ReadBinaryValue(const wchar_t* valueName, std::vector<unsigned char>& outValue);
     static std::string GetDefaultNetworkName();
 
-    std::string multicastIp_;
 	std::string listenerIp_;
-    int mdnsPort_;
     int tcpPort_;
     std::string networkName_;
     uint64_t clipboardHistoryMemoryLimitBytes_;

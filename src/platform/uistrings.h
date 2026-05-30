@@ -56,9 +56,7 @@
 #define CLP_UI_OUTGOING "Outgoing:"
 
 #define CLP_UI_TCP_PORT "TCP Port"
-#define CLP_UI_UDP_PORT "UDP Port"
 #define CLP_UI_LISTENER_IP "Listener IP"
-#define CLP_UI_MULTICAST_IP "Multicast IP"
 #define CLP_UI_APPLY_NETWORK_SETTINGS "Apply Network Settings"
 #define CLP_UI_HOST_ID "Host ID"
 #define CLP_UI_CURRENT_HOST_ID "Current Host ID"

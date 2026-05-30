@@ -459,24 +459,8 @@ private struct SettingsPanelView: View {
                 }
 
                 SettingsTextFieldRow(
-                    title: CLP_UI_UDP_PORT,
-                    text: $model.udpPort,
-                    keyboardType: .numberPad
-                ) {
-                    model.applyNetworkSettings()
-                }
-
-                SettingsTextFieldRow(
                     title: CLP_UI_LISTENER_IP,
                     text: $model.listenerIP,
-                    keyboardType: .numbersAndPunctuation
-                ) {
-                    model.applyNetworkSettings()
-                }
-
-                SettingsTextFieldRow(
-                    title: CLP_UI_MULTICAST_IP,
-                    text: $model.multicastIP,
                     keyboardType: .numbersAndPunctuation
                 ) {
                     model.applyNetworkSettings()
@@ -667,9 +651,7 @@ private final class SettingsViewModel: ObservableObject {
     @Published var historyAgeIndex = 0.0
     @Published var historyItemIndex = 0.0
     @Published var tcpPort = ""
-    @Published var udpPort = ""
     @Published var listenerIP = ""
-    @Published var multicastIP = ""
     @Published var hostID = ""
     @Published var hasHostIDCollisionWarning = false
     @Published var honorExternalPrivacyMarkers = true
@@ -684,16 +666,12 @@ private final class SettingsViewModel: ObservableObject {
 
     private var loadingSnapshot = false
     private var storedTcpPort = ""
-    private var storedUdpPort = ""
     private var storedListenerIP = ""
-    private var storedMulticastIP = ""
 
     var canApplyNetworkSettings: Bool {
         !loadingSnapshot && (
             tcpPort.trimmingCharacters(in: .whitespacesAndNewlines) != storedTcpPort ||
-            udpPort.trimmingCharacters(in: .whitespacesAndNewlines) != storedUdpPort ||
-            listenerIP.trimmingCharacters(in: .whitespacesAndNewlines) != storedListenerIP ||
-            multicastIP.trimmingCharacters(in: .whitespacesAndNewlines) != storedMulticastIP
+            listenerIP.trimmingCharacters(in: .whitespacesAndNewlines) != storedListenerIP
         )
     }
 
@@ -728,21 +706,16 @@ private final class SettingsViewModel: ObservableObject {
     }
 
     func applyNetworkSettings() {
-        let parsedTcpPort = parsePort(tcpPort)
-        let parsedUdpPort = parsePort(udpPort)
-
-        guard let parsedTcpPort, let parsedUdpPort else {
+        guard let parsedTcpPort = parsePort(tcpPort) else {
             networkStatusIsError = true
-            networkStatusMessage = "Ports must be between 1 and 65535."
+            networkStatusMessage = "Port must be between 1 and 65535."
             return
         }
 
         do {
             let snapshot = try SettingsBridge.updateNetwork(
                 tcpPort: parsedTcpPort,
-                udpPort: parsedUdpPort,
-                listenerIP: listenerIP,
-                multicastIP: multicastIP
+                listenerIP: listenerIP
             )
             apply(snapshot: snapshot)
             networkStatusIsError = false
@@ -787,13 +760,9 @@ private final class SettingsViewModel: ObservableObject {
         historyItemIndex = Double(stopIndex(SettingsLimitStop.itemStops, snapshot.clipboardHistoryMaxItems))
 
         storedTcpPort = String(snapshot.tcpPort)
-        storedUdpPort = String(snapshot.udpPort)
         storedListenerIP = snapshot.listenerIP
-        storedMulticastIP = snapshot.multicastIP
         tcpPort = storedTcpPort
-        udpPort = storedUdpPort
         listenerIP = storedListenerIP
-        multicastIP = storedMulticastIP
         hostID = snapshot.hostID
         hasHostIDCollisionWarning = snapshot.hasHostIDCollisionWarning
         honorExternalPrivacyMarkers = snapshot.honorExternalPrivacyMarkers

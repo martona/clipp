@@ -32,9 +32,7 @@ private:
     void ShowStatusMessage();
 
     void ValidateTcpPort();
-    void ValidateUdpPort();
     void ValidateListenerIp();
-    void ValidateMulticastIp();
     void RefreshHostIDDisplay();
     void ResetHostID();
     void RefreshHostIDWarning();
@@ -48,9 +46,7 @@ private:
     NSView* statusContainer_ = nullptr;
     NSView* hostIDWarningContainer_ = nullptr;
     NSTextField* tcpPortField_ = nullptr;
-    NSTextField* udpPortField_ = nullptr;
     NSTextField* listenerIpField_ = nullptr;
-    NSTextField* multicastIpField_ = nullptr;
     NSSlider* historyMemorySlider_ = nullptr;
     NSSlider* historyAgeSlider_ = nullptr;
     NSSlider* historyItemSlider_ = nullptr;

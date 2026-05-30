@@ -317,28 +317,22 @@ NSView* MacOSSettingsPage::FirstKeyView() const {
 
 void MacOSSettingsPage::ConnectKeyViewLoop(NSView* nextKeyView) {
     if (historyMemorySlider_ == nil || historyAgeSlider_ == nil || historyItemSlider_ == nil ||
-        tcpPortField_ == nil || udpPortField_ == nil || listenerIpField_ == nil || multicastIpField_ == nil) {
+        tcpPortField_ == nil || listenerIpField_ == nil) {
         return;
     }
 
     historyMemorySlider_.nextKeyView = historyAgeSlider_;
     historyAgeSlider_.nextKeyView = historyItemSlider_;
     historyItemSlider_.nextKeyView = tcpPortField_;
-    tcpPortField_.nextKeyView = udpPortField_;
-    udpPortField_.nextKeyView = listenerIpField_;
-    listenerIpField_.nextKeyView = multicastIpField_;
-    multicastIpField_.nextKeyView = nextKeyView;
+    tcpPortField_.nextKeyView = listenerIpField_;
+    listenerIpField_.nextKeyView = nextKeyView;
 }
 
 void MacOSSettingsPage::OnFieldEditingEnded(NSTextField* field) {
     if (field == tcpPortField_) {
         ValidateTcpPort();
-    } else if (field == udpPortField_) {
-        ValidateUdpPort();
     } else if (field == listenerIpField_) {
         ValidateListenerIp();
-    } else if (field == multicastIpField_) {
-        ValidateMulticastIp();
     }
 }
 
@@ -402,20 +396,14 @@ void MacOSSettingsPage::BuildView() {
     NSBox* section = MacOSMakeGroupBox();
 
     tcpPortField_ = MacOSMakeFixedWidthTextField(110.0);
-    udpPortField_ = MacOSMakeFixedWidthTextField(110.0);
     listenerIpField_ = MacOSMakeFixedWidthTextField(190.0);
-    multicastIpField_ = MacOSMakeFixedWidthTextField(190.0);
     tcpPortField_.delegate = fieldDelegate_;
-    udpPortField_.delegate = fieldDelegate_;
     listenerIpField_.delegate = fieldDelegate_;
-    multicastIpField_.delegate = fieldDelegate_;
 
     NSMutableArray<NSLayoutConstraint*>* rowConstraints = [NSMutableArray array];
     AddSettingRow(section, MacOSMakeLabel(CLP_NS(CLP_UI_TCP_PORT)), tcpPortField_, nil, rowConstraints);
-    AddSettingRow(section, MacOSMakeLabel(CLP_NS(CLP_UI_UDP_PORT)), udpPortField_, tcpPortField_, rowConstraints);
-    AddSettingRow(section, MacOSMakeLabel(CLP_NS(CLP_UI_LISTENER_IP)), listenerIpField_, udpPortField_, rowConstraints);
-    AddSettingRow(section, MacOSMakeLabel(CLP_NS(CLP_UI_MULTICAST_IP)), multicastIpField_, listenerIpField_, rowConstraints);
-    [rowConstraints addObject:[multicastIpField_.bottomAnchor constraintEqualToAnchor:section.bottomAnchor constant:-kSectionInsetY]];
+    AddSettingRow(section, MacOSMakeLabel(CLP_NS(CLP_UI_LISTENER_IP)), listenerIpField_, tcpPortField_, rowConstraints);
+    [rowConstraints addObject:[listenerIpField_.bottomAnchor constraintEqualToAnchor:section.bottomAnchor constant:-kSectionInsetY]];
 
     NSTextField* privacyHeader = [NSTextField labelWithString:CLP_NS(CLP_UI_PRIVACY)];
     privacyHeader.translatesAutoresizingMaskIntoConstraints = NO;
@@ -551,15 +539,13 @@ void MacOSSettingsPage::BuildView() {
 }
 
 void MacOSSettingsPage::LoadSettingsIntoFields() {
-    if (tcpPortField_ == nil || udpPortField_ == nil || listenerIpField_ == nil || multicastIpField_ == nil) {
+    if (tcpPortField_ == nil || listenerIpField_ == nil) {
         return;
     }
 
     loadingSettings_ = true;
     MacOSSetFieldText(tcpPortField_, g_settings.tcpPort());
-    MacOSSetFieldText(udpPortField_, g_settings.mdnsPort());
     MacOSSetFieldText(listenerIpField_, g_settings.listenerIp());
-    MacOSSetFieldText(multicastIpField_, g_settings.multicastIp());
     RefreshClipboardHistoryControls();
     RefreshPrivacyControls();
     loadingSettings_ = false;
@@ -594,20 +580,6 @@ void MacOSSettingsPage::ValidateTcpPort() {
     MacOSSetFieldText(tcpPortField_, g_settings.tcpPort());
 }
 
-void MacOSSettingsPage::ValidateUdpPort() {
-    int port = 0;
-    const int currentValue = g_settings.mdnsPort();
-    if (!uiSettingsPage::TryParsePort(MacOSToStdString(udpPortField_.stringValue), port)) {
-        MacOSSetFieldText(udpPortField_, currentValue);
-        return;
-    }
-
-    if (port != currentValue && g_settings.set_mdnsPort(port)) {
-        ApplyNetworkSettingChange();
-    }
-    MacOSSetFieldText(udpPortField_, g_settings.mdnsPort());
-}
-
 void MacOSSettingsPage::ValidateListenerIp() {
     const std::string value = uiSettingsPage::TrimAscii(MacOSToStdString(listenerIpField_.stringValue));
     const std::string currentValue = g_settings.listenerIp();
@@ -620,20 +592,6 @@ void MacOSSettingsPage::ValidateListenerIp() {
         ApplyNetworkSettingChange();
     }
     MacOSSetFieldText(listenerIpField_, g_settings.listenerIp());
-}
-
-void MacOSSettingsPage::ValidateMulticastIp() {
-    const std::string value = uiSettingsPage::TrimAscii(MacOSToStdString(multicastIpField_.stringValue));
-    const std::string currentValue = g_settings.multicastIp();
-    if (!Settings::IsValidMulticastIp(value)) {
-        MacOSSetFieldText(multicastIpField_, currentValue);
-        return;
-    }
-
-    if (value != currentValue && g_settings.set_multicastIp(value)) {
-        ApplyNetworkSettingChange();
-    }
-    MacOSSetFieldText(multicastIpField_, g_settings.multicastIp());
 }
 
 void MacOSSettingsPage::RefreshHostIDDisplay() {

@@ -204,9 +204,7 @@ NS_SWIFT_NAME(SettingsSnapshot)
 @property(nonatomic, assign, readonly) unsigned long long clipboardHistoryMaxAgeSeconds;
 @property(nonatomic, assign, readonly) unsigned long long clipboardHistoryMaxItems;
 @property(nonatomic, assign, readonly) NSInteger tcpPort;
-@property(nonatomic, assign, readonly) NSInteger udpPort;
 @property(nonatomic, copy, readonly) NSString* listenerIP;
-@property(nonatomic, copy, readonly) NSString* multicastIP;
 @property(nonatomic, copy, readonly) NSString* hostID;
 @property(nonatomic, assign, readonly) BOOL hasHostIDCollisionWarning;
 @property(nonatomic, assign, readonly) BOOL honorExternalPrivacyMarkers;
@@ -215,9 +213,7 @@ NS_SWIFT_NAME(SettingsSnapshot)
                          clipboardHistoryMaxAgeSeconds:(unsigned long long)clipboardHistoryMaxAgeSeconds
                               clipboardHistoryMaxItems:(unsigned long long)clipboardHistoryMaxItems
                                                tcpPort:(NSInteger)tcpPort
-                                               udpPort:(NSInteger)udpPort
                                             listenerIP:(NSString*)listenerIP
-                                           multicastIP:(NSString*)multicastIP
                                                 hostID:(NSString*)hostID
                              hasHostIDCollisionWarning:(BOOL)hasHostIDCollisionWarning
                            honorExternalPrivacyMarkers:(BOOL)honorExternalPrivacyMarkers NS_DESIGNATED_INITIALIZER;
@@ -234,10 +230,8 @@ NS_SWIFT_NAME(SettingsBridge)
                                                                 maxItems:(unsigned long long)maxItems
                                                                    error:(NSError**)error NS_SWIFT_NAME(updateClipboardHistory(memoryLimitBytes:maxAgeSeconds:maxItems:));
 + (nullable CLPSettingsSnapshot*)updateNetworkTcpPort:(NSInteger)tcpPort
-                                              udpPort:(NSInteger)udpPort
                                            listenerIP:(NSString*)listenerIP
-                                          multicastIP:(NSString*)multicastIP
-                                                error:(NSError**)error NS_SWIFT_NAME(updateNetwork(tcpPort:udpPort:listenerIP:multicastIP:));
+                                                error:(NSError**)error NS_SWIFT_NAME(updateNetwork(tcpPort:listenerIP:));
 + (nullable CLPSettingsSnapshot*)resetHostIDWithError:(NSError**)error NS_SWIFT_NAME(resetHostID());
 + (nullable CLPSettingsSnapshot*)updateHonorExternalPrivacyMarkers:(BOOL)honor
                                                               error:(NSError**)error NS_SWIFT_NAME(updateHonorExternalPrivacyMarkers(_:));

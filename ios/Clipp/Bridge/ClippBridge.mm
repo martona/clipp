@@ -512,9 +512,7 @@ CLPSettingsSnapshot* LoadSettingsSnapshot(NSError** error) {
                                                  clipboardHistoryMaxAgeSeconds:g_settings.clipboardHistoryMaxAgeSeconds()
                                                       clipboardHistoryMaxItems:g_settings.clipboardHistoryMaxItems()
                                                                        tcpPort:g_settings.tcpPort()
-                                                                       udpPort:g_settings.mdnsPort()
                                                                     listenerIP:ToNSString(g_settings.listenerIp())
-                                                                   multicastIP:ToNSString(g_settings.multicastIp())
                                                                         hostID:ToNSString(hostID.ToHexString())
                                                      hasHostIDCollisionWarning:MDNSHasHostIDCollisionWarning()
                                                    honorExternalPrivacyMarkers:g_settings.honorExternalPrivacyMarkers() ? YES : NO];
@@ -1074,9 +1072,7 @@ void CLPIOSReceiveClipboardPayload(std::shared_ptr<const ClipboardPayload> paylo
                          clipboardHistoryMaxAgeSeconds:(unsigned long long)clipboardHistoryMaxAgeSeconds
                               clipboardHistoryMaxItems:(unsigned long long)clipboardHistoryMaxItems
                                                tcpPort:(NSInteger)tcpPort
-                                               udpPort:(NSInteger)udpPort
                                             listenerIP:(NSString*)listenerIP
-                                           multicastIP:(NSString*)multicastIP
                                                 hostID:(NSString*)hostID
                              hasHostIDCollisionWarning:(BOOL)hasHostIDCollisionWarning
                            honorExternalPrivacyMarkers:(BOOL)honorExternalPrivacyMarkers {
@@ -1086,9 +1082,7 @@ void CLPIOSReceiveClipboardPayload(std::shared_ptr<const ClipboardPayload> paylo
         _clipboardHistoryMaxAgeSeconds = clipboardHistoryMaxAgeSeconds;
         _clipboardHistoryMaxItems = clipboardHistoryMaxItems;
         _tcpPort = tcpPort;
-        _udpPort = udpPort;
         _listenerIP = [listenerIP copy];
-        _multicastIP = [multicastIP copy];
         _hostID = [hostID copy];
         _hasHostIDCollisionWarning = hasHostIDCollisionWarning;
         _honorExternalPrivacyMarkers = honorExternalPrivacyMarkers;
@@ -1141,28 +1135,16 @@ void CLPIOSReceiveClipboardPayload(std::shared_ptr<const ClipboardPayload> paylo
 }
 
 + (CLPSettingsSnapshot*)updateNetworkTcpPort:(NSInteger)tcpPort
-                                     udpPort:(NSInteger)udpPort
                                   listenerIP:(NSString*)listenerIP
-                                 multicastIP:(NSString*)multicastIP
                                        error:(NSError**)error {
     if (!Settings::IsValidPort(static_cast<int>(tcpPort))) {
         AssignError(error, kClippSettingsErrorBase + 7, @"TCP port must be between 1 and 65535.");
-        return nil;
-    }
-    if (!Settings::IsValidPort(static_cast<int>(udpPort))) {
-        AssignError(error, kClippSettingsErrorBase + 8, @"UDP port must be between 1 and 65535.");
         return nil;
     }
 
     const std::string listenerIPValue = uiSettingsPage::TrimAscii(ToStdString(listenerIP));
     if (!Settings::IsValidListenerIp(listenerIPValue)) {
         AssignError(error, kClippSettingsErrorBase + 9, @"Listener IP must be a valid IPv4 address.");
-        return nil;
-    }
-
-    const std::string multicastIPValue = uiSettingsPage::TrimAscii(ToStdString(multicastIP));
-    if (!Settings::IsValidMulticastIp(multicastIPValue)) {
-        AssignError(error, kClippSettingsErrorBase + 10, @"Multicast IP must be a valid multicast IPv4 address.");
         return nil;
     }
 
@@ -1174,23 +1156,9 @@ void CLPIOSReceiveClipboardPayload(std::shared_ptr<const ClipboardPayload> paylo
         }
         changed = true;
     }
-    if (static_cast<int>(udpPort) != g_settings.mdnsPort()) {
-        if (!g_settings.set_mdnsPort(static_cast<int>(udpPort))) {
-            AssignError(error, kClippSettingsErrorBase + 12, @"Unable to save UDP port.");
-            return nil;
-        }
-        changed = true;
-    }
     if (listenerIPValue != g_settings.listenerIp()) {
         if (!g_settings.set_listenerIp(listenerIPValue)) {
             AssignError(error, kClippSettingsErrorBase + 13, @"Unable to save listener IP.");
-            return nil;
-        }
-        changed = true;
-    }
-    if (multicastIPValue != g_settings.multicastIp()) {
-        if (!g_settings.set_multicastIp(multicastIPValue)) {
-            AssignError(error, kClippSettingsErrorBase + 14, @"Unable to save multicast IP.");
             return nil;
         }
         changed = true;
