@@ -16,13 +16,16 @@ Clipp is LAN-first by design. If you want the same workflow across networks, use
 
 <table>
   <tr>
-    <td align="center" valign="top">
-      <img src="docs/screenshots/windows.png" alt="Clipp on Windows: Network tab with key fingerprint and peer list" width="400"><br>
-      <em>Windows — peer discovery, with key fingerprint and connected devices</em>
+    <td align="center" valign="top" width="50%">
+      <img src="docs/screenshots/windows.png" alt="Clipp on Windows: Network tab with key fingerprint and peer list">
     </td>
-    <td align="center" valign="top">
-      <img src="docs/screenshots/macos.png" alt="Clipp on macOS: clipboard activity stream with text, masked password, and an image received from iPhone" width="400"><br>
-      <em>macOS — clipboard activity stream: text, masked password, image from iPhone</em>
+    <td align="center" valign="top" width="50%">
+      <img src="docs/screenshots/macos.png" alt="Clipp on macOS: clipboard activity stream with text, masked password, and an image received from iPhone">
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="top" colspan="2" width="100%">
+      <img src="docs/screenshots/terminal.png" alt="Clipp in the terminal: demonstrating copy/paste">
     </td>
   </tr>
 </table>
