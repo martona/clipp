@@ -36,6 +36,7 @@ Clipp moves clipboard history between your own devices without a cloud service i
 - Sends clipboard data directly between devices.
 - Shows recent clipboard activity so you can copy an earlier item again.
 - Works over trusted VPN or mesh networks when you want the same setup away from your LAN.
+- Pipes clipboard text to and from the network from the command line (`clipp copy` / `clipp paste`), including over SSH.
 
 ## Security Model
 
@@ -135,6 +136,22 @@ Single-line text without whitespace is treated as a password and shown masked in
 - **Windows**: Clipp lives in the system tray. *Minimize to Tray* hides the window but keeps clipp running; *Exit Clipp* shuts it down entirely.
 - **macOS**: Clipp lives in the menu bar. Same minimize/exit semantics as Windows.
 - **iOS**: Clipp is a foreground app. Background clipboard sync is limited by iOS's restrictions on background clipboard and network access. A Share Extension puts Clipp in the iOS Share sheet — tap Share on any text or image and select Clipp to send it to your devices. Alternatively, open the app and tap *Send* to share whatever's on the clipboard right now, or tap any item in the activity stream to copy it back.
+
+### Command line
+
+On the desktop, the same binary doubles as a command-line tool, dispatching on its arguments — so moving the clipboard doesn't require the window in front of you, including over SSH. `clipp copy` reads stdin and sends it to your devices; `clipp paste` fetches the newest item and writes it to stdout. It's `pbcopy`/`pbpaste` for your Clipp network:
+
+```sh
+echo "deploy v2.1.0" | clipp copy    # push stdin to every device
+clipp paste                          # print the newest network clipboard item
+clipp p > notes.txt                  # `p` aliases paste; `c` aliases copy
+```
+
+Transfers are text-only and add no trailing newline, so they pipe cleanly. Delivery goes through whatever peers are already running on the network, so the desktop app doesn't need to be open on *this* machine — just reachable somewhere. You can also set a device's network name and secret from the terminal with `clipp key set`; run `clipp --help` for the rest (`key`, `hostid`).
+
+On Windows, pipe through `clipp.com` (the console shim from [Installation](#windows)) — `clipp.exe` is the GUI and carries no stdio. On macOS the binary lives inside the bundle at `Clipp.app/Contents/MacOS/clipp`, if it's not on your `PATH`.
+
+A note on macOS and using Clipp via SSH: Apps in an SSH session are blind to the keychain. Using Clipp this way requires you to have the GUI app running on the same machine so the process in the SSH session can query it for the network key.
 
 ## Troubleshooting
 
