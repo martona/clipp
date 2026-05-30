@@ -3,6 +3,7 @@
 [![Windows CI](https://github.com/martona/clipp/actions/workflows/windows-ci.yml/badge.svg)](https://github.com/martona/clipp/actions/workflows/windows-ci.yml)
 [![macOS CI](https://github.com/martona/clipp/actions/workflows/macos-ci.yml/badge.svg)](https://github.com/martona/clipp/actions/workflows/macos-ci.yml)
 [![iOS CI](https://github.com/martona/clipp/actions/workflows/ios-ci.yml/badge.svg)](https://github.com/martona/clipp/actions/workflows/ios-ci.yml)
+[![Linux CI](https://github.com/martona/clipp/actions/workflows/linux-ci.yml/badge.svg)](https://github.com/martona/clipp/actions/workflows/linux-ci.yml)
 
 Secure cross-platform clipboard sync for trusted devices.
 
