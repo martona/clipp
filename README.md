@@ -6,9 +6,9 @@
 
 Secure cross-platform clipboard sync for trusted devices.
 
-Clipp is a free, open source, peer-to-peer clipboard sync utility for Windows, macOS, and iOS. It is built for the boring case: devices you already trust, on a network you already control, sharing clipboard text and images without routing your clipboard through someone else's cloud.
+Clipp is a free, open source, peer-to-peer clipboard sync utility for Windows, macOS, and iOS. It is built for devices you trust, on a network you control, sharing clipboard text and images without routing your clipboard through the cloud. Having said that, security (mutual authentication and encryption) are not an afterthought. The terminal is a first-class citizen and in addition to a GUI, Clipp also supports `clipp copy` and `clipp paste` - think `pbcopy` but network-enabled. 
 
-I wrote Clipp because I needed this exact thing, and the usual options kept failing one or more basic tests: not open source, cloud-dependent, not free, or folded into a larger kitchen-sink app whose job was no longer just clipboard sync. Clipp tries to stay narrow: discover nearby peers, verify device trust, move clipboard data directly, and otherwise stay out of the way.
+I wrote Clipp because I needed this exact thing, and the usual options kept failing one or more basic tests: not open source, cloud-dependent, not free, or folded into a larger kitchen-sink app whose job was no longer just clipboard sync. Clipp tries to stay lean: discover nearby peers, verify device trust, move clipboard data directly, and otherwise stay out of the way.
 
 Clipp is LAN-only by design. If you want the same workflow across networks, use an overlay such as Tailscale or NostrVPN and let Clipp keep doing the simple peer-to-peer part.
 
@@ -43,9 +43,9 @@ Clipp moves clipboard history between your own devices without a cloud service i
 
 ## Security Model
 
-Devices join with a shared network name + secret; Clipp derives a master key and shows a non-secret fingerprint so you can confirm two devices match. Connections are mutually authenticated from that key, then each session negotiates fresh ephemeral Diffie-Hellman keys for encryption — all built on libsodium primitives, no homegrown crypto. Clipboard data moves directly between peers over the LAN, never through a cloud service.
+Devices join with a shared network name + secret; Clipp derives a master key and shows a non-secret fingerprint so you can confirm two devices match. Connections are mutually authenticated from that key, then each session negotiates fresh ephemeral Diffie-Hellman keys for encryption - all built on libsodium primitives, no homegrown crypto. Clipboard data moves directly between peers over the LAN, never through a cloud service.
 
-Clipp's trust model is deliberately narrow — your own devices, on a network or VPN you already trust — and it does not defend against software that can already read your local clipboard, a weak or mishandled secret, or a device you shouldn't have trusted in the first place. The full trust model, key hierarchy, transport details, and caveats live in the [Security Model](docs/SECURITY-MODEL.md); to report a vulnerability, see [SECURITY.md](SECURITY.md).
+Clipp's trust model is deliberately narrow - your own devices, on a network or VPN you already trust - and it does not defend against software that can already read your local clipboard, a weak or mishandled secret, or a device you shouldn't have trusted. The full trust model, key hierarchy, transport details, and caveats live in the [Security Model](docs/SECURITY-MODEL.md); to report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Platform Status
 
@@ -61,11 +61,11 @@ Clipp's trust model is deliberately narrow — your own devices, on a network or
 
 ### Windows
 
-Download the zip for your architecture from the [latest release](https://github.com/martona/clipp/releases/latest), extract it anywhere, and run `clipp.exe`. The app writes to HKCU\Software\Clipp under the registry, and registers itself to auto-start with Windows, but otherwise leaves your system alone. To undo the latter (and stop Clipp from automatically starting), just use the Exit option in either the tray menu or the main app window. Launch via `clipp.com` instead of `clipp.exe` if you want clipp's stdout attached when starting from `cmd` or PowerShell — useful for debugging, but most users won't need it.
+Download the zip for your architecture from the [latest release](https://github.com/martona/clipp/releases/latest), extract it anywhere, and run `clipp.exe`. The app writes to HKCU\Software\Clipp under the registry, and registers itself to auto-start with Windows, but otherwise leaves your system alone. To undo the latter (and stop Clipp from automatically starting), just use the Exit option in either the tray menu or the main app window. `clipp copy` and `clipp paste` work from the terminal as long as you have Clipp on the path. The app uses a .com shim to enable console operation.
 
 ### macOS
 
-Download the disk image or zip for Apple Silicon from the [latest release](https://github.com/martona/clipp/releases/latest), open it, and drag `Clipp.app` to `/Applications`. macOS will confirm opening an app from an identified developer on first launch — click *Open*. Clipp registers itself as a macOS background item so it can start with the system: use the Exit option in either the main app window or the menu bar menu to undo this.
+Download the disk image or zip for Apple Silicon from the [latest release](https://github.com/martona/clipp/releases/latest), open it, and drag `Clipp.app` to `/Applications` then doubleclick to open. Clipp registers itself as a macOS background item so it can start with the system: use the Exit option in either the main app window or the menu bar menu to undo this. To use `clipp copy` / `paste` you probably want the app's binary (`/Applications/clipp.app/Contents/MacOS/clipp`) on your PATH.
 
 ### iOS
 
@@ -79,15 +79,15 @@ Every release zip is attested via Sigstore — you can confirm it's the unmodifi
 gh attestation verify clipp-<version>-<os>-<arch>.zip --repo martona/clipp
 ```
 
-Requires the [GitHub CLI](https://cli.github.com/). The verification ties the zip's SHA256 to the exact CI run that built it, on the exact commit. Tampering anywhere in the chain — replaced upload, swapped artifact, modified zip contents — makes verification fail.
+Requires the [GitHub CLI](https://cli.github.com/). The verification ties the zip's SHA256 to the exact CI run that built it, on the exact commit. Tampering anywhere in the chain - replaced upload, swapped artifact, modified zip contents - makes verification fail.
 
-Windows binaries inside the zip are additionally Authenticode-signed via Microsoft Trusted Signing, which you can inspect via Properties → Digital Signatures or:
+Windows binaries inside the zip are additionally Authenticode-signed via Microsoft Trusted Signing, which you can inspect via Properties -> Digital Signatures or:
 
 ```powershell
 Get-AuthenticodeSignature .\clipp.exe
 ```
 
-macOS bundles are Developer ID-signed and notarized by Apple, with the notarization ticket stapled into the `.app`. Gatekeeper validates this offline on first launch, so no warning dialog appears. To inspect:
+macOS bundles are Developer ID-signed and notarized by Apple, with the notarization ticket stapled into the `.app`. To inspect:
 
 ```sh
 spctl --assess --type execute --verbose Clipp.app
@@ -101,10 +101,10 @@ codesign -dvvv Clipp.app
 
 When you launch Clipp on a new device, open the **Network** tab and choose:
 
-- A **network name** — a label for your set of trusted devices. Not a secret, but should be specific enough that you'd notice a typo.
+- A **network name** — a label for your set of devices. Not a secret, but should be entered in exactly the same way on all your devices.
 - A **secret** — the shared password that makes one of your devices indistinguishable from another to Clipp. Treat this with the care you'd give any password.
 
-Clipp derives a master key from those two inputs and shows a fingerprint. Repeat the setup on every device you want to sync, using exactly the same name and secret. If the inputs match, the fingerprint matches and the devices will connect immediately; if a device shows a different fingerprint, one of the inputs is wrong on at least one device, and the devices won't sync until you fix it.
+Clipp derives a master key from those two inputs and shows a fingerprint. Repeat the setup on every device you want to sync, using exactly the same name and secret. If the inputs match, the fingerprint matches and the devices will connect immediately; if a device shows a different fingerprint, one of the inputs is wrong on one device, and they won't sync until you fix it.
 
 ### Day-to-day
 
@@ -116,13 +116,13 @@ If you want more:
 
 - The **Clipp** (activity) tab shows recent items received from every connected peer. Click any item to copy it back to your local clipboard.
 - Text and images sync. Larger items take a moment. Copying files across devices is out of scope for the current release.
-- The activity history lives in RAM only and is cleared when you quit.
+- The activity history lives in RAM only and is cleared when you quit. It's repopulated from the network when you open the app again.
 
 Single-line text without whitespace is treated as a password and shown masked in the activity stream. The clipboard content itself isn't modified. iOS has a peek gesture to briefly reveal the text; the desktop apps don't have one yet.
 
 ### Tray and menu bar
 
-- **Windows**: Clipp lives in the system tray. *Minimize to Tray* hides the window but keeps clipp running; *Exit Clipp* shuts it down entirely.
+- **Windows**: Clipp lives in the system tray. *Minimize to Tray* hides the window but keeps Clipp running (same as the window close button); *Exit Clipp* shuts it down entirely.
 - **macOS**: Clipp lives in the menu bar. Same minimize/exit semantics as Windows.
 - **iOS**: Clipp is a foreground app. Background clipboard sync is limited by iOS's restrictions on background clipboard and network access. A Share Extension puts Clipp in the iOS Share sheet — tap Share on any text or image and select Clipp to send it to your devices. Alternatively, open the app and tap *Send* to share whatever's on the clipboard right now, or tap any item in the activity stream to copy it back.
 
@@ -140,13 +140,13 @@ Transfers are text-only and add no trailing newline, so they pipe cleanly. Deliv
 
 On Windows, pipe through `clipp.com` (the console shim from [Installation](#windows)) — `clipp.exe` is the GUI and carries no stdio. On macOS the binary lives inside the bundle at `Clipp.app/Contents/MacOS/clipp`, if it's not on your `PATH`.
 
-A note on macOS and using Clipp via SSH: Apps in an SSH session are blind to the keychain. Using Clipp this way requires you to have the GUI app running on the same machine so the process in the SSH session can query it for the network key.
+A note on macOS and using Clipp via SSH on a Mac host: Apps in an SSH session are blind to the keychain. Using Clipp this way requires you to have the GUI app running on the same machine so the process in the SSH session can query it for the network key.
 
 ## Troubleshooting
 
 This section covers runtime issues. For build problems, see [BUILDING.md's troubleshooting section](BUILDING.md#troubleshooting).
 
-**Devices don't see each other.** Clipp discovers peers via mDNS / DNS-SD. Common blockers: the devices are on different VLANs or guest networks that don't forward multicast, the access point has multicast filtering enabled, or a firewall on either device is blocking incoming UDP/TCP. On Windows, allow `clipp.exe` through the firewall on the *Private* network profile. On macOS, allow incoming connections for `Clipp.app` in System Settings → Network → Firewall. macOS prompts for this on first run; you only need to add the rule manually if you denied the prompt or have a stricter firewall policy in place.
+**Devices don't see each other.** Clipp discovers peers via mDNS / DNS-SD. Common blockers: the devices are on different VLANs or guest networks that don't forward multicast, the access point has multicast filtering enabled, or a firewall on either device is blocking incoming UDP/TCP. On Windows, allow `clipp.exe` through the firewall on the *Private* network profile. On macOS, allow incoming connections for `Clipp.app` in System Settings -> Network -> Firewall. macOS prompts for this on first run; you only need to add the rule manually if you denied the prompt or have a stricter firewall policy in place.
 
 **Fingerprints don't match between devices.** The two devices have different inputs. Most often this is whitespace, case, or autocorrect on the network name or secret — the inputs are compared byte-for-byte. Re-enter both on the device with the mismatched fingerprint, being careful with mobile autocomplete and spell-correct.
 
