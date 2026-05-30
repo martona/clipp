@@ -3,6 +3,7 @@
 #include "ClipboardPayload.h"
 #include "CryptoChannel.h"
 #include "HostId.h"
+#include "MDNSDiscovery.h"
 #include "utils_socket.h"
 
 #include <atomic>
@@ -10,6 +11,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -69,3 +71,25 @@ private:
     std::condition_variable deadlineCV_;
     bool finished_{ false };
 };
+
+namespace OneShot {
+
+// Shared one-shot timeouts: TCP connect, the whole post-connect session, and the
+// give-up ceiling for discovery (hit only when no peer answers).
+constexpr auto kConnectTimeout = std::chrono::seconds(3);
+constexpr auto kSessionTimeout = std::chrono::seconds(30);
+constexpr auto kBrowseCeiling  = std::chrono::milliseconds(1200);
+
+// Finds a gateway peer (the first that accepts) and pushes `payloads` to it with
+// CLPM_FLAG_RELAY set, so that peer rebroadcasts them to the synced mesh — one push
+// instead of a fan-out. Returns the peer it relayed through, or nullopt if none
+// accepted within kBrowseCeiling. Shared by the CLI `copy` verb and the iOS share
+// extension. `includeSelf` surfaces this device's own GUI (CLI uses true; the share
+// extension uses false, since it can't assume its own app is running to relay).
+std::optional<MDNSDiscovery::DiscoveredPeer> RelayPayloads(
+    std::vector<ClipboardPayload> payloads,
+    const HostId& localHostId,
+    const std::string& localHostName,
+    bool includeSelf);
+
+}  // namespace OneShot

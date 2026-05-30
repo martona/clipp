@@ -24,6 +24,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <set>
@@ -54,7 +55,7 @@ struct State {
     Callback callback = nullptr;
     bool started = false;
     bool publishLocal = false;
-    bool includeSelf = false;   // BrowseOnce(includeSelf): surface same-hostId peers (the local GUI)
+    bool includeSelf = false;   // BrowseStream(includeSelf): surface same-hostId peers (the local GUI)
     HostId localHostId;
     std::string publishedInstanceName;
     std::atomic<bool> hostIDCollisionWarning{ false };
@@ -155,7 +156,7 @@ std::map<std::string, std::string> ParseTxtRecordData(NSData* data) {
 @property (nonatomic, assign) std::map<HostId, std::set<std::string>>* liveByHostId;
 @property (nonatomic, assign) std::mutex* liveInstancesMutex;
 
-// Optional capture target: when set, Added events also push into this vector (used by BrowseOnce).
+// Optional capture target: when set, Added events also push into this vector (used by BrowseStream).
 @property (nonatomic, assign) std::vector<MDNSDiscovery::DiscoveredPeer>* captureVector;
 @property (nonatomic, assign) std::mutex* captureMutex;
 
@@ -494,7 +495,7 @@ namespace MDNSDiscovery {
 
 namespace {
 
-// One coordinator for continuous Start/Stop; transient one for BrowseOnce.
+// One coordinator for continuous Start/Stop; transient one for BrowseStream.
 ClippMDNSAppleCoordinator* gContinuous = nil;
 
 } // namespace
@@ -553,13 +554,13 @@ void ClearHostIDCollisionWarning() {
     GlobalState().hostIDCollisionWarning.store(false);
 }
 
-bool BrowseOnce(std::chrono::milliseconds wait, std::vector<DiscoveredPeer>& outPeers, bool includeSelf) {
-    outPeers.clear();
+bool BrowseStream(std::chrono::milliseconds maxWait, bool includeSelf,
+                  const std::function<bool(const DiscoveredPeer&)>& onPeer) {
     {
         std::lock_guard<std::mutex> lock(GlobalState().mutex);
         if (GlobalState().started) {
             g_logger.log(__FUNCTION__, Logger::Level::Warning,
-                "BrowseOnce called while continuous discovery is active; ignoring.");
+                "BrowseStream called while continuous discovery is active; ignoring.");
             return false;
         }
     }
@@ -572,6 +573,7 @@ bool BrowseOnce(std::chrono::milliseconds wait, std::vector<DiscoveredPeer>& out
         GlobalState().includeSelf = includeSelf;
     }
 
+    bool stopped = false;
     @autoreleasepool {
         ClippMDNSAppleCoordinator* coordinator = [[ClippMDNSAppleCoordinator alloc] init];
         std::mutex captureMutex;
@@ -588,25 +590,38 @@ bool BrowseOnce(std::chrono::milliseconds wait, std::vector<DiscoveredPeer>& out
         NSRunLoop* runLoop = [NSRunLoop currentRunLoop];
         [coordinator setupBrowserAndPublishOnCurrentRunLoop:NO];
 
-        NSDate* deadline = [NSDate dateWithTimeIntervalSinceNow:wait.count() / 1000.0];
-        while ([deadline timeIntervalSinceNow] > 0) {
+        NSDate* deadline = [NSDate dateWithTimeIntervalSinceNow:maxWait.count() / 1000.0];
+        size_t processed = 0;
+        while (!stopped && [deadline timeIntervalSinceNow] > 0) {
             @autoreleasepool {
-                [runLoop runMode:NSDefaultRunLoopMode beforeDate:deadline];
+                // Run the loop in short slices; handleResolvedService appends resolved
+                // peers to `captured` on this same thread during the slice.
+                NSDate* sliceEnd = [NSDate dateWithTimeIntervalSinceNow:0.025];
+                [runLoop runMode:NSDefaultRunLoopMode beforeDate:[sliceEnd earlierDate:deadline]];
+            }
+            // Drain peers captured this slice and run onPeer off the resolve callback.
+            std::vector<DiscoveredPeer> batch;
+            {
+                std::lock_guard<std::mutex> lock(captureMutex);
+                while (processed < captured.size()) {
+                    batch.push_back(captured[processed]);
+                    ++processed;
+                }
+            }
+            for (const DiscoveredPeer& peer : batch) {
+                if (!onPeer(peer)) { stopped = true; break; }
             }
         }
 
         [coordinator tearDownOnRunLoop:runLoop];
         coordinator.captureVector = nullptr;
         coordinator.captureMutex = nullptr;
-
-        std::lock_guard<std::mutex> lock(captureMutex);
-        outPeers = std::move(captured);
     }
     {
         std::lock_guard<std::mutex> lock(GlobalState().mutex);
         GlobalState().includeSelf = false;
     }
-    return true;
+    return stopped;
 }
 
 } // namespace MDNSDiscovery

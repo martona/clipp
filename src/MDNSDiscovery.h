@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -48,12 +49,16 @@ void Stop();
 bool HasHostIDCollisionWarning();
 void ClearHostIDCollisionWarning();
 
-// One-shot synchronous browse — used by the iOS share extension and the desktop CLI
-// verbs, which have short lifetimes and just want a snapshot of currently-visible peers.
-// `includeSelf=true` includes this device's own GUI (same hostId); the CLI `copy`/`paste`
-// verbs use it (copy reaches the local GUI; paste prefers it). The share extension
-// leaves it false.
-bool BrowseOnce(std::chrono::milliseconds wait, std::vector<DiscoveredPeer>& outPeers, bool includeSelf = false);
+// Streaming one-shot browse for the one-shot verbs (CLI `copy`/`paste`, iOS share
+// extension). Invokes `onPeer` for each peer as it resolves, on the *calling* thread
+// (so onPeer may do blocking network I/O). `onPeer` returns true to keep browsing or
+// false to stop immediately — callers use a single discovered peer as a gateway to
+// the synced mesh, so they stop at the first peer the operation succeeds with. Returns
+// true if `onPeer` stopped it (success), false if `maxWait` elapsed with no stop.
+// `includeSelf=true` surfaces this device's own GUI (same hostId); the share extension
+// leaves it false (it can't assume its own app is running to relay).
+bool BrowseStream(std::chrono::milliseconds maxWait, bool includeSelf,
+                  const std::function<bool(const DiscoveredPeer&)>& onPeer);
 
 } // namespace MDNSDiscovery
 

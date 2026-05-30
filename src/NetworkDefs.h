@@ -50,6 +50,16 @@ constexpr uint32_t CLPM_FLAG_SYNC_REPLAY = 0x00000001u;
 // write entirely.
 constexpr uint32_t CLPM_FLAG_SOURCE_MARKED_PRIVATE = 0x00000002u;
 
+// CLPM_FLAG_RELAY marks a clipboard message pushed by a one-shot sender (the CLI
+// `copy` verb, the iOS share extension) that found a single "gateway" peer instead
+// of fanning out to everyone. The receiving peer applies it locally AND rebroadcasts
+// it to its own mesh with this bit cleared, so the item reaches the whole network
+// through one hop. The cleared bit on the rebroadcast is what prevents a relay storm
+// (recipients apply-but-don't-relay); eventGuid dedup is the backstop. Older peers
+// that don't know the bit simply apply it locally and don't relay — graceful, no cap
+// negotiation needed.
+constexpr uint32_t CLPM_FLAG_RELAY = 0x00000004u;
+
 #pragma pack(push, 1)
 struct ClipboardMessage {
     // Per-message metadata flags (CLPM_FLAG_*).

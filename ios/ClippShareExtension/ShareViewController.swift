@@ -116,37 +116,18 @@ final class ShareViewController: UIViewController {
             }.value
 
             let itemText = plural(result.sentItemCount, singular: "item", plural: "items")
-            let attemptedDeviceCount = result.attemptedDeviceCount
-            let failedDeviceNames = result.failedDeviceNames
-            let hasFailures = !failedDeviceNames.isEmpty || result.reachedDeviceCount < attemptedDeviceCount
-            let deviceText = plural(hasFailures ? attemptedDeviceCount : result.reachedDeviceCount, singular: "device", plural: "devices")
-            let sentDetail: String
-            if hasFailures {
-                sentDetail = "Sent \(result.sentItemCount) \(itemText) to \(result.reachedDeviceCount) of \(attemptedDeviceCount) \(deviceText)."
-            } else {
-                sentDetail = "Sent \(result.sentItemCount) \(itemText) to \(result.reachedDeviceCount) \(deviceText)."
-            }
-            let failureDetail: String?
-            if !failedDeviceNames.isEmpty {
-                failureDetail = "Failed: \(failedDeviceNames.joined(separator: ", "))."
-            } else if hasFailures {
-                let failedCount = attemptedDeviceCount - result.reachedDeviceCount
-                let failedDeviceText = plural(failedCount, singular: "device", plural: "devices")
-                failureDetail = "\(failedCount) \(failedDeviceText) failed."
-            } else {
-                failureDetail = nil
-            }
+            let sentDetail = "Relayed \(result.sentItemCount) \(itemText) via \(result.relayedViaDeviceName)."
             let ignored = ignoredText(extraction.unsupportedCount, fallback: nil)
-            let detail = ([ sentDetail, failureDetail, ignored ]
+            let detail = ([ sentDetail, ignored ]
                 .compactMap { $0 })
                 .joined(separator: " ")
 
             showResult(
-                symbolName: hasFailures ? "exclamationmark.triangle.fill" : "checkmark.circle.fill",
-                tintColor: hasFailures ? .systemOrange : .systemGreen,
-                title: hasFailures ? "Partially Shared" : "Shared with Clipp",
+                symbolName: "checkmark.circle.fill",
+                tintColor: .systemGreen,
+                title: "Shared with Clipp",
                 detail: detail,
-                feedback: hasFailures ? UINotificationFeedbackGenerator.FeedbackType.warning : UINotificationFeedbackGenerator.FeedbackType.success
+                feedback: UINotificationFeedbackGenerator.FeedbackType.success
             )
         } catch {
             let ignored = ignoredText(extraction.unsupportedCount, fallback: nil)

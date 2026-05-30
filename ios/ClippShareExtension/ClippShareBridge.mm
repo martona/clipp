@@ -15,13 +15,8 @@
 
 #include <sodium.h>
 
-#include <atomic>
-#include <chrono>
-#include <condition_variable>
-#include <mutex>
 #include <signal.h>
 #include <string>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -30,9 +25,6 @@ extern KeyManager g_keyManager;
 
 namespace {
 constexpr NSInteger kClippShareErrorBase = 5100;
-constexpr auto kDiscoveryWait = std::chrono::milliseconds(1200);
-constexpr auto kConnectWait = std::chrono::seconds(3);
-constexpr auto kSendWait = std::chrono::seconds(30);
 
 NSError* MakeError(NSInteger code, NSString* message) {
     return [NSError errorWithDomain:@"net.clipp.ios.share"
@@ -122,43 +114,6 @@ bool PayloadFromSharePayload(CLPSharePayload* sharePayload, ClipboardPayload& pa
     return false;
 }
 
-bool SendPayloadsToPeer(const MDNSDiscovery::DiscoveredPeer& peer, const std::vector<ClipboardPayload>& payloads) {
-    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Share extension connecting to peer %hs at %hs:%hu.",
-        peer.deviceName.c_str(),
-        peer.ip.c_str(),
-        peer.port);
-
-    HostId localHostID;
-    if (!g_settings.getHostID(localHostID)) {
-        return false;
-    }
-    const std::string localHostName = clipp::GetLocalPeerDisplayName("iPhone", CryptoChannel::HOSTNAME_MAX_BYTES);
-
-    OneShotPeer connection;
-    if (!connection.Connect(peer.ip, peer.port, localHostID, localHostName, peer.hostId,
-                            kConnectWait, kSendWait)) {
-        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Share extension failed to establish session with peer %hs.",
-            peer.deviceName.c_str());
-        return false;
-    }
-
-    bool sentAll = true;
-    for (const ClipboardPayload& payload : payloads) {
-        if (!connection.SendClipboardPayload(payload)) {
-            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Share extension failed to send %ls payload to peer %hs.",
-                ClippClipboardFormatNameW(payload.meta.formatId),
-                peer.deviceName.c_str());
-            sentAll = false;
-            break;
-        }
-    }
-
-    g_logger.log(__FUNCTION__, sentAll ? Logger::Level::Debug : Logger::Level::Warning, L"Share extension send to peer %hs %ls.",
-        peer.deviceName.c_str(),
-        sentAll ? L"succeeded" : L"failed");
-    return sentAll;
-}
-
 }
 
 @interface CLPSharePayload ()
@@ -215,15 +170,11 @@ bool SendPayloadsToPeer(const MDNSDiscovery::DiscoveredPeer& peer, const std::ve
 @implementation CLPShareSendResult
 
 - (instancetype)initWithSentItemCount:(NSInteger)sentItemCount
-                   reachedDeviceCount:(NSInteger)reachedDeviceCount
-                  attemptedDeviceCount:(NSInteger)attemptedDeviceCount
-                     failedDeviceNames:(NSArray<NSString*>*)failedDeviceNames {
+                 relayedViaDeviceName:(NSString*)relayedViaDeviceName {
     self = [super init];
     if (self) {
         _sentItemCount = sentItemCount;
-        _reachedDeviceCount = reachedDeviceCount;
-        _attemptedDeviceCount = attemptedDeviceCount;
-        _failedDeviceNames = [failedDeviceNames copy];
+        _relayedViaDeviceName = [relayedViaDeviceName copy];
     }
     return self;
 }
@@ -269,62 +220,21 @@ bool SendPayloadsToPeer(const MDNSDiscovery::DiscoveredPeer& peer, const std::ve
         return nil;
     }
 
-    std::vector<MDNSDiscovery::DiscoveredPeer> peers;
-    if (!MDNSDiscovery::BrowseOnce(kDiscoveryWait, peers)) {
-        AssignError(error, kClippShareErrorBase + 4, @"Unable to start local network discovery.");
+    const NSInteger itemCount = static_cast<NSInteger>(clipboardPayloads.size());
+
+    // Relay through the first reachable peer; it rebroadcasts to the synced mesh.
+    // includeSelf=false: the extension can't assume its own main app is running to relay.
+    const auto via = OneShot::RelayPayloads(std::move(clipboardPayloads), localHostId, localHostName, /*includeSelf=*/false);
+    if (!via) {
+        AssignError(error, kClippShareErrorBase + 7, @"No trusted device was reachable to relay the shared items.");
         return nil;
     }
 
-    if (peers.empty()) {
-        AssignError(error, kClippShareErrorBase + 6, @"No trusted devices were found on the local network.");
-        return nil;
-    }
-
-    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Share extension discovered %zu peer(s).", peers.size());
-
-    std::atomic<int> reachedDevices{ 0 };
-    std::mutex failedPeersMutex;
-    std::vector<std::string> failedPeerNames;
-    std::vector<std::thread> sendThreads;
-    sendThreads.reserve(peers.size());
-    for (const MDNSDiscovery::DiscoveredPeer& peer : peers) {
-        sendThreads.emplace_back([&clipboardPayloads, peer, &reachedDevices, &failedPeersMutex, &failedPeerNames]() {
-            if (SendPayloadsToPeer(peer, clipboardPayloads)) {
-                ++reachedDevices;
-            } else {
-                std::lock_guard<std::mutex> lock(failedPeersMutex);
-                failedPeerNames.push_back(peer.deviceName);
-            }
-        });
-    }
-
-    for (std::thread& sendThread : sendThreads) {
-        if (sendThread.joinable()) {
-            sendThread.join();
-        }
-    }
-
-    const int reachedDeviceCount = reachedDevices.load();
-    NSMutableArray<NSString*>* failedDeviceNames = [NSMutableArray arrayWithCapacity:failedPeerNames.size()];
-    for (const std::string& failedPeerName : failedPeerNames) {
-        NSString* name = [NSString stringWithUTF8String:failedPeerName.c_str()];
-        [failedDeviceNames addObject:name ?: @"Unknown device"];
-    }
-
-    if (reachedDeviceCount == 0) {
-        if (failedDeviceNames.count > 0) {
-            NSString* failedList = [failedDeviceNames componentsJoinedByString:@", "];
-            AssignError(error, kClippShareErrorBase + 7, [NSString stringWithFormat:@"No trusted devices accepted the shared items. Failed: %@.", failedList]);
-        } else {
-            AssignError(error, kClippShareErrorBase + 7, @"Trusted devices were found, but none accepted the shared items.");
-        }
-        return nil;
-    }
-
-    return [[CLPShareSendResult alloc] initWithSentItemCount:static_cast<NSInteger>(clipboardPayloads.size())
-                                         reachedDeviceCount:static_cast<NSInteger>(reachedDeviceCount)
-                                        attemptedDeviceCount:static_cast<NSInteger>(peers.size())
-                                           failedDeviceNames:failedDeviceNames];
+    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Share extension relayed %ld item(s) via %hs.",
+        static_cast<long>(itemCount), via->deviceName.c_str());
+    NSString* viaName = [NSString stringWithUTF8String:via->deviceName.c_str()];
+    return [[CLPShareSendResult alloc] initWithSentItemCount:itemCount
+                                       relayedViaDeviceName:(viaName ?: @"a nearby device")];
 }
 
 @end

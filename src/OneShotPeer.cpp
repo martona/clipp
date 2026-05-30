@@ -82,3 +82,46 @@ void OneShotPeer::Teardown() {
     }
     wakeEvent_.Close();
 }
+
+namespace OneShot {
+
+std::optional<MDNSDiscovery::DiscoveredPeer> RelayPayloads(
+    std::vector<ClipboardPayload> payloads,
+    const HostId& localHostId,
+    const std::string& localHostName,
+    bool includeSelf) {
+    for (ClipboardPayload& payload : payloads) {
+        payload.meta.flags |= NetworkDefs::CLPM_FLAG_RELAY;
+    }
+
+    std::optional<MDNSDiscovery::DiscoveredPeer> via;
+    MDNSDiscovery::BrowseStream(kBrowseCeiling, includeSelf,
+        [&](const MDNSDiscovery::DiscoveredPeer& peer) -> bool {
+            OneShotPeer connection;
+            if (!connection.Connect(peer.ip, peer.port, localHostId, localHostName, peer.hostId,
+                                    kConnectTimeout, kSessionTimeout)) {
+                return true;  // unreachable; try the next peer
+            }
+            // Gate on CAP0_SERVES_RECENT even though that cap names the paste/RCNT path,
+            // not relaying. The connection: a peer advertises it only if it's a current
+            // build, and a current build ships BOTH the RCNT responder and the relay
+            // responder together — so the bit is a reliable proxy for "this peer will
+            // rebroadcast a RELAY item to the mesh." Without the check, an older peer
+            // (which accepts the frame but silently ignores the RELAY flag) would look
+            // like success and strand the item on one device. Skipping to a current-build
+            // peer means its rebroadcast still reaches any older peers in the mesh anyway.
+            if ((connection.RemoteCaps()[0] & CryptoChannel::CAP0_SERVES_RECENT) == 0) {
+                return true;  // pre-relay peer; try the next
+            }
+            for (const ClipboardPayload& payload : payloads) {
+                if (!connection.SendClipboardPayload(payload)) {
+                    return true;  // send failed mid-stream; try the next peer
+                }
+            }
+            via = peer;
+            return false;  // delivered to a gateway; stop browsing
+        });
+    return via;
+}
+
+}  // namespace OneShot

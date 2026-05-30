@@ -2,9 +2,7 @@
 
 #include <CLI/CLI.hpp>
 
-#include <algorithm>
 #include <array>
-#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -12,7 +10,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <vector>
 
 #include <sodium.h>
@@ -192,10 +189,6 @@ struct NetworkStartup {
 struct NetworkStartup { bool ok = true; };
 #endif
 
-constexpr auto kDiscoveryWait = std::chrono::milliseconds(1200);
-constexpr auto kConnectWait = std::chrono::seconds(3);
-constexpr auto kSessionWait = std::chrono::seconds(30);
-
 // Reads stdin to EOF, binary-safe (no newline translation, no Ctrl-Z EOF on
 // Windows), for `copy`.
 std::vector<unsigned char> ReadAllStdin() {
@@ -345,9 +338,9 @@ int RunHostIdReset() {
     return 0;
 }
 
-// Reads stdin and pushes it to every discovered device's clipboard. Fans out to
-// all peers in parallel; reaching at least one device is success. Outbound-only,
-// one-shot per peer (OneShotPeer) — no GUI required on this machine.
+// Reads stdin and pushes it to the network as a UTF-8 text item. Finds one gateway
+// peer (the first that accepts) and relays through it — that peer rebroadcasts to the
+// synced mesh, so one push reaches everyone. No GUI required on this machine.
 int RunCopy() {
     if (!g_keyManager.HaveNetworkKey()) {
         ErrLine(L"No network key configured. Run `clipp key set` first.");
@@ -384,50 +377,14 @@ int RunCopy() {
     const std::string localHostName = clipp::GetLocalPeerDisplayName("unknown", CryptoChannel::HOSTNAME_MAX_BYTES);
     payload.StampOrigin(localHostId, localHostName.c_str(), g_settings.nextOriginSequenceNumber());
 
-    std::vector<MDNSDiscovery::DiscoveredPeer> peers;
-    if (!MDNSDiscovery::BrowseOnce(kDiscoveryWait, peers, /*includeSelf=*/true) || peers.empty()) {
-        ErrLine(L"No devices found on the local network.");
+    std::vector<ClipboardPayload> payloads;
+    payloads.push_back(std::move(payload));
+    const auto via = OneShot::RelayPayloads(std::move(payloads), localHostId, localHostName, /*includeSelf=*/true);
+    if (!via) {
+        ErrLine(L"Could not reach any device to copy to.");
         return 1;
     }
-
-    VerboseLine(L"Discovered " + std::to_wstring(peers.size()) + L" device(s).");
-
-    // Fan out to all peers. Each thread writes its own slot (distinct bytes, no lock
-    // needed) so we can report per-peer results after the join.
-    std::vector<unsigned char> sentToPeer(peers.size(), 0);
-    std::vector<std::thread> threads;
-    threads.reserve(peers.size());
-    for (size_t i = 0; i < peers.size(); ++i) {
-        threads.emplace_back([i, &peers, &sentToPeer, &payload, &localHostId, &localHostName]() {
-            const MDNSDiscovery::DiscoveredPeer& peer = peers[i];
-            OneShotPeer connection;
-            if (connection.Connect(peer.ip, peer.port, localHostId, localHostName, peer.hostId,
-                                   kConnectWait, kSessionWait)
-                && connection.SendClipboardPayload(payload)) {
-                sentToPeer[i] = 1;
-            }
-        });
-    }
-    for (std::thread& thread : threads) {
-        if (thread.joinable()) {
-            thread.join();
-        }
-    }
-
-    int reached = 0;
-    for (size_t i = 0; i < peers.size(); ++i) {
-        reached += sentToPeer[i];
-        VerboseLine(L"  " + PeerLabel(peers[i], localHostId) + L": "
-                    + (sentToPeer[i] ? L"sent" : L"unreachable"));
-    }
-
-    VerboseLine(L"Copied to " + std::to_wstring(reached) + L" of " +
-                std::to_wstring(peers.size()) + L" device(s).");
-
-    if (reached == 0) {
-        ErrLine(L"Could not reach any device.");
-        return 1;
-    }
+    VerboseLine(L"Relayed via " + PeerLabel(*via, localHostId) + L".");
     return 0;
 }
 
@@ -488,9 +445,10 @@ FetchResult FetchRecent(OneShotPeer& connection) {
     return FetchResult::Failed;
 }
 
-// Fetches the newest clipboard item from a device and writes it to stdout. Tries the
-// local GUI over loopback first (no mDNS), then discovered peers (same host id first).
-// Outbound-only, one-shot per peer; text-only.
+// Fetches the newest clipboard item from a device and writes it to stdout. Streams
+// discovery and tries each peer as it resolves, stopping at the first that serves
+// text content — in the synced mesh, any peer's newest item is the network's newest,
+// so there's no reason to wait for the full peer set. Text-only.
 int RunPaste() {
     if (!g_keyManager.HaveNetworkKey()) {
         ErrLine(L"No network key configured. Run `clipp key set` first.");
@@ -507,59 +465,29 @@ int RunPaste() {
     g_settings.getHostID(localHostId);
     const std::string localHostName = clipp::GetLocalPeerDisplayName("unknown", CryptoChannel::HOSTNAME_MAX_BYTES);
 
-    // Fast path: the local GUI binds 0.0.0.0 by default, so it's reachable over
-    // loopback with no mDNS round-trip — near-instant when our own clipboard has
-    // content. Best-effort: a closed port / non-default listener bind just fails fast
-    // and we fall through to discovery.
-    bool loopbackReachedGui = false;
-    {
-        OneShotPeer self;
-        if (self.Connect("127.0.0.1", static_cast<uint16_t>(g_settings.tcpPort()),
-                         localHostId, localHostName, localHostId, kConnectWait, kSessionWait)) {
-            loopbackReachedGui = true;
-            VerboseLine(L"Trying this device (127.0.0.1)...");
-            switch (FetchRecent(self)) {
-            case FetchResult::Content:   return 0;
-            case FetchResult::Empty:     VerboseLine(L"  no content."); break;
-            case FetchResult::NoSupport: VerboseLine(L"  no paste support."); break;
-            case FetchResult::Failed:    VerboseLine(L"  request failed."); break;
-            }
-        }
-    }
-
-    // Browse for the rest. If loopback reached our GUI, exclude self from discovery
-    // (just tried it); otherwise include it so an unusual listener bind still surfaces
-    // the local GUI at its LAN address.
-    std::vector<MDNSDiscovery::DiscoveredPeer> peers;
-    if (MDNSDiscovery::BrowseOnce(kDiscoveryWait, peers, /*includeSelf=*/!loopbackReachedGui) && !peers.empty()) {
-        // Prefer same-hostId first (covers the includeSelf fallback case).
-        std::stable_partition(peers.begin(), peers.end(),
-            [&localHostId](const MDNSDiscovery::DiscoveredPeer& peer) { return peer.hostId == localHostId; });
-
-        VerboseLine(L"Discovered " + std::to_wstring(peers.size()) + L" device(s).");
-
-        for (const MDNSDiscovery::DiscoveredPeer& peer : peers) {
+    const bool got = MDNSDiscovery::BrowseStream(OneShot::kBrowseCeiling, /*includeSelf=*/true,
+        [&](const MDNSDiscovery::DiscoveredPeer& peer) -> bool {
             VerboseLine(L"Trying " + PeerLabel(peer, localHostId) + L"...");
             OneShotPeer connection;
             if (!connection.Connect(peer.ip, peer.port, localHostId, localHostName, peer.hostId,
-                                    kConnectWait, kSessionWait)) {
+                                    OneShot::kConnectTimeout, OneShot::kSessionTimeout)) {
                 VerboseLine(L"  unreachable.");
-                continue;
+                return true;  // try the next peer
             }
-            switch (FetchRecent(connection)) {
-            case FetchResult::Content:   return 0;
-            case FetchResult::Empty:     VerboseLine(L"  no content."); break;
-            case FetchResult::NoSupport: VerboseLine(L"  no paste support, skipping."); break;
-            case FetchResult::Failed:    VerboseLine(L"  request failed."); break;
+            switch (FetchRecent(connection)) {  // writes stdout on Content
+            case FetchResult::Content:   return false;  // got it; stop browsing
+            case FetchResult::Empty:     VerboseLine(L"  no content."); return true;
+            case FetchResult::NoSupport: VerboseLine(L"  no paste support, skipping."); return true;
+            case FetchResult::Failed:    VerboseLine(L"  request failed."); return true;
             }
-        }
-    } else if (!loopbackReachedGui) {
-        ErrLine(L"No devices found on the local network.");
+            return true;
+        });
+
+    if (!got) {
+        ErrLine(L"No clipboard content available from any device.");
         return 1;
     }
-
-    ErrLine(L"No clipboard content available from any device.");
-    return 1;
+    return 0;
 }
 
 enum class Action { None, KeySet, KeyErase, KeyShow, HostIdShow, HostIdReset, Copy, Paste };

@@ -16,6 +16,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <set>
@@ -43,7 +44,7 @@ struct State {
     Callback callback = nullptr;
     bool started = false;
     bool publishLocal = false;
-    bool includeSelf = false;   // BrowseOnce(includeSelf): surface same-hostId peers (the local GUI)
+    bool includeSelf = false;   // BrowseStream(includeSelf): surface same-hostId peers (the local GUI)
 
     // Local identity (cached at Start time + on NotifyHostIDChange).
     HostId localHostId;
@@ -587,59 +588,77 @@ void ClearHostIDCollisionWarning() {
     GlobalState().hostIDCollisionWarning.store(false);
 }
 
-bool BrowseOnce(std::chrono::milliseconds wait, std::vector<DiscoveredPeer>& outPeers, bool includeSelf) {
-    outPeers.clear();
+namespace {
+// BrowseStream hands resolved peers from the dnsapi callback thread to the calling
+// thread via this queue, so onPeer (which may block on network I/O) runs off the
+// callback thread. One browse at a time (BrowseStream refuses while Start() is active).
+struct StreamCtx {
+    std::mutex mtx;
+    std::condition_variable cv;
+    std::vector<DiscoveredPeer> pending;
+};
+std::mutex g_streamSlotMutex;
+StreamCtx* g_streamSlot = nullptr;
+}
 
-    // Run a private state machine so we don't disturb any active Start() session.
-    struct Acc {
-        std::mutex mtx;
-        std::vector<DiscoveredPeer> peers;
-    } acc;
-
-    // Set a temporary callback that captures peers.
-    auto& s = GlobalState();
-    if (s.started) {
-        // Refuse to BrowseOnce while continuous discovery is active.
+bool BrowseStream(std::chrono::milliseconds maxWait, bool includeSelf,
+                  const std::function<bool(const DiscoveredPeer&)>& onPeer) {
+    if (GlobalState().started) {
         g_logger.log(__FUNCTION__, Logger::Level::Warning,
-            "BrowseOnce called while continuous discovery is active; ignoring.");
+            "BrowseStream called while continuous discovery is active; ignoring.");
         return false;
     }
 
-    static std::mutex accSlotMutex;
-    static Acc* accSlot = nullptr;
+    StreamCtx ctx;
     {
-        std::lock_guard<std::mutex> lock(accSlotMutex);
-        accSlot = &acc;
+        std::lock_guard<std::mutex> lock(g_streamSlotMutex);
+        g_streamSlot = &ctx;
     }
 
+    // Callback is a plain function pointer, so this lambda must be captureless; it
+    // reaches the active context through the file-static slot. Start()'s hostId-level
+    // dedup means each logical peer is delivered once.
     Callback cb = [](Event ev, const DiscoveredPeer& p) {
         if (ev != Event::Added) return;
-        std::lock_guard<std::mutex> lock(accSlotMutex);
-        if (!accSlot) return;
-        std::lock_guard<std::mutex> aLock(accSlot->mtx);
-        for (const auto& existing : accSlot->peers) {
-            if (existing.hostId == p.hostId) return;
-        }
-        accSlot->peers.push_back(p);
+        std::lock_guard<std::mutex> slot(g_streamSlotMutex);
+        if (!g_streamSlot) return;
+        std::lock_guard<std::mutex> q(g_streamSlot->mtx);
+        g_streamSlot->pending.push_back(p);
+        g_streamSlot->cv.notify_all();
     };
 
     if (!Start(cb, /*publishLocal=*/false, includeSelf)) {
-        std::lock_guard<std::mutex> lock(accSlotMutex);
-        accSlot = nullptr;
+        std::lock_guard<std::mutex> lock(g_streamSlotMutex);
+        g_streamSlot = nullptr;
         return false;
     }
 
-    std::this_thread::sleep_for(wait);
-    Stop();
-
+    const auto deadline = std::chrono::steady_clock::now() + maxWait;
+    bool stopped = false;
     {
-        std::lock_guard<std::mutex> lock(accSlotMutex);
-        accSlot = nullptr;
+        std::unique_lock<std::mutex> lock(ctx.mtx);
+        while (!stopped) {
+            if (ctx.pending.empty()) {
+                if (ctx.cv.wait_until(lock, deadline) == std::cv_status::timeout && ctx.pending.empty()) {
+                    break;  // gave up: maxWait elapsed with nothing (more) to try
+                }
+            }
+            std::vector<DiscoveredPeer> batch;
+            batch.swap(ctx.pending);
+            lock.unlock();
+            for (const DiscoveredPeer& peer : batch) {
+                if (!onPeer(peer)) { stopped = true; break; }
+            }
+            lock.lock();
+        }
     }
 
-    std::lock_guard<std::mutex> lock(acc.mtx);
-    outPeers = std::move(acc.peers);
-    return true;
+    Stop();
+    {
+        std::lock_guard<std::mutex> lock(g_streamSlotMutex);
+        g_streamSlot = nullptr;
+    }
+    return stopped;
 }
 
 } // namespace MDNSDiscovery

@@ -126,6 +126,22 @@ void NetworkRuntime::OnClipboardReceived(std::shared_ptr<const ClipboardPayload>
         payload->EncodedBytes().size(),
         isReplay ? L", sync replay" : L"",
         isPrivatePlaceholder ? L", private placeholder" : (isSourceMarkedPrivate ? L", source marked private" : L""));
+
+    // Relay: a one-shot sender (CLI `copy` / iOS share ext) handed us a single item
+    // to fan out to the mesh. Rebroadcast it with the relay bit cleared so recipients
+    // apply-but-don't-relay (one hop; eventGuid dedup backstops loops). Done before
+    // the local-apply below, and independent of IsClipboardDataCurrent, so a fresh
+    // relay event propagates even if its content already sits on our own clipboard.
+    if ((payload->meta.flags & NetworkDefs::CLPM_FLAG_RELAY) != 0 && !isReplay) {
+        auto forwarded = std::make_shared<ClipboardPayload>();
+        forwarded->meta = payload->meta;
+        forwarded->meta.flags &= ~NetworkDefs::CLPM_FLAG_RELAY;
+        forwarded->SetEncodedBytes(std::vector<unsigned char>(payload->EncodedBytes()));
+        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Relaying clipboard item to the mesh on behalf of %hs.",
+            payload->meta.originHostName);
+        g_peerManager.BroadcastClipboard(forwarded);
+        payload = forwarded;  // apply/store the cleared version locally too
+    }
 #if CLIPP_IOS_CLIPBOARD_RECEIVE_STUB
     CLPIOSReceiveClipboardPayload(std::move(payload));
 #else

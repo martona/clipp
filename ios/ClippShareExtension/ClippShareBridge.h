@@ -28,14 +28,11 @@ NS_SWIFT_NAME(ShareSendResult)
 @interface CLPShareSendResult : NSObject
 
 @property(nonatomic, assign, readonly) NSInteger sentItemCount;
-@property(nonatomic, assign, readonly) NSInteger reachedDeviceCount;
-@property(nonatomic, assign, readonly) NSInteger attemptedDeviceCount;
-@property(nonatomic, copy, readonly) NSArray<NSString*>* failedDeviceNames;
+// The single peer the items were relayed through; it rebroadcasts them to the mesh.
+@property(nonatomic, copy, readonly) NSString* relayedViaDeviceName;
 
 - (instancetype)initWithSentItemCount:(NSInteger)sentItemCount
-                   reachedDeviceCount:(NSInteger)reachedDeviceCount
-                  attemptedDeviceCount:(NSInteger)attemptedDeviceCount
-                     failedDeviceNames:(NSArray<NSString*>*)failedDeviceNames NS_DESIGNATED_INITIALIZER;
+                 relayedViaDeviceName:(NSString*)relayedViaDeviceName NS_DESIGNATED_INITIALIZER;
 - (instancetype)init NS_UNAVAILABLE;
 
 @end
