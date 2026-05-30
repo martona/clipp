@@ -8,7 +8,7 @@ Please include enough detail for the maintainer to reproduce the issue: affected
 
 ## Scope
 
-Clipp's threat model is documented in the [Security Model](README.md#security-model) section of the README. In short, Clipp assumes:
+Clipp's threat model is documented in the [Security Model](docs/SECURITY-MODEL.md). In short, Clipp assumes:
 
 - Devices configured with the same network name and secret are mutually trusted.
 - The network or VPN that Clipp runs over is itself trusted (LAN, Tailscale, etc.).
