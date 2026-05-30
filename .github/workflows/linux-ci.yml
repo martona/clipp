@@ -1,0 +1,194 @@
+name: Linux CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Linux build test (terminal-only)
+    runs-on: ubuntu-latest
+
+    env:
+      CLIPP_CACHE_DIR: ${{ github.workspace }}/clipp-cache
+      VCPKG_ROOT: ${{ github.workspace }}/v
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-cache
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/vcpkg-cache,readwrite
+
+    steps:
+      - name: Checkout clipp
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          # autoconf/autoconf-archive/automake/libtool: vcpkg builds libsodium from
+          # source and needs them. libavahi-client-dev: discovery (pkg-config
+          # avahi-client). ninja/pkg-config/zip/unzip/tar/curl: build + vcpkg.
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config \
+            autoconf autoconf-archive automake libtool \
+            libavahi-client-dev \
+            zip unzip tar curl
+
+      - name: Read vcpkg baseline
+        id: vcpkg-baseline
+        run: |
+          baseline="$(python3 - <<'PY'
+          import json
+          with open("src/vcpkg.json", encoding="utf-8") as manifest_file:
+              manifest = json.load(manifest_file)
+          print(manifest.get("builtin-baseline", ""))
+          PY
+          )"
+          if [[ -z "$baseline" ]]; then
+            echo "src/vcpkg.json must define builtin-baseline for CI." >&2
+            exit 1
+          fi
+          echo "ref=$baseline" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout vcpkg
+        run: |
+          git clone --no-tags https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" checkout --detach "${{ steps.vcpkg-baseline.outputs.ref }}"
+
+      - name: Bootstrap vcpkg
+        run: |
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+
+      - name: Prepare vcpkg binary cache
+        run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+
+      - name: Cache vcpkg binaries
+        uses: actions/cache@v5
+        with:
+          path: vcpkg-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-vcpkg-
+
+      - name: Build Release
+        # Invoke via `bash` rather than `./scripts/build_linux.sh` so the job does
+        # not depend on the script's git executable bit (the file may have been
+        # authored on a filesystem that doesn't preserve mode).
+        run: bash ./scripts/build_linux.sh
+
+      - name: Verify Linux binary
+        run: |
+          set -euo pipefail
+          # The CI workspace is local-disk ext4, so build_linux.sh keeps the build
+          # tree in-source at build/linux-release/. (On a CIFS/SMB source mount the
+          # script relocates it to local disk; that path doesn't arise here.)
+          binary="build/linux-release/clipp"
+          if [[ ! -x "$binary" ]]; then
+            echo "Missing expected executable: $binary" >&2
+            find build -maxdepth 2 -print | sed -n '1,80p'
+            exit 1
+          fi
+          # Confirm it's a native ELF, not some stray script.
+          file "$binary" | grep -q 'ELF' || {
+            echo "Expected an ELF binary: $(file "$binary")" >&2
+            exit 1
+          }
+          echo "CLIPP_BINARY=$(pwd)/$binary" >> "$GITHUB_ENV"
+
+      - name: Smoke test (terminal verbs)
+        run: |
+          set -euo pipefail
+          binary="$CLIPP_BINARY"  # absolute path exported by the verify step
+
+          # Isolate settings under a temp XDG dir so we exercise the file backend
+          # cleanly and can inspect what it wrote (the macOS/Windows builds can't
+          # easily run their GUI in CI; the terminal build can run end-to-end).
+          export XDG_CONFIG_HOME="$(mktemp -d)"
+          settings_file="$XDG_CONFIG_HOME/clipp/settings"
+
+          echo "::group::clipp --help (headless bare-launch path)"
+          # cli::Run prints app.help() and returns 0 for a bare/`--help` launch.
+          help_out="$("$binary" --help)"
+          echo "$help_out"
+          for verb in copy paste key hostid; do
+            echo "$help_out" | grep -qw "$verb" || { echo "help missing verb: $verb" >&2; exit 1; }
+          done
+          # The `gui` subcommand must NOT exist in the headless build.
+          if echo "$help_out" | grep -qw gui; then
+            echo "headless help unexpectedly lists a 'gui' subcommand" >&2
+            exit 1
+          fi
+          echo "::endgroup::"
+
+          echo "::group::hostid round-trip (Settings file backend: base64 binary + atomic write)"
+          "$binary" hostid reset
+          id1="$("$binary" hostid show | sed -n 's/^hostid: //p')"
+          id2="$("$binary" hostid show | sed -n 's/^hostid: //p')"
+          echo "hostid after reset: $id1"
+          if [[ -z "$id1" || "$id1" == "(none)" ]]; then
+            echo "hostid show returned no id after reset" >&2
+            exit 1
+          fi
+          if [[ "$id1" != "$id2" ]]; then
+            echo "hostid not stable across reads: '$id1' vs '$id2' (settings not persisted?)" >&2
+            exit 1
+          fi
+          echo "::endgroup::"
+
+          echo "::group::settings file created 0600"
+          if [[ ! -f "$settings_file" ]]; then
+            echo "expected settings file not found: $settings_file" >&2
+            find "$XDG_CONFIG_HOME" -print
+            exit 1
+          fi
+          perms="$(stat -c '%a' "$settings_file")"
+          echo "settings file mode: $perms"
+          if [[ "$perms" != "600" ]]; then
+            echo "expected settings file mode 600, got $perms" >&2
+            exit 1
+          fi
+          echo "::endgroup::"
+
+          echo "::group::key show with no key (KeyManager Linux branch: benign-empty)"
+          # No key configured yet -> fingerprint "(none)", exit 0 (not a read error).
+          key_out="$("$binary" key show)"
+          echo "$key_out"
+          echo "$key_out" | grep -q 'fingerprint: (none)' || {
+            echo "expected 'fingerprint: (none)' before any key is set" >&2
+            exit 1
+          }
+          echo "::endgroup::"
+
+          echo "::group::key set + show round-trip (KeyManager store + utf8proc NFC path)"
+          # `key set` requires an interactive console (isatty) to read the secret;
+          # `script` hands it a pseudo-tty and forwards the piped password. This
+          # exercises DeriveNetworkKey -> CanonicalizeKeyDerivationText (utf8proc NFC)
+          # -> SetNetworkKey (raw key to the 0600 settings file) end-to-end.
+          password="ci-secret-password"
+          printf '%s\n' "$password" | script -qe -c "$binary key set --name 'CI Network'" /dev/null
+          fp="$("$binary" key show | sed -n 's/^fingerprint: //p')"
+          echo "fingerprint after key set: $fp"
+          if [[ -z "$fp" || "$fp" == "(none)" ]]; then
+            echo "key set did not persist a usable key (fingerprint still none)" >&2
+            exit 1
+          fi
+          # Idempotent read: same key -> same fingerprint on a second invocation.
+          fp2="$("$binary" key show | sed -n 's/^fingerprint: //p')"
+          if [[ "$fp" != "$fp2" ]]; then
+            echo "fingerprint not stable across reads: '$fp' vs '$fp2'" >&2
+            exit 1
+          fi
+          echo "::endgroup::"
+
+          echo "All terminal smoke tests passed."

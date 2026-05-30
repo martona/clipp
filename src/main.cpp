@@ -12,6 +12,13 @@
 #include "Logger.h"
 #include "Cli.h"
 #include "KeyManager.h"
+#include "Settings.h"
+#include "utils.h"
+
+#ifndef CLIPP_HEADLESS
+// Daemon / GUI-side headers. The terminal-only Linux build (CLIPP_HEADLESS) runs no
+// clipboard notifier, peer mesh, or network runtime, so it neither needs nor links
+// these. See project_linux_port.
 #include "NetworkRuntime.h"
 #include "Peer.h"
 #include "PeerManager.h"
@@ -22,8 +29,7 @@
 #include "CryptoChannel.h"
 #include "LocalPeerName.h"
 #include "platform/uistrings.h"
-#include "Settings.h"
-#include "utils.h"
+#endif
 
 #ifdef __APPLE__
     #include "platform/macos/KeyVendIpc.h"
@@ -42,10 +48,14 @@
 #endif
 
 Settings g_settings;
+#ifndef CLIPP_HEADLESS
+// Daemon-side singletons. The terminal-only Linux build excludes their translation
+// units and the fall-through that drives them, so they must not be instantiated.
 PeerDisplay g_peerDisplay;
 PeerManager g_peerManager;
 NetworkRuntime g_networkRuntime;
 ClipboardActivityStore g_clipboardActivityStore;
+#endif
 
 #ifdef _WIN32
     namespace {
@@ -227,6 +237,7 @@ bool InitializeConsoleOutput() {
 #endif
 }
 
+#ifndef CLIPP_HEADLESS
 void OnClipboardNotification(PlatformWindowHandle hwnd) {
     g_logger.log(__FUNCTION__, Logger::Level::Debug, "Clipboard notification received");
     auto clipboardData = ReadClipboardData(hwnd);
@@ -265,11 +276,18 @@ void OnClipboardNotification(PlatformWindowHandle hwnd) {
         payload->EncodedBytes().size(),
         static_cast<unsigned long long>(payload->meta.uncompressedDataSize));
 }
+#endif // CLIPP_HEADLESS
 
 int main(int argc, char* argv[]) {
 
+#ifdef CLIPP_HEADLESS
+    // Terminal-only build: CLI socket sends pass MSG_NOSIGNAL (utils_socket.h), but
+    // ignore SIGPIPE too as cheap insurance against any write path that misses it.
+    signal(SIGPIPE, SIG_IGN);
+#endif
+
     // True when we were launched from a console/terminal: on Windows the clipp.com
-    // shim forwarded our std handles; on macOS stdout is a TTY. Drives the
+    // shim forwarded our std handles; on macOS/Linux stdout is a TTY. Drives the
     // command-line vs GUI disposition in cli::Run below.
     const bool launchedFromConsole = InitializeConsoleOutput();
 
@@ -283,6 +301,11 @@ int main(int argc, char* argv[]) {
         return *commandExitCode;
     }
 
+#ifdef CLIPP_HEADLESS
+    // No GUI/daemon to fall through to. On the headless build cli::Run prints help
+    // for a bare launch and never returns nullopt, but exit cleanly regardless.
+    return 0;
+#else
     g_logger.log(__FUNCTION__, Logger::Level::Info, L"==================================================================");
 
     switch (EnsureSingleInstance()) {
@@ -396,4 +419,5 @@ int main(int argc, char* argv[]) {
     #endif
 
     return 0;
+#endif // CLIPP_HEADLESS
 }

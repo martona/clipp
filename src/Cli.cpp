@@ -589,11 +589,14 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
     CLI::App* hostIdReset = hostIdCommand->add_subcommand("reset", "Reset this device's host ID");
     hostIdReset->callback([&]() { action = Action::HostIdReset; });
 
+#ifndef CLIPP_HEADLESS
     // Explicit opt-in to the GUI from a terminal (a bare launch there prints usage
-    // instead). Listed in --help but not advertised harder than that.
+    // instead). Listed in --help but not advertised harder than that. Omitted from
+    // the terminal-only build, which has no GUI to launch.
     CLI::App* guiCommand = app.add_subcommand(
         "gui", "Launch the graphical app (the default when not started from a terminal)");
     guiCommand->callback([&]() { action = Action::Gui; });
+#endif
 
     try {
         app.parse(argc, argv);
@@ -621,10 +624,16 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
 
     g_verbose = verbose;
 
-    // Bare launch from a console: print usage and exit instead of silently
-    // launching the terminal-blocking GUI. `clipp gui` is the explicit opt-in to
-    // the GUI from a terminal; a bare launch with no console falls through below.
-    if (action == Action::None && launchedFromConsole) {
+    // Bare launch (no command): print usage and exit instead of silently launching
+    // the terminal-blocking GUI. On the desktop builds this is gated on a console (a
+    // no-console launch falls through to the GUI via the `gui`/nullopt path below);
+    // the headless build has no GUI, so a bare launch ALWAYS prints help.
+#ifdef CLIPP_HEADLESS
+    const bool bareLaunchPrintsHelp = (action == Action::None);
+#else
+    const bool bareLaunchPrintsHelp = (action == Action::None && launchedFromConsole);
+#endif
+    if (bareLaunchPrintsHelp) {
         g_logger.SetMinimumLevel(Logger::Level::Off);  // keep diagnostics out of the usage text
         std::cout << app.help();
         std::cout.flush();

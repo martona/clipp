@@ -5,7 +5,11 @@
     "cli11",
     "libsodium",
     "xxhash",
-    "zstd"
+    "zstd",
+    {
+      "name": "utf8proc",
+      "platform": "linux"
+    }
   ],
   "builtin-baseline": "4ebb30167f14487dcb71fac13efbf63273ab6a3f"
 }

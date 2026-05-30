@@ -152,6 +152,12 @@ void Logger::writeLine(const wchar_t* function, Level level, const wchar_t* mess
             std::cerr << clipp_platform_detail::Utf16ToUtf8String(plain);
         }
     }
+#elif defined(__linux__)
+    // Write UTF-8 bytes, not wide. std::wcerr under the default "C" locale sets
+    // failbit on the first non-ASCII wide char (a device/network name) and then
+    // silently drops ALL subsequent logging. Converting to UTF-8 is locale-
+    // independent and preserves the ANSI color escapes (they're ASCII).
+    std::cerr << clipp_platform_detail::Utf16ToUtf8String(wstr);
 #else
     std::wcerr << wstr;
 #endif

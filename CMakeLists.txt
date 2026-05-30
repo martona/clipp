@@ -345,6 +345,62 @@ elseif (APPLE)
             )
         endif()
     endif()
+elseif (UNIX AND NOT APPLE)
+    # ----------------------------------------------------------------------------
+    # Linux: terminal-only build. CLI verbs copy/paste/key/hostid only -- no GUI,
+    # no tray, no local clipboard I/O, no background sync daemon. The relay-gateway
+    # design means this box reaches the mesh through a running GUI peer; it needs to
+    # discover one (Avahi) but runs no daemon of its own. See project_linux_port.
+    # ----------------------------------------------------------------------------
+    find_package(Threads REQUIRED)
+    find_package(PkgConfig REQUIRED)
+    # Native libavahi-client for DNS-SD discovery. REQUIRED here means configure
+    # fails without the dev package; at runtime a missing/stopped avahi-daemon makes
+    # discovery fail loudly (by design -- the cause is then obvious to the user).
+    pkg_check_modules(AVAHI REQUIRED IMPORTED_TARGET avahi-client)
+    # utf8proc gives Linux the Unicode NFC that Win/Mac get from the OS, so a
+    # non-ASCII network name/password derives the SAME key across platforms. The
+    # vcpkg port also ships a deprecated `unofficial-utf8proc` config; use the
+    # canonical one (target: utf8proc::utf8proc).
+    find_package(utf8proc CONFIG REQUIRED)
+
+    # The common glob pulls in the whole src/ tree; drop the daemon-only TUs. They
+    # reference the platform clipboard (NetworkRuntime.cpp) or the daemon globals
+    # g_peerManager / g_peerDisplay (Peer/PeerManager/Listener), neither of which
+    # exists in the terminal build. The CLI path (Cli.cpp + OneShotPeer.cpp) is
+    # fully isolated from all six. MDNSDiscovery_Win32.cpp stays in the list but its
+    # body is `#ifdef _WIN32`, so it compiles to an empty TU here;
+    # MDNSDiscovery_Linux.cpp (also in the glob, `#ifdef __linux__`) provides the
+    # discovery surface.
+    set(CLIPP_LINUX_SOURCES ${CLIPP_COMMON_SOURCES})
+    list(REMOVE_ITEM CLIPP_LINUX_SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/NetworkRuntime.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/Listener.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/Peer.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/PeerManager.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/PeerDisplay.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/ClipboardActivityStore.cpp"
+    )
+
+    add_executable(clipp-linux
+        ${CLIPP_LINUX_SOURCES}
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/linux/Settings.cpp"
+    )
+    clipp_apply_common_target_settings(clipp-linux)
+    # Drives the terminal-only collapse of main() (no daemon/clipboard/tray) and the
+    # omission of the `gui` subcommand in Cli.cpp.
+    target_compile_definitions(clipp-linux PRIVATE CLIPP_HEADLESS=1)
+    target_link_libraries(clipp-linux PRIVATE
+        Threads::Threads
+        PkgConfig::AVAHI
+        utf8proc::utf8proc
+    )
+    # Let the binary land at the root of the build tree ($BUILD_DIR/clipp). We
+    # deliberately do NOT pin RUNTIME_OUTPUT_DIRECTORY into the source tree the way
+    # the Windows target does: build_linux.sh relocates the build tree to local disk
+    # when the source is on a CIFS/SMB mount (where CMake's configure_file chmod
+    # fails outright), and forcing the artifact back onto the share would defeat that.
+    set_target_properties(clipp-linux PROPERTIES OUTPUT_NAME "clipp")
 else()
     message(FATAL_ERROR "Unsupported platform.")
 endif()

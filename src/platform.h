@@ -34,7 +34,23 @@
         #error "Unsupported Apple platform."
 #endif
 #elif defined(__linux__)
-    #error "Not currently supported."
+    // Terminal-only Linux build (no GUI, no local clipboard). The POSIX socket
+    // surface mirrors the Apple branch; the shared helper block below is guarded
+    // with (__APPLE__ || __linux__) and provides the SOCKET shims + UTF codec.
+    #include <cstddef>
+    #include <cstdio>
+    #include <cstdarg>
+    #include <cstdlib>
+    #include <cwchar>
+    #include <sys/socket.h>
+    #include <arpa/inet.h>
+    #include <netinet/in.h>
+    #include <netinet/tcp.h>
+    #include <netdb.h>
+    #include <unistd.h>
+    #include <fcntl.h>
+    #include <cerrno>
+    #include <utf8proc.h>   // Unicode NFC for NormalizeUtf8Canonical (key derivation)
 #else
     #error "Unsupported platform!"
 #endif
@@ -67,7 +83,12 @@
 
     typedef int socklen_t;
 
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) || defined(__linux__)
+    // Shared POSIX branch (macOS, iOS, Linux). Despite the historical
+    // "clipp_apple_encoding_detail" name, nothing here is Apple-specific: the UTF
+    // codec is pure C++ (and already handles Linux's 4-byte wchar_t via the
+    // `if constexpr (sizeof(wchar_t) == 2)` checks), and the printf/time/socket
+    // shims are standard C / POSIX.
     using PlatformWindowHandle = void*;
 
     namespace clipp_apple_encoding_detail {
@@ -515,6 +536,25 @@ namespace clipp_platform_detail {
 
         CFRelease(normalized);
         return std::string(buffer.data());
+#elif defined(__linux__)
+        // utf8proc NFC. Must agree byte-for-byte with Windows
+        // NormalizeString(NormalizationC) and macOS kCFStringNormalizationFormC --
+        // otherwise a decomposed (NFD) non-ASCII network name/password derives a
+        // different key here than on the other platforms and the devices silently
+        // fail to join the same network. (All three implement Unicode NFC, so they
+        // should agree; verify with an accented + a CJK sample at first build.)
+        utf8proc_uint8_t* normalized = nullptr;
+        const utf8proc_ssize_t length = utf8proc_map(
+            reinterpret_cast<const utf8proc_uint8_t*>(value.data()),
+            static_cast<utf8proc_ssize_t>(value.size()),
+            &normalized,
+            static_cast<utf8proc_option_t>(UTF8PROC_STABLE | UTF8PROC_COMPOSE));
+        if (length < 0 || normalized == nullptr) {
+            return std::string(value);  // normalization failed: fall back to raw input
+        }
+        std::string result(reinterpret_cast<const char*>(normalized), static_cast<size_t>(length));
+        free(normalized);
+        return result;
 #else
         return std::string(value);
 #endif

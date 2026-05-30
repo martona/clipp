@@ -349,7 +349,7 @@ bool KeyManager::SetNetworkKey(const NetworkKey& networkKey, std::string* errorM
 
     std::vector<unsigned char> encryptedBuffer(encryptedData.pbData, encryptedData.pbData + encryptedData.cbData);
     LocalFree(encryptedData.pbData);
-#else
+#elif defined(__APPLE__)
     DeleteNetworkKeyItem(CFSTR("NetworkKeyV2"));
 
     CFDataRef plainData = CFDataCreate(kCFAllocatorDefault, networkKey.data(), networkKey.size());
@@ -372,6 +372,15 @@ bool KeyManager::SetNetworkKey(const NetworkKey& networkKey, std::string* errorM
     }
 
     std::vector<unsigned char> encryptedBuffer;
+#else
+    // Linux: no OS secret store. Persist the raw 32-byte root key through the
+    // Settings file backend (created 0600). Same trust model as an ~/.ssh private
+    // key; full-disk encryption covers data at rest. We deliberately skip libsecret
+    // -- a headless SSH session usually has no unlocked Secret Service / D-Bus,
+    // which is exactly where this build runs. The shared "#ifndef __APPLE__" block
+    // below writes encryptedBuffer to settings, so Linux reuses Windows' exact
+    // storage path ("encrypted" is a misnomer here; the plumbing is identical).
+    std::vector<unsigned char> encryptedBuffer(networkKey.begin(), networkKey.end());
 #endif
 
 #ifndef __APPLE__
@@ -502,7 +511,7 @@ bool KeyManager::LoadRootNetworkKey(std::string* errorMessage) {
 
     std::copy(plainData.pbData, plainData.pbData + NetworkKeySize, rootNetworkKey.begin());
     LocalFree(plainData.pbData);
-#else
+#elif defined(__APPLE__)
     CFTypeRef outData = nullptr;
     OSStatus status = CopyNetworkKeyData(CFSTR("NetworkKeyV2"), &outData);
 
@@ -558,6 +567,32 @@ bool KeyManager::LoadRootNetworkKey(std::string* errorMessage) {
 
     std::copy(CFDataGetBytePtr(plainData), CFDataGetBytePtr(plainData) + NetworkKeySize, rootNetworkKey.begin());
     CFRelease(outData);
+#else
+    // Linux: read the raw 32-byte root key back from the Settings file backend.
+    std::vector<unsigned char> encryptedBuffer;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!settings_.getEncryptedNetworkKey(encryptedBuffer)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = "Failed to read network key from settings";
+            }
+            return false;
+        }
+    }
+    if (encryptedBuffer.empty()) {
+        // No key stored yet. Benign -- mirrors the macOS errSecItemNotFound branch:
+        // leave errorMessage empty so callers report "(none)", not a read failure.
+        return false;
+    }
+    if (encryptedBuffer.size() != NetworkKeySize) {
+        sodium_memzero(encryptedBuffer.data(), encryptedBuffer.size());
+        if (errorMessage != nullptr) {
+            *errorMessage = "Stored key size was not 32 bytes";
+        }
+        return false;
+    }
+    std::copy(encryptedBuffer.begin(), encryptedBuffer.end(), rootNetworkKey.begin());
+    sodium_memzero(encryptedBuffer.data(), encryptedBuffer.size());
 #endif
 
     const bool cached = CacheDerivedKeysFromRoot(rootNetworkKey, errorMessage);
