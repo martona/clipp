@@ -17,6 +17,9 @@
     #include <CoreFoundation/CoreFoundation.h>
     #include <Security/Security.h>
     #include <TargetConditionals.h>
+    #if !TARGET_OS_IPHONE
+        #include "platform/macos/KeyVendIpc.h"
+    #endif
 
     static std::string FormatSecurityError(const char* context, OSStatus status) {
         std::ostringstream oss;
@@ -504,8 +507,22 @@ bool KeyManager::LoadRootNetworkKey(std::string* errorMessage) {
     OSStatus status = CopyNetworkKeyData(CFSTR("NetworkKeyV2"), &outData);
 
     if (status != errSecSuccess || outData == nullptr) {
-        if (errorMessage != nullptr) *errorMessage = FormatSecurityError("Failed to read network key from keychain", status);
         if (outData != nullptr) CFRelease(outData);
+#if !TARGET_OS_IPHONE
+        // The login keychain is unreachable in this session (e.g. an SSH / headless
+        // login can't open it). Fall back to the running GUI's local, mutually
+        // authenticated socket. Guarded by IsKeyVendServerActive() so the GUI
+        // process -- which serves that socket -- never dials itself.
+        if (!clipp::macos::IsKeyVendServerActive()) {
+            std::string socketError;
+            if (clipp::macos::RequestNetworkKeyOverSocket(rootNetworkKey, &socketError)) {
+                const bool cachedFromSocket = CacheDerivedKeysFromRoot(rootNetworkKey, errorMessage);
+                sodium_memzero(rootNetworkKey.data(), rootNetworkKey.size());
+                return cachedFromSocket;
+            }
+        }
+#endif
+        if (errorMessage != nullptr) *errorMessage = FormatSecurityError("Failed to read network key from keychain", status);
         return false;
     }
 
@@ -527,6 +544,28 @@ bool KeyManager::LoadRootNetworkKey(std::string* errorMessage) {
     sodium_memzero(rootNetworkKey.data(), rootNetworkKey.size());
     return cached;
 }
+
+#if defined(__APPLE__) && !TARGET_OS_IPHONE
+bool KeyManager::ExportRootKeyFromKeychain(NetworkKey& outKey, std::string* errorMessage) {
+    CFTypeRef outData = nullptr;
+    OSStatus status = CopyNetworkKeyData(CFSTR("NetworkKeyV2"), &outData);
+    if (status != errSecSuccess || outData == nullptr) {
+        if (errorMessage != nullptr) *errorMessage = FormatSecurityError("Failed to read network key from keychain", status);
+        if (outData != nullptr) CFRelease(outData);
+        return false;
+    }
+    CFDataRef plainData = static_cast<CFDataRef>(outData);
+    const CFIndex plainLen = CFDataGetLength(plainData);
+    if (plainLen != static_cast<CFIndex>(NetworkKeySize)) {
+        CFRelease(outData);
+        if (errorMessage != nullptr) *errorMessage = "Stored key size was not 32 bytes";
+        return false;
+    }
+    std::copy(CFDataGetBytePtr(plainData), CFDataGetBytePtr(plainData) + NetworkKeySize, outKey.begin());
+    CFRelease(outData);
+    return true;
+}
+#endif
 
 bool KeyManager::DeriveNetworkKey(const std::string& password, NetworkKey& outKey) {
     static const std::vector<unsigned char> staticSalt = HexStringToBytes("9ea1e55abc07c859fd900958d8b7efbe");

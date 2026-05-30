@@ -35,6 +35,11 @@ public:
     void ClearNetworkKey();
     bool HaveNetworkKey();
 
+    // macOS desktop only: read the 32-byte root key straight from the keychain
+    // with no socket fallback. Used by the key-vend server to answer an
+    // authenticated peer. Defined under __APPLE__ && !TARGET_OS_IPHONE.
+    bool ExportRootKeyFromKeychain(NetworkKey& outKey, std::string* errorMessage = nullptr);
+
 private:
     using KeyCache = std::array<NetworkKey, KeyRoleCount>;
 

@@ -25,6 +25,10 @@
 #include "Settings.h"
 #include "utils.h"
 
+#ifdef __APPLE__
+    #include "platform/macos/KeyVendIpc.h"
+#endif
+
 #ifdef _WIN32
     #include <io.h>
     #include <fcntl.h>
@@ -310,6 +314,12 @@ int main(int argc, char* argv[]) {
         g_settings.clipboardHistoryMaxAgeSeconds(),
         g_settings.clipboardHistoryMaxItems());
 
+#ifdef __APPLE__
+    // Start the key-vend socket before our own first key load, so the server flag
+    // is set (no self-dial) and a CLI invocation over SSH can fetch the key.
+    clipp::macos::StartKeyVendServer();
+#endif
+
     std::string keyErrorMessage;
     const std::wstring networkFingerprint = g_keyManager.GetNetworkFingerprintHash(nullptr, &keyErrorMessage);
     const bool haveNetworkKey = !networkFingerprint.empty();
@@ -348,6 +358,10 @@ int main(int argc, char* argv[]) {
 
     g_networkRuntime.Stop();
     g_logger.log(__FUNCTION__, Logger::Level::Info, "Network runtime stopped.");
+
+#ifdef __APPLE__
+    clipp::macos::StopKeyVendServer();
+#endif
 
     StopClipboardNotification();
     g_logger.log(__FUNCTION__, Logger::Level::Info, "Clipboard notification stopped.");
