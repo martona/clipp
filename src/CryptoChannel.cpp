@@ -34,9 +34,10 @@ namespace {
     struct HandshakePlaintext {
         unsigned char ephemeralPk[crypto_kx_PUBLICKEYBYTES];
         unsigned char hostId[HostId::kSize];
-        // Feature-capability bits. All zero today; future caps gate is-it-safe-to-send
-        // decisions for new frame types and message extensions without breaking peers
-        // that predate them. Authentication relies on the surrounding secretbox MAC.
+        // Feature-capability bits (see CryptoChannel::CAP0_*). Caps gate is-it-safe-
+        // to-send decisions for newer frame types and message extensions without
+        // breaking peers that predate them. Authentication relies on the surrounding
+        // secretbox MAC.
         uint8_t       caps[CryptoChannel::CAPS_BYTES];
         char          hostNameUTF8[CryptoChannel::HOSTNAME_MAX_BYTES];
     };
@@ -140,9 +141,13 @@ namespace {
     }
 
     CryptoChannel::Caps LocalCaps() {
-        // No caps bits defined yet; the field is reserved as part of the post-refactor
-        // baseline so future extensions can negotiate without breaking the handshake.
-        return CryptoChannel::Caps{};
+        // Advertise the capabilities this build understands. Safe to advertise
+        // unconditionally: a peer only acts on a cap when it initiates the matching
+        // request, and clients that never accept inbound requests (the CLI verbs,
+        // the iOS share extension) simply never get asked.
+        CryptoChannel::Caps caps{};
+        caps[0] |= CryptoChannel::CAP0_SERVES_RECENT;
+        return caps;
     }
 
     bool DeriveClientSessionKeys(

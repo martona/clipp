@@ -652,50 +652,10 @@ void Peer::ThreadProcRecv() {
 					lastPingReceivedAt_ = std::chrono::steady_clock::now();
 				}
 
-				constexpr size_t kClipHeaderSize = sizeof(NetworkDefs::ClipboardMessage);
-				if (frame.size() < 4 + kClipHeaderSize) {
-					log(__FUNCTION__, Logger::Level::Warning,
-						L"Rejecting CLIP frame: too small for header (frame: %zu bytes, header: %zu bytes).",
-						frame.size(), kClipHeaderSize);
+				ClipboardPayload payload;
+				if (!ClipboardWire::TryDecodeClipboardFrame(frame, payload)) {
 					break;
 				}
-
-				ClipboardPayload payload{};
-				std::memcpy(&payload.meta, frame.data() + 4, kClipHeaderSize);
-				NetworkDefs::NetworkToHostClipboardMessage(payload.meta);
-
-				const size_t expectedBodyBytes = frame.size() - 4 - kClipHeaderSize;
-				if (payload.meta.payloadDataSize != static_cast<uint64_t>(expectedBodyBytes)) {
-					log(__FUNCTION__, Logger::Level::Warning,
-						L"Rejecting CLIP frame: payload size mismatch (header: %llu bytes, body: %zu bytes).",
-						static_cast<unsigned long long>(payload.meta.payloadDataSize), expectedBodyBytes);
-					break;
-				}
-
-				if (payload.meta.uncompressedDataSize > ClipboardLimits::kMaxDecompressedClipboardBytes) {
-					log(__FUNCTION__, Logger::Level::Warning,
-						L"Rejecting CLIP frame: uncompressed size %llu bytes exceeds limit %llu bytes.",
-						static_cast<unsigned long long>(payload.meta.uncompressedDataSize),
-						ClipboardLimits::kMaxDecompressedClipboardBytes);
-					break;
-				}
-
-				if (payload.meta.isCompressed == 0
-					&& payload.meta.payloadDataSize != payload.meta.uncompressedDataSize) {
-					log(__FUNCTION__, Logger::Level::Warning,
-						L"Rejecting uncompressed CLIP frame: payload size %llu bytes does not equal uncompressed size %llu bytes.",
-						static_cast<unsigned long long>(payload.meta.payloadDataSize),
-						static_cast<unsigned long long>(payload.meta.uncompressedDataSize));
-					break;
-				}
-
-				std::vector<unsigned char> body;
-				if (expectedBodyBytes > 0) {
-					body.assign(
-						frame.data() + 4 + kClipHeaderSize,
-						frame.data() + 4 + kClipHeaderSize + expectedBodyBytes);
-				}
-				payload.SetEncodedBytes(std::move(body));
 
 				log(__FUNCTION__, Logger::Level::Debug,
 					L"Clipboard message received: format %ls (%u), compressed=%u, payload size=%llu bytes, uncompressed size=%llu bytes",
@@ -717,6 +677,23 @@ void Peer::ThreadProcRecv() {
 				// already been folded into the activity store via dedup-aware
 				// insert. Logged for diagnostics.
 				log(__FUNCTION__, Logger::Level::Info, L"Activity-stream sync from this peer complete.");
+				continue;
+			}
+
+			if (std::memcmp(frame.data(), "RCNT", 4) == 0) {
+				// A one-shot client (e.g. `clipp paste`) requesting our most recent
+				// clipboard item. Reply with a single CLIP frame, or NONE when we
+				// have nothing servable. Unlike SYNC this is one item and no EOSY.
+				const std::array<uint8_t, 16> zero{};
+				const auto recent = g_clipboardActivityStore.ItemsSince(zero, 1);
+				if (!recent.empty() && recent.back() && !recent.back()->Empty()) {
+					if (!SendClipboardData(channel, io, *recent.back())) {
+						log(__FUNCTION__, Logger::Level::Debug, L"Failed to send RCNT response.");
+						break;
+					}
+				} else if (!channel.SendFrame(io, "NONE")) {
+					break;
+				}
 				continue;
 			}
 

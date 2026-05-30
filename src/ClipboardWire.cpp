@@ -60,4 +60,53 @@ bool SendClipboardPayload(CryptoChannel& channel,
     return true;
 }
 
+bool TryDecodeClipboardFrame(const std::vector<unsigned char>& frame, ClipboardPayload& out)
+{
+    constexpr size_t kClipHeaderSize = sizeof(NetworkDefs::ClipboardMessage);
+    if (frame.size() < 4 + kClipHeaderSize) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning,
+            L"Rejecting CLIP frame: too small for header (frame: %zu bytes, header: %zu bytes).",
+            frame.size(), kClipHeaderSize);
+        return false;
+    }
+
+    out = ClipboardPayload{};
+    std::memcpy(&out.meta, frame.data() + 4, kClipHeaderSize);
+    NetworkDefs::NetworkToHostClipboardMessage(out.meta);
+
+    const size_t expectedBodyBytes = frame.size() - 4 - kClipHeaderSize;
+    if (out.meta.payloadDataSize != static_cast<uint64_t>(expectedBodyBytes)) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning,
+            L"Rejecting CLIP frame: payload size mismatch (header: %llu bytes, body: %zu bytes).",
+            static_cast<unsigned long long>(out.meta.payloadDataSize), expectedBodyBytes);
+        return false;
+    }
+
+    if (out.meta.uncompressedDataSize > ClipboardLimits::kMaxDecompressedClipboardBytes) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning,
+            L"Rejecting CLIP frame: uncompressed size %llu bytes exceeds limit %llu bytes.",
+            static_cast<unsigned long long>(out.meta.uncompressedDataSize),
+            ClipboardLimits::kMaxDecompressedClipboardBytes);
+        return false;
+    }
+
+    if (out.meta.isCompressed == 0
+        && out.meta.payloadDataSize != out.meta.uncompressedDataSize) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning,
+            L"Rejecting uncompressed CLIP frame: payload size %llu bytes does not equal uncompressed size %llu bytes.",
+            static_cast<unsigned long long>(out.meta.payloadDataSize),
+            static_cast<unsigned long long>(out.meta.uncompressedDataSize));
+        return false;
+    }
+
+    std::vector<unsigned char> body;
+    if (expectedBodyBytes > 0) {
+        body.assign(
+            frame.data() + 4 + kClipHeaderSize,
+            frame.data() + 4 + kClipHeaderSize + expectedBodyBytes);
+    }
+    out.SetEncodedBytes(std::move(body));
+    return true;
+}
+
 }

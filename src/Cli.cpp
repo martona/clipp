@@ -2,18 +2,30 @@
 
 #include <CLI/CLI.hpp>
 
+#include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <cstring>
 #include <iostream>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include <sodium.h>
 
+#include "ClipboardPayload.h"
+#include "ClipboardWire.h"
+#include "CryptoChannel.h"
 #include "HostId.h"
 #include "KeyManager.h"
+#include "LocalPeerName.h"
 #include "Logger.h"
+#include "MDNSDiscovery.h"
+#include "OneShotPeer.h"
 #include "Settings.h"
 #include "platform.h"
 
@@ -21,6 +33,8 @@
     #define WIN32_LEAN_AND_MEAN
     #include <windows.h>
     #include <shellapi.h>
+    #include <io.h>
+    #include <fcntl.h>
     #include "platform/win32/CrashHandler.h"
 #else
     #include <termios.h>
@@ -96,6 +110,15 @@ void WritePrompt(const std::wstring& prompt) {
     std::cerr.flush();
 }
 
+// Verbose (`-v`) progress goes to stderr, separate from the gated g_logger stream.
+// stdout stays reserved for command data (e.g. `paste` bytes).
+bool g_verbose = false;
+void VerboseLine(const std::wstring& line) {
+    if (g_verbose) {
+        ErrLine(line);
+    }
+}
+
 // --- Interactive input -------------------------------------------------------
 
 bool StdinIsInteractive() {
@@ -151,6 +174,62 @@ bool ParseLogLevel(std::string_view arg, Logger::Level& level) {
     if (arg == "debug") { level = Logger::Level::Debug; return true; }
     if (arg == "ddebug") { level = Logger::Level::DDebug; return true; }
     return false;
+}
+
+// --- Network verbs support ---------------------------------------------------
+// main()'s WSAStartup runs only on the GUI path (after cli::Run returns nullopt),
+// so the network verbs (copy/paste) must initialize winsock themselves. No-op
+// shim off Windows.
+#ifdef _WIN32
+struct NetworkStartup {
+    bool ok = false;
+    NetworkStartup() { WSADATA data; ok = (WSAStartup(MAKEWORD(2, 2), &data) == 0); }
+    ~NetworkStartup() { if (ok) WSACleanup(); }
+    NetworkStartup(const NetworkStartup&) = delete;
+    NetworkStartup& operator=(const NetworkStartup&) = delete;
+};
+#else
+struct NetworkStartup { bool ok = true; };
+#endif
+
+constexpr auto kDiscoveryWait = std::chrono::milliseconds(1200);
+constexpr auto kConnectWait = std::chrono::seconds(3);
+constexpr auto kSessionWait = std::chrono::seconds(30);
+
+// Reads stdin to EOF, binary-safe (no newline translation, no Ctrl-Z EOF on
+// Windows), for `copy`.
+std::vector<unsigned char> ReadAllStdin() {
+#ifdef _WIN32
+    _setmode(_fileno(stdin), _O_BINARY);
+#endif
+    std::vector<unsigned char> data;
+    unsigned char buffer[65536];
+    size_t readCount = 0;
+    while ((readCount = std::fread(buffer, 1, sizeof(buffer), stdin)) > 0) {
+        data.insert(data.end(), buffer, buffer + readCount);
+    }
+    return data;
+}
+
+// Writes bytes to stdout, binary-safe on Windows (no LF->CRLF translation), for
+// `paste`.
+void WriteAllStdout(const unsigned char* data, size_t size) {
+#ifdef _WIN32
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
+    if (size > 0) {
+        std::fwrite(data, 1, size, stdout);
+    }
+    std::fflush(stdout);
+}
+
+// "<name> (<ip>)" with a "[this device]" tag for same-hostId peers, for -v output.
+std::wstring PeerLabel(const MDNSDiscovery::DiscoveredPeer& peer, const HostId& localHostId) {
+    std::wstring label = ToWide(peer.deviceName) + L" (" + ToWide(peer.ip) + L")";
+    if (peer.hostId == localHostId) {
+        label += L" [this device]";
+    }
+    return label;
 }
 
 // --- Subcommand handlers (return process exit codes) -------------------------
@@ -266,7 +345,186 @@ int RunHostIdReset() {
     return 0;
 }
 
-enum class Action { None, KeySet, KeyErase, KeyShow, HostIdShow, HostIdReset };
+// Reads stdin and pushes it to every discovered device's clipboard. Fans out to
+// all peers in parallel; reaching at least one device is success. Outbound-only,
+// one-shot per peer (OneShotPeer) — no GUI required on this machine.
+int RunCopy() {
+    if (!g_keyManager.HaveNetworkKey()) {
+        ErrLine(L"No network key configured. Run `clipp key set` first.");
+        return 1;
+    }
+
+    NetworkStartup net;
+    if (!net.ok) {
+        ErrLine(L"Failed to initialize networking.");
+        return 1;
+    }
+
+    std::vector<unsigned char> bytes = ReadAllStdin();
+    if (bytes.empty()) {
+        ErrLine(L"Nothing on stdin to copy.");
+        return 1;
+    }
+    VerboseLine(L"Read " + std::to_wstring(bytes.size()) + L" byte(s) from stdin.");
+
+    // v1: UTF-8 text. Append a trailing NUL to match the platform capture
+    // convention (receivers strip one trailing NUL when writing to the clipboard),
+    // so CLI-copied text is byte-identical to GUI-copied text.
+    bytes.push_back('\0');
+
+    ClipboardPayload payload;
+    payload.meta.formatId = CLIPP_FORMAT_UTF8;
+    if (!payload.SetUncompressedBytes(std::move(bytes))) {
+        ErrLine(L"Failed to encode clipboard payload.");
+        return 1;
+    }
+
+    HostId localHostId;
+    g_settings.getHostID(localHostId);
+    const std::string localHostName = clipp::GetLocalPeerDisplayName("unknown", CryptoChannel::HOSTNAME_MAX_BYTES);
+    payload.StampOrigin(localHostId, localHostName.c_str(), g_settings.nextOriginSequenceNumber());
+
+    std::vector<MDNSDiscovery::DiscoveredPeer> peers;
+    if (!MDNSDiscovery::BrowseOnce(kDiscoveryWait, peers, /*includeSelf=*/true) || peers.empty()) {
+        ErrLine(L"No devices found on the local network.");
+        return 1;
+    }
+
+    VerboseLine(L"Discovered " + std::to_wstring(peers.size()) + L" device(s).");
+
+    // Fan out to all peers. Each thread writes its own slot (distinct bytes, no lock
+    // needed) so we can report per-peer results after the join.
+    std::vector<unsigned char> sentToPeer(peers.size(), 0);
+    std::vector<std::thread> threads;
+    threads.reserve(peers.size());
+    for (size_t i = 0; i < peers.size(); ++i) {
+        threads.emplace_back([i, &peers, &sentToPeer, &payload, &localHostId, &localHostName]() {
+            const MDNSDiscovery::DiscoveredPeer& peer = peers[i];
+            OneShotPeer connection;
+            if (connection.Connect(peer.ip, peer.port, localHostId, localHostName, peer.hostId,
+                                   kConnectWait, kSessionWait)
+                && connection.SendClipboardPayload(payload)) {
+                sentToPeer[i] = 1;
+            }
+        });
+    }
+    for (std::thread& thread : threads) {
+        if (thread.joinable()) {
+            thread.join();
+        }
+    }
+
+    int reached = 0;
+    for (size_t i = 0; i < peers.size(); ++i) {
+        reached += sentToPeer[i];
+        VerboseLine(L"  " + PeerLabel(peers[i], localHostId) + L": "
+                    + (sentToPeer[i] ? L"sent" : L"unreachable"));
+    }
+
+    VerboseLine(L"Copied to " + std::to_wstring(reached) + L" of " +
+                std::to_wstring(peers.size()) + L" device(s).");
+
+    if (reached == 0) {
+        ErrLine(L"Could not reach any device.");
+        return 1;
+    }
+    return 0;
+}
+
+// Fetches the newest clipboard item from a device and writes it to stdout. Tries
+// peers sequentially — our own GUI (same host id) first, then the rest — skipping
+// peers too old to serve the request. Outbound-only, one-shot per peer.
+int RunPaste() {
+    if (!g_keyManager.HaveNetworkKey()) {
+        ErrLine(L"No network key configured. Run `clipp key set` first.");
+        return 1;
+    }
+
+    NetworkStartup net;
+    if (!net.ok) {
+        ErrLine(L"Failed to initialize networking.");
+        return 1;
+    }
+
+    std::vector<MDNSDiscovery::DiscoveredPeer> peers;
+    if (!MDNSDiscovery::BrowseOnce(kDiscoveryWait, peers, /*includeSelf=*/true) || peers.empty()) {
+        ErrLine(L"No devices found on the local network.");
+        return 1;
+    }
+
+    HostId localHostId;
+    g_settings.getHostID(localHostId);
+    const std::string localHostName = clipp::GetLocalPeerDisplayName("unknown", CryptoChannel::HOSTNAME_MAX_BYTES);
+
+    // Prefer our own GUI (same host id): lowest latency, most current, usually what
+    // the user means. stable_partition keeps discovery order within each group.
+    std::stable_partition(peers.begin(), peers.end(),
+        [&localHostId](const MDNSDiscovery::DiscoveredPeer& peer) { return peer.hostId == localHostId; });
+
+    VerboseLine(L"Discovered " + std::to_wstring(peers.size()) + L" device(s).");
+
+    for (const MDNSDiscovery::DiscoveredPeer& peer : peers) {
+        VerboseLine(L"Trying " + PeerLabel(peer, localHostId) + L"...");
+        OneShotPeer connection;
+        if (!connection.Connect(peer.ip, peer.port, localHostId, localHostName, peer.hostId,
+                                kConnectWait, kSessionWait)) {
+            VerboseLine(L"  unreachable.");
+            continue;
+        }
+        if ((connection.RemoteCaps()[0] & CryptoChannel::CAP0_SERVES_RECENT) == 0) {
+            VerboseLine(L"  no paste support, skipping.");
+            continue;  // peer predates RCNT; nothing to ask
+        }
+        if (!connection.SendFrame("RCNT")) {
+            VerboseLine(L"  request failed.");
+            continue;
+        }
+
+        std::vector<unsigned char> frame;
+        while (connection.RecvFrame(frame)) {
+            if (frame.size() < 4) {
+                break;
+            }
+            if (std::memcmp(frame.data(), "CLIP", 4) == 0) {
+                ClipboardPayload payload;
+                if (!ClipboardWire::TryDecodeClipboardFrame(frame, payload)) {
+                    break;
+                }
+                const std::vector<unsigned char>* plaintext = payload.TryGetUncompressedBytes();
+                if (plaintext == nullptr) {
+                    break;
+                }
+                size_t size = plaintext->size();
+                // Text carries a trailing NUL on the wire (capture convention); strip
+                // one so stdout matches pbpaste.
+                if (payload.meta.formatId == CLIPP_FORMAT_UTF8 && size > 0 && plaintext->back() == '\0') {
+                    --size;
+                }
+                VerboseLine(L"  got " + std::to_wstring(size) + L" byte(s).");
+                WriteAllStdout(plaintext->data(), size);
+                return 0;
+            }
+            if (std::memcmp(frame.data(), "NONE", 4) == 0) {
+                VerboseLine(L"  no content.");
+                break;  // this peer has nothing; try the next
+            }
+            if (std::memcmp(frame.data(), "SYNC", 4) == 0) {
+                // Crosstalk: the GUI greets a fresh incoming peer with a SYNC. We have
+                // nothing to replay; answer EOSY and keep waiting for our RCNT reply.
+                if (!connection.SendFrame("EOSY")) {
+                    break;
+                }
+                continue;
+            }
+            // Any other tag (e.g. a stray PING): ignore and keep reading for our reply.
+        }
+    }
+
+    ErrLine(L"No clipboard content available from any device.");
+    return 1;
+}
+
+enum class Action { None, KeySet, KeyErase, KeyShow, HostIdShow, HostIdReset, Copy, Paste };
 
 }  // namespace
 
@@ -309,6 +567,9 @@ std::optional<int> Run(int argc, char** argv) {
         "--loglevel", logLevel,
         "Log level: error, warn, info, debug, ddebug (default: silent in command mode)");
 
+    bool verbose = false;
+    app.add_flag("-v,--verbose", verbose, "Print progress to stderr (for copy/paste)");
+
     Action action = Action::None;
 
     CLI::App* keyCommand = app.add_subcommand("key", "Network key management");
@@ -334,6 +595,12 @@ std::optional<int> Run(int argc, char** argv) {
     CLI::App* hostIdReset = hostIdCommand->add_subcommand("reset", "Reset this device's host ID");
     hostIdReset->callback([&]() { action = Action::HostIdReset; });
 
+    CLI::App* copyCommand = app.add_subcommand("copy", "Read stdin and copy it to every device's clipboard");
+    copyCommand->callback([&]() { action = Action::Copy; });
+
+    CLI::App* pasteCommand = app.add_subcommand("paste", "Fetch the newest clipboard item from a device and write it to stdout");
+    pasteCommand->callback([&]() { action = Action::Paste; });
+
     try {
         app.parse(argc, argv);
     } catch (const CLI::ParseError& error) {
@@ -353,6 +620,8 @@ std::optional<int> Run(int argc, char** argv) {
     } else if (action != Action::None) {
         g_logger.SetMinimumLevel(Logger::Level::Off);
     }
+
+    g_verbose = verbose;
 
 #ifdef _WIN32
     // Install the crash handler now that the log level is decided: its "installed"
@@ -381,6 +650,10 @@ std::optional<int> Run(int argc, char** argv) {
         return RunHostIdShow();
     case Action::HostIdReset:
         return RunHostIdReset();
+    case Action::Copy:
+        return RunCopy();
+    case Action::Paste:
+        return RunPaste();
     case Action::None:
         break;
     }

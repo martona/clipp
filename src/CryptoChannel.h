@@ -18,6 +18,11 @@ public:
     static constexpr size_t CAPS_BYTES = 16;
     using Caps = std::array<uint8_t, CAPS_BYTES>;
 
+    // Capability bits advertised in the handshake (Caps[0]). SERVES_RECENT means
+    // this peer answers an "RCNT" frame with its most recent clipboard item — used
+    // by one-shot clients like `clipp paste` to decide whether a peer is worth asking.
+    static constexpr uint8_t CAP0_SERVES_RECENT = 0x01;
+
     CryptoChannel();
 
     bool ClientHandshake(

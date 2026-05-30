@@ -8,6 +8,7 @@
 #include "../../src/Logger.h"
 #include "../../src/MDNSDiscovery.h"
 #include "../../src/MDNSProtocol.h"
+#include "../../src/OneShotPeer.h"
 #include "../../src/Settings.h"
 #include "../../src/platform.h"
 #include "../../src/utils_socket.h"
@@ -127,89 +128,35 @@ bool SendPayloadsToPeer(const MDNSDiscovery::DiscoveredPeer& peer, const std::ve
         peer.ip.c_str(),
         peer.port);
 
-    SOCKET socket = ConnectTcpSocket(peer.ip, peer.port, kConnectWait);
-    if (socket == INVALID_SOCKET) {
-        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Share extension failed to connect to peer %hs at %hs:%hu.",
-            peer.deviceName.c_str(),
-            peer.ip.c_str(),
-            peer.port);
+    HostId localHostID;
+    if (!g_settings.getHostID(localHostID)) {
+        return false;
+    }
+    const std::string localHostName = clipp::GetLocalPeerDisplayName("iPhone", CryptoChannel::HOSTNAME_MAX_BYTES);
+
+    OneShotPeer connection;
+    if (!connection.Connect(peer.ip, peer.port, localHostID, localHostName, peer.hostId,
+                            kConnectWait, kSendWait)) {
+        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Share extension failed to establish session with peer %hs.",
+            peer.deviceName.c_str());
         return false;
     }
 
-    SocketWakeEvent wakeEvent;
-    if (!wakeEvent.Initialize()) {
-        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Share extension failed to initialize send wake socket for peer %hs.", peer.deviceName.c_str());
-        closesocket(socket);
-        return false;
-    }
-
-    std::atomic<bool> stopRequested{ false };
-    std::mutex deadlineMutex;
-    std::condition_variable deadlineCV;
-    bool finished = false;
-    std::thread deadlineThread([&]() {
-        std::unique_lock<std::mutex> lock(deadlineMutex);
-        if (!deadlineCV.wait_for(lock, kSendWait, [&]() { return finished; })) {
-            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Share extension send to peer %hs timed out.", peer.deviceName.c_str());
-            stopRequested = true;
-            wakeEvent.Signal();
-        }
-    });
-
-    bool sent = false;
-    do {
-        SocketIoContext io{ socket, wakeEvent, stopRequested };
-
-        HostId localHostID;
-        if (!g_settings.getHostID(localHostID)) {
+    bool sentAll = true;
+    for (const ClipboardPayload& payload : payloads) {
+        if (!connection.SendClipboardPayload(payload)) {
+            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Share extension failed to send %ls payload to peer %hs.",
+                ClippClipboardFormatNameW(payload.meta.formatId),
+                peer.deviceName.c_str());
+            sentAll = false;
             break;
         }
-
-        const std::string localHostName = clipp::GetLocalPeerDisplayName("iPhone", CryptoChannel::HOSTNAME_MAX_BYTES);
-
-        CryptoChannel channel;
-        HostId remoteHostID;
-        std::string remoteHostName;
-        if (!channel.ClientHandshake(io, localHostID, localHostName, remoteHostID, remoteHostName)) {
-            g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Share extension handshake failed for peer %hs.", peer.deviceName.c_str());
-            break;
-        }
-
-        if (remoteHostID != peer.hostId) {
-            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Share extension peer identity mismatch for %hs.", peer.deviceName.c_str());
-            break;
-        }
-
-        bool sentAll = true;
-        for (const ClipboardPayload& payload : payloads) {
-            if (!ClipboardWire::SendClipboardPayload(channel, io, payload)) {
-                g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Share extension failed to send %ls payload to peer %hs.",
-                    ClippClipboardFormatNameW(payload.meta.formatId),
-                    peer.deviceName.c_str());
-                sentAll = false;
-                break;
-            }
-        }
-
-        sent = sentAll;
-    } while (false);
-
-    {
-        std::lock_guard<std::mutex> lock(deadlineMutex);
-        finished = true;
-    }
-    deadlineCV.notify_one();
-    if (deadlineThread.joinable()) {
-        deadlineThread.join();
     }
 
-    shutdown(socket, SD_BOTH);
-    closesocket(socket);
-    wakeEvent.Close();
-    g_logger.log(__FUNCTION__, sent ? Logger::Level::Debug : Logger::Level::Warning, L"Share extension send to peer %hs %ls.",
+    g_logger.log(__FUNCTION__, sentAll ? Logger::Level::Debug : Logger::Level::Warning, L"Share extension send to peer %hs %ls.",
         peer.deviceName.c_str(),
-        sent ? L"succeeded" : L"failed");
-    return sent;
+        sentAll ? L"succeeded" : L"failed");
+    return sentAll;
 }
 
 }

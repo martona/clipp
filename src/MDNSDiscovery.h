@@ -37,7 +37,9 @@ using Callback = void(*)(Event, const DiscoveredPeer&);
 
 // Starts continuous browse + (optionally) publish for the local device.
 // `publishLocal=false` is for browse-only contexts (iOS share extension).
-bool Start(Callback callback, bool publishLocal = true);
+// `includeSelf=true` surfaces peers that share our own hostId (this device's own
+// running GUI) instead of filtering them out; the continuous runtime leaves it false.
+bool Start(Callback callback, bool publishLocal = true, bool includeSelf = false);
 
 // Stops browse + publish. Sends DNS-SD goodbye for the published instance.
 void Stop();
@@ -46,9 +48,12 @@ void Stop();
 bool HasHostIDCollisionWarning();
 void ClearHostIDCollisionWarning();
 
-// One-shot synchronous browse — used by iOS share extension which has a short lifetime
-// and just wants a snapshot of currently-visible peers.
-bool BrowseOnce(std::chrono::milliseconds wait, std::vector<DiscoveredPeer>& outPeers);
+// One-shot synchronous browse — used by the iOS share extension and the desktop CLI
+// verbs, which have short lifetimes and just want a snapshot of currently-visible peers.
+// `includeSelf=true` includes this device's own GUI (same hostId); the CLI `copy`/`paste`
+// verbs use it (copy reaches the local GUI; paste prefers it). The share extension
+// leaves it false.
+bool BrowseOnce(std::chrono::milliseconds wait, std::vector<DiscoveredPeer>& outPeers, bool includeSelf = false);
 
 } // namespace MDNSDiscovery
 

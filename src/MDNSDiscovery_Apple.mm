@@ -54,6 +54,7 @@ struct State {
     Callback callback = nullptr;
     bool started = false;
     bool publishLocal = false;
+    bool includeSelf = false;   // BrowseOnce(includeSelf): surface same-hostId peers (the local GUI)
     HostId localHostId;
     std::string publishedInstanceName;
     std::atomic<bool> hostIDCollisionWarning{ false };
@@ -418,7 +419,7 @@ static std::string LowerCaseUtf8FromNSString(NSString* s) {
         std::lock_guard<std::mutex> lock(s.mutex);
         cb = s.callback;
         const HostId remote(packet.hostId);
-        if (remote == s.localHostId) {
+        if (remote == s.localHostId && !s.includeSelf) {
             // Same hostId. If the instance name differs from ours, it's a collision.
             NSString* nameLower = [service.name lowercaseString];
             if (self.publishedNameLower && ![nameLower isEqualToString:self.publishedNameLower]) {
@@ -498,13 +499,14 @@ ClippMDNSAppleCoordinator* gContinuous = nil;
 
 } // namespace
 
-bool Start(Callback callback, bool publishLocal) {
+bool Start(Callback callback, bool publishLocal, bool includeSelf) {
     auto& s = GlobalState();
     {
         std::lock_guard<std::mutex> lock(s.mutex);
         if (s.started) return false;
         s.callback = callback;
         s.publishLocal = publishLocal;
+        s.includeSelf = includeSelf;
         s.hostIDCollisionWarning.store(false);
         // Cache our own hostId for self-filtering, even in browse-only mode (share extension).
         g_settings.getHostID(s.localHostId);
@@ -551,7 +553,7 @@ void ClearHostIDCollisionWarning() {
     GlobalState().hostIDCollisionWarning.store(false);
 }
 
-bool BrowseOnce(std::chrono::milliseconds wait, std::vector<DiscoveredPeer>& outPeers) {
+bool BrowseOnce(std::chrono::milliseconds wait, std::vector<DiscoveredPeer>& outPeers, bool includeSelf) {
     outPeers.clear();
     {
         std::lock_guard<std::mutex> lock(GlobalState().mutex);
@@ -562,10 +564,12 @@ bool BrowseOnce(std::chrono::milliseconds wait, std::vector<DiscoveredPeer>& out
         }
     }
 
-    // Cache our hostId so handleResolvedService can self-filter even though we're not publishing.
+    // Cache our hostId so handleResolvedService can self-filter even though we're not
+    // publishing; includeSelf lets the CLI verbs surface the local GUI (same hostId).
     {
         std::lock_guard<std::mutex> lock(GlobalState().mutex);
         g_settings.getHostID(GlobalState().localHostId);
+        GlobalState().includeSelf = includeSelf;
     }
 
     @autoreleasepool {
@@ -597,6 +601,10 @@ bool BrowseOnce(std::chrono::milliseconds wait, std::vector<DiscoveredPeer>& out
 
         std::lock_guard<std::mutex> lock(captureMutex);
         outPeers = std::move(captured);
+    }
+    {
+        std::lock_guard<std::mutex> lock(GlobalState().mutex);
+        GlobalState().includeSelf = false;
     }
     return true;
 }

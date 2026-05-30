@@ -43,6 +43,7 @@ struct State {
     Callback callback = nullptr;
     bool started = false;
     bool publishLocal = false;
+    bool includeSelf = false;   // BrowseOnce(includeSelf): surface same-hostId peers (the local GUI)
 
     // Local identity (cached at Start time + on NotifyHostIDChange).
     HostId localHostId;
@@ -257,8 +258,8 @@ void HandleResolved(const DNS_SERVICE_INSTANCE* instance) {
         }
         cb = s.callback;
 
-        // Self-filter / collision detection.
-        if (peer.hostId == s.localHostId) {
+        // Self-filter / collision detection (unless this browse opted to include self).
+        if (peer.hostId == s.localHostId && !s.includeSelf) {
             const std::string instanceUtf8Lower = LowerAscii(WideToUtf8(instance->pszInstanceName));
             const bool isSelf = instanceUtf8Lower.find(s.publishedInstanceNameUtf8) == 0;
             if (!isSelf) {
@@ -502,13 +503,14 @@ bool StartBrowseLocked(State& s) {
 // ============================================================================
 // Public API
 // ============================================================================
-bool Start(Callback callback, bool publishLocal) {
+bool Start(Callback callback, bool publishLocal, bool includeSelf) {
     auto& s = GlobalState();
     std::lock_guard<std::mutex> lock(s.mutex);
     if (s.started) return false;
 
     s.callback = callback;
     s.publishLocal = publishLocal;
+    s.includeSelf = includeSelf;
     s.hostIDCollisionWarning.store(false);
     // Cache our own hostId for self-filtering, regardless of whether we publish.
     g_settings.getHostID(s.localHostId);
@@ -585,7 +587,7 @@ void ClearHostIDCollisionWarning() {
     GlobalState().hostIDCollisionWarning.store(false);
 }
 
-bool BrowseOnce(std::chrono::milliseconds wait, std::vector<DiscoveredPeer>& outPeers) {
+bool BrowseOnce(std::chrono::milliseconds wait, std::vector<DiscoveredPeer>& outPeers, bool includeSelf) {
     outPeers.clear();
 
     // Run a private state machine so we don't disturb any active Start() session.
@@ -621,7 +623,7 @@ bool BrowseOnce(std::chrono::milliseconds wait, std::vector<DiscoveredPeer>& out
         accSlot->peers.push_back(p);
     };
 
-    if (!Start(cb, /*publishLocal=*/false)) {
+    if (!Start(cb, /*publishLocal=*/false, includeSelf)) {
         std::lock_guard<std::mutex> lock(accSlotMutex);
         accSlot = nullptr;
         return false;
