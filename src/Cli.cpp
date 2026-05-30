@@ -431,9 +431,66 @@ int RunCopy() {
     return 0;
 }
 
-// Fetches the newest clipboard item from a device and writes it to stdout. Tries
-// peers sequentially — our own GUI (same host id) first, then the rest — skipping
-// peers too old to serve the request. Outbound-only, one-shot per peer.
+enum class FetchResult { Content, Empty, NoSupport, Failed };
+
+// Runs the RCNT exchange on an already-connected peer. On a text CLIP response,
+// writes the payload to stdout and returns Content. NONE / non-text -> Empty;
+// missing cap -> NoSupport; transport/protocol failure -> Failed. Handles the SYNC
+// crosstalk the GUI sends a fresh incoming peer.
+FetchResult FetchRecent(OneShotPeer& connection) {
+    if ((connection.RemoteCaps()[0] & CryptoChannel::CAP0_SERVES_RECENT) == 0) {
+        return FetchResult::NoSupport;
+    }
+    if (!connection.SendFrame("RCNT")) {
+        return FetchResult::Failed;
+    }
+
+    std::vector<unsigned char> frame;
+    while (connection.RecvFrame(frame)) {
+        if (frame.size() < 4) {
+            break;
+        }
+        if (std::memcmp(frame.data(), "CLIP", 4) == 0) {
+            ClipboardPayload payload;
+            if (!ClipboardWire::TryDecodeClipboardFrame(frame, payload)) {
+                return FetchResult::Failed;
+            }
+            // Text-only: a non-text newest item reads as "nothing" (the responder
+            // gates on this too, but guard the requester side as well).
+            if (payload.meta.formatId != CLIPP_FORMAT_UTF8) {
+                return FetchResult::Empty;
+            }
+            const std::vector<unsigned char>* plaintext = payload.TryGetUncompressedBytes();
+            if (plaintext == nullptr) {
+                return FetchResult::Failed;
+            }
+            size_t size = plaintext->size();
+            // Text carries a trailing NUL on the wire (capture convention); strip one
+            // so stdout matches pbpaste.
+            if (size > 0 && plaintext->back() == '\0') {
+                --size;
+            }
+            VerboseLine(L"  got " + std::to_wstring(size) + L" byte(s).");
+            WriteAllStdout(plaintext->data(), size);
+            return FetchResult::Content;
+        }
+        if (std::memcmp(frame.data(), "NONE", 4) == 0) {
+            return FetchResult::Empty;
+        }
+        if (std::memcmp(frame.data(), "SYNC", 4) == 0) {
+            if (!connection.SendFrame("EOSY")) {
+                return FetchResult::Failed;
+            }
+            continue;
+        }
+        // Any other tag (e.g. a stray PING): ignore and keep reading for our reply.
+    }
+    return FetchResult::Failed;
+}
+
+// Fetches the newest clipboard item from a device and writes it to stdout. Tries the
+// local GUI over loopback first (no mDNS), then discovered peers (same host id first).
+// Outbound-only, one-shot per peer; text-only.
 int RunPaste() {
     if (!g_keyManager.HaveNetworkKey()) {
         ErrLine(L"No network key configured. Run `clipp key set` first.");
@@ -446,78 +503,59 @@ int RunPaste() {
         return 1;
     }
 
-    std::vector<MDNSDiscovery::DiscoveredPeer> peers;
-    if (!MDNSDiscovery::BrowseOnce(kDiscoveryWait, peers, /*includeSelf=*/true) || peers.empty()) {
-        ErrLine(L"No devices found on the local network.");
-        return 1;
-    }
-
     HostId localHostId;
     g_settings.getHostID(localHostId);
     const std::string localHostName = clipp::GetLocalPeerDisplayName("unknown", CryptoChannel::HOSTNAME_MAX_BYTES);
 
-    // Prefer our own GUI (same host id): lowest latency, most current, usually what
-    // the user means. stable_partition keeps discovery order within each group.
-    std::stable_partition(peers.begin(), peers.end(),
-        [&localHostId](const MDNSDiscovery::DiscoveredPeer& peer) { return peer.hostId == localHostId; });
-
-    VerboseLine(L"Discovered " + std::to_wstring(peers.size()) + L" device(s).");
-
-    for (const MDNSDiscovery::DiscoveredPeer& peer : peers) {
-        VerboseLine(L"Trying " + PeerLabel(peer, localHostId) + L"...");
-        OneShotPeer connection;
-        if (!connection.Connect(peer.ip, peer.port, localHostId, localHostName, peer.hostId,
-                                kConnectWait, kSessionWait)) {
-            VerboseLine(L"  unreachable.");
-            continue;
-        }
-        if ((connection.RemoteCaps()[0] & CryptoChannel::CAP0_SERVES_RECENT) == 0) {
-            VerboseLine(L"  no paste support, skipping.");
-            continue;  // peer predates RCNT; nothing to ask
-        }
-        if (!connection.SendFrame("RCNT")) {
-            VerboseLine(L"  request failed.");
-            continue;
-        }
-
-        std::vector<unsigned char> frame;
-        while (connection.RecvFrame(frame)) {
-            if (frame.size() < 4) {
-                break;
+    // Fast path: the local GUI binds 0.0.0.0 by default, so it's reachable over
+    // loopback with no mDNS round-trip — near-instant when our own clipboard has
+    // content. Best-effort: a closed port / non-default listener bind just fails fast
+    // and we fall through to discovery.
+    bool loopbackReachedGui = false;
+    {
+        OneShotPeer self;
+        if (self.Connect("127.0.0.1", static_cast<uint16_t>(g_settings.tcpPort()),
+                         localHostId, localHostName, localHostId, kConnectWait, kSessionWait)) {
+            loopbackReachedGui = true;
+            VerboseLine(L"Trying this device (127.0.0.1)...");
+            switch (FetchRecent(self)) {
+            case FetchResult::Content:   return 0;
+            case FetchResult::Empty:     VerboseLine(L"  no content."); break;
+            case FetchResult::NoSupport: VerboseLine(L"  no paste support."); break;
+            case FetchResult::Failed:    VerboseLine(L"  request failed."); break;
             }
-            if (std::memcmp(frame.data(), "CLIP", 4) == 0) {
-                ClipboardPayload payload;
-                if (!ClipboardWire::TryDecodeClipboardFrame(frame, payload)) {
-                    break;
-                }
-                const std::vector<unsigned char>* plaintext = payload.TryGetUncompressedBytes();
-                if (plaintext == nullptr) {
-                    break;
-                }
-                size_t size = plaintext->size();
-                // Text carries a trailing NUL on the wire (capture convention); strip
-                // one so stdout matches pbpaste.
-                if (payload.meta.formatId == CLIPP_FORMAT_UTF8 && size > 0 && plaintext->back() == '\0') {
-                    --size;
-                }
-                VerboseLine(L"  got " + std::to_wstring(size) + L" byte(s).");
-                WriteAllStdout(plaintext->data(), size);
-                return 0;
-            }
-            if (std::memcmp(frame.data(), "NONE", 4) == 0) {
-                VerboseLine(L"  no content.");
-                break;  // this peer has nothing; try the next
-            }
-            if (std::memcmp(frame.data(), "SYNC", 4) == 0) {
-                // Crosstalk: the GUI greets a fresh incoming peer with a SYNC. We have
-                // nothing to replay; answer EOSY and keep waiting for our RCNT reply.
-                if (!connection.SendFrame("EOSY")) {
-                    break;
-                }
+        }
+    }
+
+    // Browse for the rest. If loopback reached our GUI, exclude self from discovery
+    // (just tried it); otherwise include it so an unusual listener bind still surfaces
+    // the local GUI at its LAN address.
+    std::vector<MDNSDiscovery::DiscoveredPeer> peers;
+    if (MDNSDiscovery::BrowseOnce(kDiscoveryWait, peers, /*includeSelf=*/!loopbackReachedGui) && !peers.empty()) {
+        // Prefer same-hostId first (covers the includeSelf fallback case).
+        std::stable_partition(peers.begin(), peers.end(),
+            [&localHostId](const MDNSDiscovery::DiscoveredPeer& peer) { return peer.hostId == localHostId; });
+
+        VerboseLine(L"Discovered " + std::to_wstring(peers.size()) + L" device(s).");
+
+        for (const MDNSDiscovery::DiscoveredPeer& peer : peers) {
+            VerboseLine(L"Trying " + PeerLabel(peer, localHostId) + L"...");
+            OneShotPeer connection;
+            if (!connection.Connect(peer.ip, peer.port, localHostId, localHostName, peer.hostId,
+                                    kConnectWait, kSessionWait)) {
+                VerboseLine(L"  unreachable.");
                 continue;
             }
-            // Any other tag (e.g. a stray PING): ignore and keep reading for our reply.
+            switch (FetchRecent(connection)) {
+            case FetchResult::Content:   return 0;
+            case FetchResult::Empty:     VerboseLine(L"  no content."); break;
+            case FetchResult::NoSupport: VerboseLine(L"  no paste support, skipping."); break;
+            case FetchResult::Failed:    VerboseLine(L"  request failed."); break;
+            }
         }
+    } else if (!loopbackReachedGui) {
+        ErrLine(L"No devices found on the local network.");
+        return 1;
     }
 
     ErrLine(L"No clipboard content available from any device.");

@@ -683,10 +683,15 @@ void Peer::ThreadProcRecv() {
 			if (std::memcmp(frame.data(), "RCNT", 4) == 0) {
 				// A one-shot client (e.g. `clipp paste`) requesting our most recent
 				// clipboard item. Reply with a single CLIP frame, or NONE when we
-				// have nothing servable. Unlike SYNC this is one item and no EOSY.
+				// have nothing servable. Text-only: the CLI pipes bytes to stdout and
+				// has no way to emit an image, so a non-text newest item reads as
+				// "nothing". Unlike SYNC this is one item and no EOSY.
 				const std::array<uint8_t, 16> zero{};
 				const auto recent = g_clipboardActivityStore.ItemsSince(zero, 1);
-				if (!recent.empty() && recent.back() && !recent.back()->Empty()) {
+				const bool servable = !recent.empty() && recent.back()
+					&& !recent.back()->Empty()
+					&& recent.back()->meta.formatId == CLIPP_FORMAT_UTF8;
+				if (servable) {
 					if (!SendClipboardData(channel, io, *recent.back())) {
 						log(__FUNCTION__, Logger::Level::Debug, L"Failed to send RCNT response.");
 						break;
