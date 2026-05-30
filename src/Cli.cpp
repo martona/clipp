@@ -510,13 +510,13 @@ int RunPaste() {
     return 0;
 }
 
-enum class Action { None, KeySet, KeyErase, KeyShow, HostIdShow, HostIdReset, Copy, Paste };
+enum class Action { None, Gui, KeySet, KeyErase, KeyShow, HostIdShow, HostIdReset, Copy, Paste };
 
 }  // namespace
 
 namespace clipp::cli {
 
-std::optional<int> Run(int argc, char** argv) {
+std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
 #ifdef _WIN32
     // The CRT's narrow argv is ANSI-derived and mangles non-ASCII (e.g.
     // `--name "Büro"`). Rebuild a UTF-8 argv from the wide command line.
@@ -589,12 +589,22 @@ std::optional<int> Run(int argc, char** argv) {
     CLI::App* hostIdReset = hostIdCommand->add_subcommand("reset", "Reset this device's host ID");
     hostIdReset->callback([&]() { action = Action::HostIdReset; });
 
+    // Explicit opt-in to the GUI from a terminal (a bare launch there prints usage
+    // instead). Listed in --help but not advertised harder than that.
+    CLI::App* guiCommand = app.add_subcommand(
+        "gui", "Launch the graphical app (the default when not started from a terminal)");
+    guiCommand->callback([&]() { action = Action::Gui; });
+
     try {
         app.parse(argc, argv);
     } catch (const CLI::ParseError& error) {
         // Prints help (exit 0) or the error (nonzero) to the attached console.
         return app.exit(error);
     }
+
+    // A bare launch and the explicit `gui` subcommand are both GUI dispositions,
+    // not commands -- they must not silence the logger the way a command does.
+    const bool guiDisposition = (action == Action::None || action == Action::Gui);
 
     // Apply the logging policy now that global options are parsed.
     if (logLevelOption->count() > 0) {
@@ -605,22 +615,33 @@ std::optional<int> Run(int argc, char** argv) {
             return 1;
         }
         g_logger.SetMinimumLevel(level);
-    } else if (action != Action::None) {
+    } else if (!guiDisposition) {
         g_logger.SetMinimumLevel(Logger::Level::Off);
     }
 
     g_verbose = verbose;
 
+    // Bare launch from a console: print usage and exit instead of silently
+    // launching the terminal-blocking GUI. `clipp gui` is the explicit opt-in to
+    // the GUI from a terminal; a bare launch with no console falls through below.
+    if (action == Action::None && launchedFromConsole) {
+        g_logger.SetMinimumLevel(Logger::Level::Off);  // keep diagnostics out of the usage text
+        std::cout << app.help();
+        std::cout.flush();
+        return 0;
+    }
+
 #ifdef _WIN32
     // Install the crash handler now that the log level is decided: its "installed"
     // line is suppressed in command mode (level Off) but still shown for the GUI.
     // Once installed it is process-global, so it guards both the command handlers
-    // below and the GUI loop that main() runs after we return nullopt.
+    // below and the GUI loop that main() runs after we return nullopt. (The usage
+    // path above returns before here -- it has nothing to guard.)
     clipp::InstallCrashHandler();
 #endif
 
-    if (action == Action::None) {
-        return std::nullopt;  // no subcommand -> proceed to the GUI
+    if (guiDisposition) {
+        return std::nullopt;  // explicit `gui`, or a bare launch with no console -> GUI
     }
 
     if (!InitializeSodium()) {
@@ -642,6 +663,7 @@ std::optional<int> Run(int argc, char** argv) {
         return RunCopy();
     case Action::Paste:
         return RunPaste();
+    case Action::Gui:
     case Action::None:
         break;
     }

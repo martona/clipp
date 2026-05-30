@@ -9,14 +9,20 @@ bool InitializeSodium();
 
 namespace clipp::cli {
 
-// Parses argv. If a recognized subcommand (key/hostid) is present, runs it and
-// returns its process exit code (the caller should return it from main). If none
-// is present, applies any global options (e.g. --loglevel) and returns
-// std::nullopt so the caller proceeds to the GUI.
+// Parses argv and decides how the process should proceed:
+//   * a recognized command (copy/paste/key/hostid) runs and its process exit code
+//     is returned (the caller should return it from main);
+//   * a bare launch from a console (launchedFromConsole == true) prints usage and
+//     returns 0 -- friendlier than silently launching the terminal-blocking GUI;
+//   * a bare launch with no console, or the explicit `gui` subcommand, returns
+//     std::nullopt so the caller proceeds to the GUI.
 //
-// Diagnostic logging is silenced (Logger::Level::Off) while a subcommand runs
-// unless --loglevel is given; command results go to stdout and command errors to
-// stderr, independent of the log stream.
-std::optional<int> Run(int argc, char** argv);
+// launchedFromConsole is the result of InitializeConsoleOutput(): true when we
+// were started from a terminal/shell, false for a pure GUI launch.
+//
+// Diagnostic logging is silenced (Logger::Level::Off) while a command runs unless
+// --loglevel is given; command results go to stdout and command errors to stderr,
+// independent of the log stream.
+std::optional<int> Run(int argc, char** argv, bool launchedFromConsole);
 
 }  // namespace clipp::cli

@@ -124,12 +124,26 @@ bool UnregisterClippAutoStart() {
 
 bool InitializeConsoleOutput() {
     #ifdef _WIN32
-    // A GUI-subsystem child receives a real handle ONLY for the std streams the
-    // shell actually redirected (a file or pipe); non-redirected (console) streams
-    // arrive as NULL. So decide per stream: bind each forwarded handle to its CRT
-    // fd, and attach the parent console only to service the NULL ones -- never
-    // reopening CONOUT$/CONIN$ over a forwarded handle (that is what previously
-    // clobbered `2>` and stdin pipes, since the old check keyed off stdout alone).
+    // We are a /SUBSYSTEM:windows binary, so the OS never gives us a console of our
+    // own. Two DISTINCT mechanisms get output to a terminal and we need BOTH --
+    // do not "simplify" this to one (see the git history where dropping AttachConsole
+    // silently killed all output for `clipp -h`, `key show`, etc. in a plain shell):
+    //
+    //   * Redirected streams (`clipp paste > out.txt`, `echo x | clipp copy`): the
+    //     clipp.com shim forwards these as real file/pipe handles, which inherit and
+    //     work in any process. GetFileType reports DISK/PIPE -> bind the CRT fd to
+    //     the handle via _open_osfhandle/_dup2.
+    //   * Non-redirected (interactive) streams: a console is a CHARACTER DEVICE; a
+    //     handle to it only functions in a process ATTACHED to that console, and a
+    //     GUI-subsystem child is not auto-attached even though the shim forwarded
+    //     the handle -- it arrives NULL/UNKNOWN and writes go nowhere. So we must
+    //     AttachConsole(ATTACH_PARENT_PROCESS) to reconnect to the launching
+    //     terminal, then reopen CONIN$/CONOUT$.
+    //
+    // This does NOT pollute a real GUI launch: a double-click / autostart parent has
+    // no console, so AttachConsole fails and we bail out silently below. The only
+    // GUI-via-terminal path is the explicit `clipp gui`, where attaching (and
+    // logging to stderr) is exactly the intent.
     struct StdStream {
         DWORD stdId;
         FILE* file;
@@ -254,14 +268,18 @@ void OnClipboardNotification(PlatformWindowHandle hwnd) {
 
 int main(int argc, char* argv[]) {
 
-    InitializeConsoleOutput();
+    // True when we were launched from a console/terminal: on Windows the clipp.com
+    // shim forwarded our std handles; on macOS stdout is a TTY. Drives the
+    // command-line vs GUI disposition in cli::Run below.
+    const bool launchedFromConsole = InitializeConsoleOutput();
 
-    // Command-line mode: if a recognized subcommand (key/hostid) ran, return its
-    // exit code. Otherwise any global options (e.g. --loglevel) have been applied
-    // and we fall through to the GUI. Run() installs the crash handler internally
-    // once the log level is decided, so its "installed" line stays out of command
-    // output while still guarding the GUI loop below.
-    if (auto commandExitCode = clipp::cli::Run(argc, argv)) {
+    // Command-line mode: if a recognized command (copy/paste/key/hostid) ran,
+    // return its exit code. A bare launch from a console prints usage and exits; a
+    // bare launch with no console (double-click / autostart) or an explicit `gui`
+    // subcommand falls through to the GUI. Run() installs the crash handler
+    // internally once the log level is decided, so its "installed" line stays out
+    // of command output while still guarding the GUI loop below.
+    if (auto commandExitCode = clipp::cli::Run(argc, argv, launchedFromConsole)) {
         return *commandExitCode;
     }
 
