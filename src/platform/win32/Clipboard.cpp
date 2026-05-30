@@ -1252,7 +1252,9 @@ void SetClipboardData(
             ClearDelayedClipboardRenderState();
 
             if (payload->meta.formatId == CLIPP_FORMAT_UTF8) {
-                const std::vector<unsigned char>* utf8 = payload->TryGetUncompressedBytes();
+                // Localized form: the wire is LF-canonical, so this re-expands to CRLF
+                // for the Windows clipboard (what native apps expect on paste).
+                const std::vector<unsigned char>* utf8 = payload->TryGetLocalizedBytes();
                 if (utf8 == nullptr) {
                     g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to obtain plaintext for clipboard text payload; nothing written.");
                 } else {

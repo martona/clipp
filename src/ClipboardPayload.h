@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -49,6 +50,10 @@ public:
         decompressedScratch_.shrink_to_fit();
         scratchAttempted_ = false;
         scratchOk_ = false;
+        localizedScratch_.clear();
+        localizedScratch_.shrink_to_fit();
+        localizedAttempted_ = false;
+        localizedOk_ = false;
         return *this;
     }
 
@@ -58,6 +63,28 @@ public:
     // payloadDataSize}. meta.formatId must be set before this call. Returns
     // false on compression failure.
     bool SetUncompressedBytes(std::vector<unsigned char> bytes) {
+        // Canonicalize line endings to LF for text before hashing/storing, so the wire
+        // form is platform-neutral: the same text copied on Windows (CRLF) and macOS
+        // (LF) hashes identically (so cross-platform dedup / the hash-guard see one
+        // item), and receivers re-add the native ending on write (TryGetLocalizedBytes).
+        // Only a payload that actually contains CR pays the rebuild.
+        if (meta.formatId == CLIPP_FORMAT_UTF8
+            && std::find(bytes.begin(), bytes.end(), static_cast<unsigned char>('\r')) != bytes.end()) {
+            std::vector<unsigned char> lf;
+            lf.reserve(bytes.size());
+            for (size_t i = 0; i < bytes.size(); ++i) {
+                if (bytes[i] == '\r') {
+                    lf.push_back('\n');
+                    if (i + 1 < bytes.size() && bytes[i + 1] == '\n') {
+                        ++i;  // collapse CRLF to a single LF (lone CR also folds to LF)
+                    }
+                } else {
+                    lf.push_back(bytes[i]);
+                }
+            }
+            bytes = std::move(lf);
+        }
+
         // Hash over plaintext (content identity, stable across compression).
         const XXH128_hash_t hash = XXH3_128bits_withSeed(
             bytes.data(),
@@ -211,6 +238,49 @@ public:
         return &decompressedScratch_;
     }
 
+    // Plaintext in the LOCAL platform's line-ending convention — for writing to the OS
+    // clipboard or the CLI's stdout. The wire/canonical form is always LF (see
+    // SetUncompressedBytes); on Windows this re-expands LF -> CRLF for text into a
+    // lazily-filled scratch (kept separate from decompressedScratch_, which must stay
+    // the canonical form the size check / preview / hash-guard rely on). Everywhere
+    // else, and for non-text, it's identical to TryGetUncompressedBytes with no copy.
+    // nullptr if the plaintext is unavailable.
+    const std::vector<unsigned char>* TryGetLocalizedBytes() const {
+        const std::vector<unsigned char>* canonical = TryGetUncompressedBytes();
+#ifdef _WIN32
+        if (canonical == nullptr || meta.formatId != CLIPP_FORMAT_UTF8) {
+            return canonical;
+        }
+        std::lock_guard<std::mutex> lock(scratchMutex_);
+        if (localizedAttempted_) {
+            return localizedOk_ ? &localizedScratch_ : canonical;
+        }
+        localizedAttempted_ = true;
+        localizedScratch_.clear();
+        localizedScratch_.reserve(canonical->size() + canonical->size() / 8 + 1);
+        // Emit CRLF for every line ending, treating LF / CRLF / lone CR uniformly, so a
+        // payload from an older (pre-normalization) peer that still carries CRLF doesn't
+        // come out as CR-CR-LF. The receive path can't pre-normalize (it would break the
+        // payloadDataSize wire check), so the robustness lives here.
+        for (size_t i = 0; i < canonical->size(); ++i) {
+            const unsigned char c = (*canonical)[i];
+            if (c == '\r' || c == '\n') {
+                localizedScratch_.push_back('\r');
+                localizedScratch_.push_back('\n');
+                if (c == '\r' && i + 1 < canonical->size() && (*canonical)[i + 1] == '\n') {
+                    ++i;  // consume the LF of a CRLF pair
+                }
+            } else {
+                localizedScratch_.push_back(c);
+            }
+        }
+        localizedOk_ = true;
+        return &localizedScratch_;
+#else
+        return canonical;  // macOS / iOS / Linux are LF-native: native == canonical
+#endif
+    }
+
     bool Empty() const { return encoded_.empty(); }
 
 private:
@@ -220,6 +290,10 @@ private:
         decompressedScratch_.shrink_to_fit();
         scratchAttempted_ = false;
         scratchOk_ = false;
+        localizedScratch_.clear();
+        localizedScratch_.shrink_to_fit();
+        localizedAttempted_ = false;
+        localizedOk_ = false;
     }
 
     std::vector<unsigned char> encoded_;
@@ -228,4 +302,10 @@ private:
     mutable std::vector<unsigned char> decompressedScratch_;
     mutable bool scratchAttempted_{false};
     mutable bool scratchOk_{false};
+    // Lazily-filled native-line-ending form of the text, for OS clipboard / stdout
+    // writes on platforms whose native ending differs from the LF wire form (Windows).
+    // Separate from decompressedScratch_ so the canonical LF form survives.
+    mutable std::vector<unsigned char> localizedScratch_;
+    mutable bool localizedAttempted_{false};
+    mutable bool localizedOk_{false};
 };

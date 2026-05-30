@@ -421,7 +421,9 @@ FetchResult FetchRecent(OneShotPeer& connection) {
             if (payload.meta.formatId != CLIPP_FORMAT_UTF8) {
                 return FetchResult::Empty;
             }
-            const std::vector<unsigned char>* plaintext = payload.TryGetUncompressedBytes();
+            // Localized form: native line endings for stdout (CRLF on Windows, LF
+            // elsewhere) — the wire is LF-canonical.
+            const std::vector<unsigned char>* plaintext = payload.TryGetLocalizedBytes();
             if (plaintext == nullptr) {
                 return FetchResult::Failed;
             }
