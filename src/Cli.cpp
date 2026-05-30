@@ -25,6 +25,7 @@
 #include "OneShotPeer.h"
 #include "Settings.h"
 #include "platform.h"
+#include "version.h"
 
 #ifdef _WIN32
     #define WIN32_LEAN_AND_MEAN
@@ -524,7 +525,7 @@ std::optional<int> Run(int argc, char** argv) {
     }
 #endif
 
-    CLI::App app{"Clipp - cross-platform clipboard sharing"};
+    CLI::App app{"Clipp v" CLIPP_VERSION_STRING_3PART " - cross-platform clipboard sharing"};
     app.allow_extras();   // a bare/GUI launch (and OS-injected args) must not error
     app.fallthrough();    // let --loglevel be recognized before or after a subcommand
 
@@ -537,6 +538,12 @@ std::optional<int> Run(int argc, char** argv) {
     app.add_flag("-v,--verbose", verbose, "Print progress to stderr (for copy/paste)");
 
     Action action = Action::None;
+
+    CLI::App* copyCommand = app.add_subcommand("copy", "Read stdin and copy it to the network");
+    copyCommand->callback([&]() { action = Action::Copy; });
+
+    CLI::App* pasteCommand = app.add_subcommand("paste", "Fetch the newest clipboard item from the network write it to stdout");
+    pasteCommand->callback([&]() { action = Action::Paste; });
 
     CLI::App* keyCommand = app.add_subcommand("key", "Network key management");
     keyCommand->require_subcommand(1);
@@ -560,12 +567,6 @@ std::optional<int> Run(int argc, char** argv) {
 
     CLI::App* hostIdReset = hostIdCommand->add_subcommand("reset", "Reset this device's host ID");
     hostIdReset->callback([&]() { action = Action::HostIdReset; });
-
-    CLI::App* copyCommand = app.add_subcommand("copy", "Read stdin and copy it to every device's clipboard");
-    copyCommand->callback([&]() { action = Action::Copy; });
-
-    CLI::App* pasteCommand = app.add_subcommand("paste", "Fetch the newest clipboard item from a device and write it to stdout");
-    pasteCommand->callback([&]() { action = Action::Paste; });
 
     try {
         app.parse(argc, argv);
