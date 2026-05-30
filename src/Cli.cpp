@@ -190,11 +190,14 @@ struct NetworkStartup {
 struct NetworkStartup { bool ok = true; };
 #endif
 
-// Reads stdin to EOF, binary-safe (no newline translation, no Ctrl-Z EOF on
-// Windows), for `copy`.
+// Reads stdin to EOF, for `copy`.
 std::vector<unsigned char> ReadAllStdin() {
 #ifdef _WIN32
-    _setmode(_fileno(stdin), _O_BINARY);
+    // Console (interactive typing) needs text mode so a Ctrl+Z (0x1A) signals EOF and
+    // typed CRLFs fold to LF; binary mode would read Ctrl+Z as a literal byte and the
+    // read would never finish. Redirected stdin (pipe/file) uses binary mode for
+    // byte-exact, translation-free input — its EOF comes from the stream closing.
+    _setmode(_fileno(stdin), StdinIsInteractive() ? _O_TEXT : _O_BINARY);
 #endif
     std::vector<unsigned char> data;
     unsigned char buffer[65536];
@@ -540,9 +543,11 @@ std::optional<int> Run(int argc, char** argv) {
     Action action = Action::None;
 
     CLI::App* copyCommand = app.add_subcommand("copy", "Read stdin and copy it to the network");
+    copyCommand->alias("c");
     copyCommand->callback([&]() { action = Action::Copy; });
 
-    CLI::App* pasteCommand = app.add_subcommand("paste", "Fetch the newest clipboard item from the network write it to stdout");
+    CLI::App* pasteCommand = app.add_subcommand("paste", "Fetch the newest clipboard item from the network and write it to stdout");
+    pasteCommand->alias("p");
     pasteCommand->callback([&]() { action = Action::Paste; });
 
     CLI::App* keyCommand = app.add_subcommand("key", "Network key management");
