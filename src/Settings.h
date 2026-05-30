@@ -54,8 +54,8 @@ public:
     // next session. Counter is per-origin (this device), monotonic across restarts.
     uint64_t nextOriginSequenceNumber();
 
-    bool setEncryptedNetworkKey(const std::vector<unsigned char>& value);
-    bool getEncryptedNetworkKey(std::vector<unsigned char>& value) const;
+    bool setNetworkKey(const std::vector<unsigned char>& value);
+    bool getNetworkKey(std::vector<unsigned char>& value) const;
     bool ensureHostID(HostId& value);
     bool getHostID(HostId& value) const;
     bool resetHostID(HostId& value);

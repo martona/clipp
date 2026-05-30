@@ -336,10 +336,15 @@ int RunKeyShow() {
 }
 
 int RunHostIdShow() {
+    // ensure, not get: a device's host ID is meant to exist from first use. On the
+    // desktop builds main() generates it at startup; the headless CLI has no such
+    // daemon, so create-and-persist it on first read here (idempotent thereafter).
+    // This also fixes a latent desktop case -- `hostid show` before the GUI's first
+    // launch previously printed "(none)".
     HostId hostID;
-    if (!g_settings.getHostID(hostID)) {
-        OutLine(L"hostid: (none)");
-        return 0;
+    if (!g_settings.ensureHostID(hostID)) {
+        ErrLine(L"Failed to initialize host ID.");
+        return 1;
     }
     OutLine(L"hostid: " + hostID.ToHexWString());
     return 0;
@@ -390,8 +395,11 @@ int RunCopy() {
         return 1;
     }
 
+    // ensure (not get): stamp the relay origin with a real host ID. A headless box
+    // may never have run the daemon that generates it, and an all-zero id here would
+    // poison origin/identity on the wire. Idempotent once it exists.
     HostId localHostId;
-    g_settings.getHostID(localHostId);
+    g_settings.ensureHostID(localHostId);
     const std::string localHostName = clipp::GetLocalPeerDisplayName("unknown", CryptoChannel::HOSTNAME_MAX_BYTES);
     payload.StampOrigin(localHostId, localHostName.c_str(), g_settings.nextOriginSequenceNumber());
 
@@ -481,8 +489,11 @@ int RunPaste() {
         return 1;
     }
 
+    // ensure (not get): the paste handshake authenticates with our host ID; a
+    // headless box may not have generated one yet, and an all-zero id would
+    // misidentify us to the peer. Idempotent once it exists.
     HostId localHostId;
-    g_settings.getHostID(localHostId);
+    g_settings.ensureHostID(localHostId);
     const std::string localHostName = clipp::GetLocalPeerDisplayName("unknown", CryptoChannel::HOSTNAME_MAX_BYTES);
 
     const bool got = MDNSDiscovery::BrowseStream(OneShot::kBrowseCeiling, /*includeSelf=*/true,

@@ -14,7 +14,12 @@ namespace {
     constexpr wchar_t kClipboardSyncMaxItemsName[] = L"ClipboardSyncMaxItems";
     constexpr wchar_t kHonorExternalPrivacyMarkersName[] = L"HonorExternalPrivacyMarkers";
     constexpr wchar_t kOriginSequenceFloorName[] = L"OriginSequenceFloor";
-    constexpr wchar_t kEncryptedNetworkKeyName[] = L"EncryptedNetworkKey";
+    constexpr wchar_t kNetworkKeyName[] = L"NetworkKey";
+    // Legacy name, read-migrated below. Originally "Encrypted..." because Windows
+    // DPAPI-wraps the blob, but the value is plaintext on Linux (raw 0600 key), so
+    // the name was a lie on that platform. macOS never used this (keychain), so only
+    // existing Windows installs (and any pre-rename Linux key) carry the old name.
+    constexpr wchar_t kLegacyEncryptedNetworkKeyName[] = L"EncryptedNetworkKey";
     constexpr wchar_t kHostIDName[] = L"HostID";
 
     void GenerateHostID(HostId& value) {
@@ -178,12 +183,40 @@ uint64_t Settings::nextOriginSequenceNumber() {
     return next;
 }
 
-bool Settings::setEncryptedNetworkKey(const std::vector<unsigned char>& value) {
-    return WriteBinaryValue(kEncryptedNetworkKeyName, value.data(), value.size());
+bool Settings::setNetworkKey(const std::vector<unsigned char>& value) {
+    // Neutralize any value still stored under the legacy name, so it can't shadow
+    // this write through getNetworkKey's migration fallback below. This matters for
+    // the clear case: ClearNetworkKey writes an EMPTY value here, which the Windows
+    // backend reads back as "absent" -- without also blanking the legacy, the next
+    // read would fall through and resurrect the OLD key (erase would silently do
+    // nothing). Blank (not delete -- the backend has no delete primitive) and only
+    // when a non-empty legacy value is actually present, so fresh installs don't
+    // accrue a vestigial empty legacy entry. An empty value reads as absent on
+    // Windows and is never consulted on Linux (NetworkKey is present post-write),
+    // so blanking is sufficient on every backend.
+    std::vector<unsigned char> legacy;
+    if (ReadBinaryValue(kLegacyEncryptedNetworkKeyName, legacy) && !legacy.empty()) {
+        WriteBinaryValue(kLegacyEncryptedNetworkKeyName, legacy.data(), 0);
+    }
+    return WriteBinaryValue(kNetworkKeyName, value.data(), value.size());
 }
 
-bool Settings::getEncryptedNetworkKey(std::vector<unsigned char>& value) const {
-    return ReadBinaryValue(kEncryptedNetworkKeyName, value);
+bool Settings::getNetworkKey(std::vector<unsigned char>& value) const {
+    if (ReadBinaryValue(kNetworkKeyName, value)) {
+        return true;
+    }
+    // Migrate a key written under the legacy name by an older build: read it and
+    // rewrite under the new name so the next read hits the fast path above. Reached
+    // only when NetworkKey is genuinely absent (never written): once any value --
+    // including the empty "cleared" tombstone -- exists under the new name, the
+    // early return above wins and we never resurrect the legacy. setNetworkKey
+    // additionally blanks the legacy on write, so a cleared key cannot come back.
+    // One-time per install; spares existing users from re-entering credentials.
+    if (ReadBinaryValue(kLegacyEncryptedNetworkKeyName, value)) {
+        WriteBinaryValue(kNetworkKeyName, value.data(), value.size());
+        return true;
+    }
+    return false;
 }
 
 bool Settings::ensureHostID(HostId& value) {

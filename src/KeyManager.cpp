@@ -320,7 +320,7 @@ void KeyManager::ClearNetworkKey() {
     cacheValid_ = false;
     ClearKeyCache(cachedKeys_);
 #ifndef __APPLE__
-    settings_.setEncryptedNetworkKey(std::vector<unsigned char>{});
+    settings_.setNetworkKey(std::vector<unsigned char>{});
 #else
     DeleteNetworkKeyItem(CFSTR("NetworkKeyV2"));
 #endif
@@ -347,7 +347,8 @@ bool KeyManager::SetNetworkKey(const NetworkKey& networkKey, std::string* errorM
         return false;
     }
 
-    std::vector<unsigned char> encryptedBuffer(encryptedData.pbData, encryptedData.pbData + encryptedData.cbData);
+    // DPAPI-wrapped on Windows; the shared "#ifndef __APPLE__" block below persists it.
+    std::vector<unsigned char> keyBlob(encryptedData.pbData, encryptedData.pbData + encryptedData.cbData);
     LocalFree(encryptedData.pbData);
 #elif defined(__APPLE__)
     DeleteNetworkKeyItem(CFSTR("NetworkKeyV2"));
@@ -371,30 +372,31 @@ bool KeyManager::SetNetworkKey(const NetworkKey& networkKey, std::string* errorM
         return false;
     }
 
-    std::vector<unsigned char> encryptedBuffer;
+    std::vector<unsigned char> keyBlob;  // unused on the keychain path; satisfies the shared block below
 #else
     // Linux: no OS secret store. Persist the raw 32-byte root key through the
     // Settings file backend (created 0600). Same trust model as an ~/.ssh private
     // key; full-disk encryption covers data at rest. We deliberately skip libsecret
     // -- a headless SSH session usually has no unlocked Secret Service / D-Bus,
     // which is exactly where this build runs. The shared "#ifndef __APPLE__" block
-    // below writes encryptedBuffer to settings, so Linux reuses Windows' exact
-    // storage path ("encrypted" is a misnomer here; the plumbing is identical).
-    std::vector<unsigned char> encryptedBuffer(networkKey.begin(), networkKey.end());
+    // below persists keyBlob to settings, so Linux reuses Windows' exact storage
+    // path -- the only difference is Windows hands it a DPAPI-wrapped blob while
+    // Linux hands it the raw key (the 0600 file IS the protection boundary).
+    std::vector<unsigned char> keyBlob(networkKey.begin(), networkKey.end());
 #endif
 
 #ifndef __APPLE__
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!settings_.setEncryptedNetworkKey(encryptedBuffer)) {
+        if (!settings_.setNetworkKey(keyBlob)) {
             if (errorMessage != nullptr) {
-                *errorMessage = "Failed to write encrypted key to settings";
+                *errorMessage = "Failed to write network key to settings";
             }
             return false;
         }
     }
 #else
-    (void)encryptedBuffer;
+    (void)keyBlob;
 #endif
 
     return CacheDerivedKeysFromRoot(networkKey, errorMessage);
@@ -474,7 +476,7 @@ bool KeyManager::LoadRootNetworkKey(std::string* errorMessage) {
     std::vector<unsigned char> encryptedBuffer;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!settings_.getEncryptedNetworkKey(encryptedBuffer)) {
+        if (!settings_.getNetworkKey(encryptedBuffer)) {
             if (errorMessage != nullptr) {
                 *errorMessage = "Failed to read encrypted key from settings";
             }
@@ -569,30 +571,30 @@ bool KeyManager::LoadRootNetworkKey(std::string* errorMessage) {
     CFRelease(outData);
 #else
     // Linux: read the raw 32-byte root key back from the Settings file backend.
-    std::vector<unsigned char> encryptedBuffer;
+    std::vector<unsigned char> keyBlob;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!settings_.getEncryptedNetworkKey(encryptedBuffer)) {
+        if (!settings_.getNetworkKey(keyBlob)) {
             if (errorMessage != nullptr) {
                 *errorMessage = "Failed to read network key from settings";
             }
             return false;
         }
     }
-    if (encryptedBuffer.empty()) {
+    if (keyBlob.empty()) {
         // No key stored yet. Benign -- mirrors the macOS errSecItemNotFound branch:
         // leave errorMessage empty so callers report "(none)", not a read failure.
         return false;
     }
-    if (encryptedBuffer.size() != NetworkKeySize) {
-        sodium_memzero(encryptedBuffer.data(), encryptedBuffer.size());
+    if (keyBlob.size() != NetworkKeySize) {
+        sodium_memzero(keyBlob.data(), keyBlob.size());
         if (errorMessage != nullptr) {
             *errorMessage = "Stored key size was not 32 bytes";
         }
         return false;
     }
-    std::copy(encryptedBuffer.begin(), encryptedBuffer.end(), rootNetworkKey.begin());
-    sodium_memzero(encryptedBuffer.data(), encryptedBuffer.size());
+    std::copy(keyBlob.begin(), keyBlob.end(), rootNetworkKey.begin());
+    sodium_memzero(keyBlob.data(), keyBlob.size());
 #endif
 
     const bool cached = CacheDerivedKeysFromRoot(rootNetworkKey, errorMessage);
