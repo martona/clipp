@@ -10,7 +10,7 @@ Clipp is a free, open source, peer-to-peer clipboard sync utility for Windows, m
 
 I wrote Clipp because I needed this exact thing, and the usual options kept failing one or more basic tests: not open source, cloud-dependent, not free, or folded into a larger kitchen-sink app whose job was no longer just clipboard sync. Clipp tries to stay narrow: discover nearby peers, verify device trust, move clipboard data directly, and otherwise stay out of the way.
 
-Clipp is LAN-first by design. If you want the same workflow across networks, use an overlay such as Tailscale or NostrVPN and let Clipp keep doing the simple peer-to-peer part.
+Clipp is LAN-only by design. If you want the same workflow across networks, use an overlay such as Tailscale or NostrVPN and let Clipp keep doing the simple peer-to-peer part.
 
 ## Screenshots
 
@@ -57,7 +57,7 @@ On-device state is local to the device. The master key is stored through the OS 
 
 A note on passwords on the clipboard: single-line text that does not contain whitespace is assumed to be a password and is masked in the activity stream. This gives you safety from prying eyes, but is not a serious security boundary. Chrome and various password managers set a clipboard marker asking other apps to exclude the item from any kind of clipboard history — local managers and cloud sync alike. Clipp honors that marker and will not sync such items; a placeholder PRIVATE TEXT will appear in the activity stream. You can override this behavior on the settings screen however. All such items will sync from thereon but will always be masked, regardless of heuristics.
 
-Clipp is LAN-first. If you want to use it across networks, put the devices on a trusted VPN or mesh network and keep the Clipp listener off the public internet. The master key is still required, but the intended outer boundary is a private network you control.
+Clipp is LAN-only. If you want to use it across networks, put the devices on a trusted VPN or mesh network and keep the Clipp listener off the public internet. The master key is still required, but the intended outer boundary is a private network you control.
 
 To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
