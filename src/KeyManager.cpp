@@ -509,21 +509,41 @@ bool KeyManager::LoadRootNetworkKey(std::string* errorMessage) {
     if (status != errSecSuccess || outData == nullptr) {
         if (outData != nullptr) CFRelease(outData);
 #if !TARGET_OS_IPHONE
-        // The login keychain is unreachable in this session (e.g. an SSH / headless
-        // login can't open it). Fall back to the running GUI's local, mutually
+        if (status == errSecItemNotFound) {
+            // Keychain reachable, no key stored. Benign: leave errorMessage empty so
+            // callers report "(none)" rather than a read failure, and skip the socket
+            // (the GUI reads the same login keychain). NB: over SSH the keychain is
+            // *unreachable* and returns an access error, not errSecItemNotFound, so
+            // this branch doesn't swallow the SSH case.
+            return false;
+        }
+        // Keychain unreachable in this session (e.g. an SSH / headless login can't
+        // open the login keychain). Fall back to the running GUI's mutually
         // authenticated socket. Guarded by IsKeyVendServerActive() so the GUI
         // process -- which serves that socket -- never dials itself.
+        std::string socketError;
         if (!clipp::macos::IsKeyVendServerActive()) {
-            std::string socketError;
             if (clipp::macos::RequestNetworkKeyOverSocket(rootNetworkKey, &socketError)) {
                 const bool cachedFromSocket = CacheDerivedKeysFromRoot(rootNetworkKey, errorMessage);
                 sodium_memzero(rootNetworkKey.data(), rootNetworkKey.size());
                 return cachedFromSocket;
             }
         }
-#endif
+        g_logger.log(__FUNCTION__, Logger::Level::Debug,
+                     "Network key unreadable: keychain OSStatus=%d; socket fallback: %s",
+                     static_cast<int>(status),
+                     socketError.empty() ? "(not attempted)" : socketError.c_str());
+        if (errorMessage != nullptr) {
+            *errorMessage = "the login keychain is unavailable in this session";
+            if (!socketError.empty()) {
+                *errorMessage += "; " + socketError;
+            }
+        }
+        return false;
+#else
         if (errorMessage != nullptr) *errorMessage = FormatSecurityError("Failed to read network key from keychain", status);
         return false;
+#endif
     }
 
     CFDataRef plainData = static_cast<CFDataRef>(outData);

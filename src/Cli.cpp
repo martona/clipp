@@ -224,10 +224,24 @@ int RunKeyErase() {
 
 int RunKeyShow() {
     const std::string networkName = g_settings.networkName();
-    const std::wstring fingerprint = g_keyManager.GetNetworkFingerprintHash(nullptr);
-
     OutLine(L"name: " + ToWide(networkName));
-    OutLine(L"fingerprint: " + (fingerprint.empty() ? std::wstring(L"(none)") : fingerprint));
+
+    std::string errorMessage;
+    const std::wstring fingerprint = g_keyManager.GetNetworkFingerprintHash(nullptr, &errorMessage);
+    if (!fingerprint.empty()) {
+        OutLine(L"fingerprint: " + fingerprint);
+        return 0;
+    }
+
+    OutLine(L"fingerprint: (none)");
+    if (!errorMessage.empty()) {
+        // Empty fingerprint *with* a reason means a key may well exist but couldn't
+        // be read (keychain unavailable over SSH and the app isn't running to vend
+        // it). Surface it loudly rather than implying there's no key. An empty
+        // reason is the benign "no key configured" case -> exit 0.
+        ErrLine(L"could not read the network key: " + ToWide(errorMessage));
+        return 1;
+    }
     return 0;
 }
 

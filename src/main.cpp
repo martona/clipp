@@ -325,8 +325,10 @@ int main(int argc, char* argv[]) {
     const bool haveNetworkKey = !networkFingerprint.empty();
     if (haveNetworkKey) {
         g_logger.log(__FUNCTION__, Logger::Level::Info, L"Network fingerprint: %ls", networkFingerprint.c_str());
+    } else if (keyErrorMessage.empty()) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, "No network key configured yet.");
     } else {
-        g_logger.log(__FUNCTION__, Logger::Level::Warning, "No network key configured yet: %s", keyErrorMessage.c_str());
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, "Network key unavailable: %s", keyErrorMessage.c_str());
     }
 
     if (!StartClipboardNotification(OnClipboardNotification)) {
