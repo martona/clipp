@@ -76,6 +76,16 @@ bool StdHandleIsConsole(DWORD stdHandleId) {
 }
 #endif
 
+// stderr gets a built-in red on an interactive terminal — signed builds block
+// DYLD-injection tools like stderred, so we color our own stderr. Plain on a pipe/file.
+bool StderrIsTty() {
+#ifdef _WIN32
+    return StdHandleIsConsole(STD_ERROR_HANDLE);
+#else
+    return isatty(STDERR_FILENO) != 0;
+#endif
+}
+
 void OutLine(const std::wstring& line) {
 #ifdef _WIN32
     if (StdHandleIsConsole(STD_OUTPUT_HANDLE)) {
@@ -89,14 +99,18 @@ void OutLine(const std::wstring& line) {
 void ErrLine(const std::wstring& line) {
 #ifdef _WIN32
     if (StdHandleIsConsole(STD_ERROR_HANDLE)) {
-        std::wcerr << line << L'\n';
+        std::wcerr << L"\x1b[0;31m" << line << L"\x1b[0m\n";
         return;
     }
 #endif
-    std::cerr << clipp_platform_detail::Utf16ToUtf8String(line) << '\n';
+    const std::string utf8 = clipp_platform_detail::Utf16ToUtf8String(line);
+    if (StderrIsTty()) std::cerr << "\x1b[0;31m" << utf8 << "\x1b[0m\n";
+    else               std::cerr << utf8 << '\n';
 }
 
 void WritePrompt(const std::wstring& prompt) {
+    // Prompts stay default-colored — they're stderr, but a red prompt reads like an
+    // error. Only diagnostics/verbose (ErrLine) and the logger get the stderr red.
 #ifdef _WIN32
     if (StdHandleIsConsole(STD_ERROR_HANDLE)) {
         std::wcerr << prompt;
