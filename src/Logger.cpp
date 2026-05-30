@@ -136,7 +136,25 @@ void Logger::writeLine(const wchar_t* function, Level level, const wchar_t* mess
         recentLogLines_.pop_front();
     }
 
+#ifdef _WIN32
+    // On a console, write wide (renders the ANSI colors above). On a redirected
+    // file/pipe, write clean UTF-8 without the color codes -- MSVC wide streams do
+    // not reliably write to non-console targets, so a redirected log would
+    // otherwise vanish entirely.
+    {
+        const HANDLE hErr = GetStdHandle(STD_ERROR_HANDLE);
+        const bool stderrIsConsole =
+            hErr && hErr != INVALID_HANDLE_VALUE && GetFileType(hErr) == FILE_TYPE_CHAR;
+        if (stderrIsConsole) {
+            std::wcerr << wstr;
+        } else {
+            const std::wstring plain = tsStr + L" [" + lvlStr + L"] [" + fnStr + L"] " + msgStr + L"\n";
+            std::cerr << clipp_platform_detail::Utf16ToUtf8String(plain);
+        }
+    }
+#else
     std::wcerr << wstr;
+#endif
 #if defined(__APPLE__) && (TARGET_OS_IPHONE || TARGET_OS_SIMULATOR)
     const std::wstring debugStr = tsStr + L" [" + lvlStr + L"] [" + fnStr + L"] " + msgStr + L"\n";
     const std::string debugUtf8 = WideToUtf8(debugStr);

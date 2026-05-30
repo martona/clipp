@@ -46,37 +46,54 @@ namespace {
 // --- Output helpers ----------------------------------------------------------
 // stdout carries command data/answers; stderr carries prompts and command-level
 // errors. Diagnostic logs are a separate (gated) stderr stream via g_logger.
-// On Windows we emit wide text to the console attached in InitializeConsoleOutput;
-// on POSIX we emit raw UTF-8 bytes (locale-independent, and redirection-clean).
+// On a console we emit wide text (Windows renders it directly via the console
+// API); when the stream is a redirected file or pipe we emit raw UTF-8 bytes --
+// locale-independent and redirection-clean (and what binary `paste` will build on).
 
 std::wstring ToWide(const std::string& utf8) {
     return clipp_platform_detail::Utf8ToUtf16String(utf8);
 }
 
+#ifdef _WIN32
+bool StdHandleIsConsole(DWORD stdHandleId) {
+    HANDLE handle = GetStdHandle(stdHandleId);
+    if (handle == nullptr || handle == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    return GetFileType(handle) == FILE_TYPE_CHAR;  // console (or other char device)
+}
+#endif
+
 void OutLine(const std::wstring& line) {
 #ifdef _WIN32
-    std::wcout << line << L'\n';
-#else
-    std::cout << clipp_platform_detail::Utf16ToUtf8String(line) << '\n';
+    if (StdHandleIsConsole(STD_OUTPUT_HANDLE)) {
+        std::wcout << line << L'\n';
+        return;
+    }
 #endif
+    std::cout << clipp_platform_detail::Utf16ToUtf8String(line) << '\n';
 }
 
 void ErrLine(const std::wstring& line) {
 #ifdef _WIN32
-    std::wcerr << line << L'\n';
-#else
-    std::cerr << clipp_platform_detail::Utf16ToUtf8String(line) << '\n';
+    if (StdHandleIsConsole(STD_ERROR_HANDLE)) {
+        std::wcerr << line << L'\n';
+        return;
+    }
 #endif
+    std::cerr << clipp_platform_detail::Utf16ToUtf8String(line) << '\n';
 }
 
 void WritePrompt(const std::wstring& prompt) {
 #ifdef _WIN32
-    std::wcerr << prompt;
-    std::wcerr.flush();
-#else
+    if (StdHandleIsConsole(STD_ERROR_HANDLE)) {
+        std::wcerr << prompt;
+        std::wcerr.flush();
+        return;
+    }
+#endif
     std::cerr << clipp_platform_detail::Utf16ToUtf8String(prompt);
     std::cerr.flush();
-#endif
 }
 
 // --- Interactive input -------------------------------------------------------

@@ -43,10 +43,30 @@ int wmain(int argc, wchar_t* argv[]) {
     // 4. Pass along the exact command line arguments the user typed
     wchar_t* cmdLine = GetCommandLineW();
 
-    // 5. Launch the actual GUI application
+    // 5. Launch the actual GUI application.
+    //    Forward our standard handles to the child so shell redirection and pipes
+    //    (clipp paste > file, echo x | clipp copy) actually reach it. The child is
+    //    a GUI-subsystem binary with no console of its own; without this it falls
+    //    back to attaching our console and loses any redirection. STARTF_USESTDHANDLES
+    //    requires the handles to be inheritable and bInheritHandles = TRUE.
     STARTUPINFOW si;
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);
+
+    HANDLE stdHandles[3] = {
+        GetStdHandle(STD_INPUT_HANDLE),
+        GetStdHandle(STD_OUTPUT_HANDLE),
+        GetStdHandle(STD_ERROR_HANDLE),
+    };
+    for (HANDLE h : stdHandles) {
+        if (h && h != INVALID_HANDLE_VALUE) {
+            SetHandleInformation(h, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+        }
+    }
+    si.dwFlags |= STARTF_USESTDHANDLES;
+    si.hStdInput = stdHandles[0];
+    si.hStdOutput = stdHandles[1];
+    si.hStdError = stdHandles[2];
 
     PROCESS_INFORMATION pi;
     ZeroMemory(&pi, sizeof(pi));
@@ -56,7 +76,7 @@ int wmain(int argc, wchar_t* argv[]) {
         cmdLine,
         NULL,
         NULL,
-        FALSE,
+        TRUE,   // bInheritHandles: required for the STARTF_USESTDHANDLES forwarding above
         0,
         NULL,
         NULL,

@@ -120,41 +120,90 @@ bool UnregisterClippAutoStart() {
 
 bool InitializeConsoleOutput() {
     #ifdef _WIN32
-    // Attempt to attach to the console of the process that launched this app (e.g., cmd.exe or pwsh.exe).
-    // If launched from Explorer (double-click), there is no parent console, and this fails.
-    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+    // A GUI-subsystem child receives a real handle ONLY for the std streams the
+    // shell actually redirected (a file or pipe); non-redirected (console) streams
+    // arrive as NULL. So decide per stream: bind each forwarded handle to its CRT
+    // fd, and attach the parent console only to service the NULL ones -- never
+    // reopening CONOUT$/CONIN$ over a forwarded handle (that is what previously
+    // clobbered `2>` and stdin pipes, since the old check keyed off stdout alone).
+    struct StdStream {
+        DWORD stdId;
+        FILE* file;
+        const char* consoleName;
+        const char* consoleMode;
+        int osfFlags;
+        HANDLE forwarded;
+    };
+    StdStream streams[] = {
+        { STD_INPUT_HANDLE,  stdin,  "CONIN$",  "r", _O_RDONLY | _O_TEXT, nullptr },
+        { STD_OUTPUT_HANDLE, stdout, "CONOUT$", "w", _O_TEXT,             nullptr },
+        { STD_ERROR_HANDLE,  stderr, "CONOUT$", "w", _O_TEXT,             nullptr },
+    };
 
-        // The console is attached, but C/C++ standard streams still point to the void. 
-        // We must map them directly to the console output buffer.
-        FILE* fp;
-        freopen_s(&fp, "CONOUT$", "w", stdout);
-        freopen_s(&fp, "CONOUT$", "w", stderr);
-
-        // Clear the state of C++ streams and sync them to the newly mapped C streams
-        std::wcout.clear();
-        std::cout.clear();
-        std::wcerr.clear();
-        std::cerr.clear();
-        std::ios::sync_with_stdio(true);
-
-        freopen_s(&fp, "CONIN$", "r", stdin);
-        std::wcin.clear();
-        std::cin.clear();
-
-        // Enable ANSI color escape codes for this attached terminal
-        HANDLE hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
-        DWORD mode;
-        if (GetConsoleMode(hStdout, &mode)) {
-            SetConsoleMode(hStdout, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING); 
+    bool anyForwarded = false;
+    bool anyNeedsConsole = false;
+    for (StdStream& s : streams) {
+        HANDLE h = GetStdHandle(s.stdId);
+        const DWORD type = (h && h != INVALID_HANDLE_VALUE) ? GetFileType(h) : FILE_TYPE_UNKNOWN;
+        if (type == FILE_TYPE_DISK || type == FILE_TYPE_PIPE || type == FILE_TYPE_CHAR) {
+            s.forwarded = h;
+            anyForwarded = true;
+        } else {
+            anyNeedsConsole = true;
         }
-
-        // Output a blank line to ensure the prompt cursor is pushed down cleanly
-        std::cout << std::endl;
-        return true;
     }
-    return false;
+
+    bool haveConsole = false;
+    if (anyNeedsConsole) {
+        // Attach the launching console to service the NULL streams. No parent
+        // console + nothing forwarded == a pure GUI launch, so stay silent.
+        haveConsole = (AttachConsole(ATTACH_PARENT_PROCESS) != 0);
+        if (!haveConsole && !anyForwarded) {
+            return false;
+        }
+    }
+
+    FILE* fp = nullptr;
+    for (const StdStream& s : streams) {
+        if (s.forwarded != nullptr) {
+            // Bind the CRT fd to the forwarded handle. The CRT does not reliably do
+            // this for a /SUBSYSTEM:windows binary, so std::cin/cout/cerr (and the
+            // logger) would otherwise ignore the redirection.
+            const int tmpFd = _open_osfhandle(reinterpret_cast<intptr_t>(s.forwarded), s.osfFlags);
+            if (tmpFd != -1) {
+                _dup2(tmpFd, _fileno(s.file));
+                // tmpFd intentionally left open: closing it closes the underlying
+                // handle, which GetStdHandle()/GetFileType() still report on for
+                // console detection below. Reclaimed at process exit.
+            }
+        } else if (haveConsole) {
+            freopen_s(&fp, s.consoleName, s.consoleMode, s.file);
+        }
+    }
+
+    // Clear C++ stream state and sync to the C streams.
+    std::wcout.clear();
+    std::cout.clear();
+    std::wcerr.clear();
+    std::cerr.clear();
+    std::wcin.clear();
+    std::cin.clear();
+    std::ios::sync_with_stdio(true);
+
+    // ANSI color escapes (the logger colors stderr; future stdout may too) need VT
+    // processing on the console screen buffer. Enable it on whichever of stdout /
+    // stderr is actually a console.
+    const DWORD consoleStreamIds[] = { STD_OUTPUT_HANDLE, STD_ERROR_HANDLE };
+    for (DWORD streamId : consoleStreamIds) {
+        HANDLE h = GetStdHandle(streamId);
+        DWORD mode;
+        if (h && h != INVALID_HANDLE_VALUE && GetFileType(h) == FILE_TYPE_CHAR && GetConsoleMode(h, &mode)) {
+            SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+        }
+    }
+    return (anyForwarded || haveConsole);
 #else
-    // On macOS, if the app is launched from LaunchServices (Finder/Dock), stdout is redirected 
+    // On macOS, if the app is launched from LaunchServices (Finder/Dock), stdout is redirected
     // to /dev/null or the system log. If launched from a terminal, stdout is an active TTY.
     return isatty(STDOUT_FILENO) != 0;
 #endif
