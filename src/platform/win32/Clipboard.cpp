@@ -746,6 +746,84 @@ done:
     return readable >= bytes;
 }
 
+// Decode a single little-endian uint32 (DWORD) out of a registered clipboard format.
+// Returns true and sets *outValue only when the format is present AND backed by at
+// least a readable DWORD; returns false (without touching *outValue) otherwise.
+//
+// Several Windows clipboard formats carry exactly this: a serialized DWORD. Per the
+// MS contract (and confirmed in Chromium's clipboard_win.cc), "CanIncludeInClipboard-
+// History" and "CanUploadToCloudClipboard" hold 0 = opt OUT, 1 = opt IN. Chrome only
+// ever writes 0 (to flag password fields); RDP redirection writes them indiscriminately.
+//
+// The clipboard must already be open (GetClipboardData requires it). The backing
+// HGLOBAL belongs to the clipboard owner -- often another process -- so we VirtualQuery
+// the 4-byte span before dereferencing, exactly like the image read paths.
+static bool TryReadClipboardUint32(UINT format, uint32_t* outValue) {
+    if (format == 0 || outValue == nullptr) {
+        return false;
+    }
+    if (!IsClipboardFormatAvailable(format)) {
+        return false;
+    }
+
+    HANDLE hData = GetClipboardData(format);
+    if (hData == nullptr) {
+        LogLastError(__FUNCTION__, L"Failed to retrieve clipboard data for uint32 decode");
+        return false;
+    }
+
+    const void* raw = GlobalLock(hData);
+    if (raw == nullptr) {
+        LogLastError(__FUNCTION__, L"Failed to lock clipboard data for uint32 decode");
+        return false;
+    }
+
+    bool ok = false;
+    const SIZE_T dataSize = GlobalSize(hData);
+    size_t readable = 0;
+    if (dataSize >= sizeof(uint32_t) && ClipboardSpanIsReadable(raw, sizeof(uint32_t), &readable)) {
+        uint32_t value = 0;
+        std::memcpy(&value, raw, sizeof(value)); // little-endian DWORD on Windows/x86-64
+        *outValue = value;
+        ok = true;
+    }
+    else {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning,
+            L"Clipboard format %u present but not a readable DWORD (declared=%zu bytes, readable=%zu)",
+            format, static_cast<size_t>(dataSize), readable);
+    }
+
+    GlobalUnlock(hData);
+    return ok;
+}
+
+// Diagnostic: decode and log the Windows privacy-hint DWORDs so we can see what a
+// source actually wrote vs. merely that the format is present. This is the data that
+// distinguishes a genuine "exclude me" (value 0, e.g. Chrome password fields) from
+// RDP's indiscriminate stamping. DDebug to stay out of normal logs (bump to Debug if
+// you want it alongside the "Source app marked clipboard content as private" line).
+// Clipboard must already be open.
+static void LogClipboardPrivacyHints(const char* function) {
+    struct { const wchar_t* name; UINT format; } hints[] = {
+        { L"CanIncludeInClipboardHistory", CanIncludeInClipboardHistoryFormat() },
+        { L"CanUploadToCloudClipboard",    CanUploadToCloudClipboardFormat() },
+    };
+    for (const auto& hint : hints) {
+        if (hint.format == 0 || !IsClipboardFormatAvailable(hint.format)) {
+            continue;
+        }
+        uint32_t value = 0;
+        if (TryReadClipboardUint32(hint.format, &value)) {
+            g_logger.log(function, Logger::Level::DDebug,
+                L"Privacy hint \"%ls\" present: value=%u (0=opt-out, 1=opt-in)", hint.name, value);
+        }
+        else {
+            g_logger.log(function, Logger::Level::DDebug,
+                L"Privacy hint \"%ls\" present but value could not be decoded as a DWORD", hint.name);
+        }
+    }
+}
+
 enum class DibDecodeResult { Ok, Faulted, InvalidData };
 
 struct DibPixelDecode {
@@ -1402,6 +1480,7 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
                 break;
             }
 
+            LogClipboardPrivacyHints(__FUNCTION__);
             sourceMarkedPrivate = ClipboardSourceMarkedPrivate();
             if (sourceMarkedPrivate) {
                 g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Source app marked clipboard content as private (CanIncludeInClipboardHistory + CanUploadToCloudClipboard both present).");

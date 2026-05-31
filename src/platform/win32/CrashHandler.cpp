@@ -2,7 +2,7 @@
 
 #ifdef _WIN32
 
-#include <windows.h>
+#include "platform.h"
 #include <dbghelp.h>
 #include <shlobj.h>
 
@@ -16,7 +16,6 @@
 #include <string>
 
 #include "Logger.h"
-#include "platform.h"  // clipp_platform_detail::Utf16ToUtf8String
 
 #pragma comment(lib, "dbghelp.lib")
 #pragma comment(lib, "shell32.lib")
