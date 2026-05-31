@@ -91,7 +91,7 @@ jobs:
             "$app/Contents/MacOS/clipp" \
             "$app/Contents/Resources/Clipp.icns" \
             "$app/Contents/Resources/ClippMenuBarTemplate.png" \
-            "$app/Contents/Resources/Clipboard4DevAspect-macos-1024-transparent.png" \
+            "$app/Contents/Resources/ClippAbout.png" \
             "$app/Contents/Info.plist"
           do
             if [[ ! -e "$path" ]]; then

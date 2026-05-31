@@ -343,7 +343,7 @@ jobs:
             "$app/Contents/MacOS/clipp" \
             "$app/Contents/Resources/Clipp.icns" \
             "$app/Contents/Resources/ClippMenuBarTemplate.png" \
-            "$app/Contents/Resources/Clipboard4DevAspect-macos-1024-transparent.png" \
+            "$app/Contents/Resources/ClippAbout.png" \
             "$app/Contents/Info.plist"
           do
             if [[ ! -e "$path" ]]; then
@@ -531,6 +531,26 @@ jobs:
           cp "$pkg" "release-stage/clipp-linux-$arch.pkg.tar.zst"
           # Also ship the raw binary for users who just want it on PATH themselves.
           cp build/linux-release/clipp "release-stage/clipp-linux-$arch"
+
+          # Debug-symbol sidecar (objcopy split, see CMakeLists), the Linux analogue of
+          # the Windows -symbols.zip: VERSIONED (build-tied, not a stable-link asset) so
+          # field crashes can be symbolicated. The shipped binary embeds a
+          # .gnu_debuglink to it.
+          ver="${{ inputs.version }}"
+          dbg="build/linux-release/clipp.debug"
+          if [[ ! -f "$dbg" ]]; then
+            echo "Expected debug sidecar not found: $dbg" >&2
+            exit 1
+          fi
+          # Sanity: the shipped binary must actually be stripped (no .symtab) and carry
+          # the debuglink, or the split silently didn't happen.
+          if readelf -S build/linux-release/clipp | grep -q '\.symtab'; then
+            echo "Shipped binary still has a .symtab — strip did not take." >&2
+            exit 1
+          fi
+          readelf -S build/linux-release/clipp | grep -q 'gnu_debuglink' || {
+            echo "Shipped binary missing .gnu_debuglink to clipp.debug." >&2; exit 1; }
+          cp "$dbg" "release-stage/clipp-$ver-linux-$arch-symbols.debug"
           ls -la release-stage/
 
       - name: Upload artifacts

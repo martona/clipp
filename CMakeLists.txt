@@ -111,8 +111,15 @@ if (MSVC AND WIN32)
     # Tell the linker to emit a PDB for non-Debug configs. Debug already
     # implies /DEBUG via CMAKE_*_LINKER_FLAGS_DEBUG; Release/RelWithDebInfo/
     # MinSizeRel do not, so /Z7 alone would just bloat .obj files without
-    # producing a usable .pdb. Combine with /OPT:REF /OPT:ICF (already in the
-    # CMake defaults for Release link) so the binary stays optimized.
+    # producing a usable .pdb.
+    #
+    # CRITICAL: /DEBUG flips the /OPT default from REF,ICF to NOREF,NOICF — the
+    # linker assumes a debug build wants every symbol kept for inspection. CMake's
+    # Release default only gets dead-code elimination + COMDAT folding because it
+    # ships /INCREMENTAL:NO *without* /DEBUG; appending /DEBUG here silently turns
+    # that off and retains all unreferenced code (libsodium/zstd/STL/WinRT bloat
+    # the binary by ~1MB+). So /OPT:REF /OPT:ICF must be re-asserted EXPLICITLY
+    # alongside /DEBUG. The PDB still symbolicates whatever survives stripping.
     foreach(linker_flag_var
             CMAKE_EXE_LINKER_FLAGS_RELEASE
             CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO
@@ -121,7 +128,7 @@ if (MSVC AND WIN32)
             CMAKE_SHARED_LINKER_FLAGS_RELWITHDEBINFO
             CMAKE_SHARED_LINKER_FLAGS_MINSIZEREL)
         if(DEFINED ${linker_flag_var} AND NOT "${${linker_flag_var}}" MATCHES "/DEBUG")
-            string(APPEND ${linker_flag_var} " /DEBUG")
+            string(APPEND ${linker_flag_var} " /DEBUG /OPT:REF /OPT:ICF")
             set(${linker_flag_var} "${${linker_flag_var}}" CACHE STRING "" FORCE)
         endif()
     endforeach()
@@ -229,6 +236,10 @@ if (WIN32)
     if (MSVC)
         target_link_options(clipp-win32 PRIVATE
             "/ENTRY:mainCRTStartup"
+            # Emit a link map for binary-size attribution (which objects/libs land in
+            # .text, what got folded by /OPT:ICF, what COMDATs survived). Free to
+            # produce, lands next to the exe as clipp.map; not shipped in the release.
+            "/MAP"
         )
     endif()
 
@@ -267,7 +278,24 @@ elseif (APPLE)
     list(APPEND CLIPP_MACOS_PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/MDNSDiscovery_Apple.mm")
     set(CLIPP_MACOS_APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/src/resources/Clipp.icns")
     set(CLIPP_MACOS_MENU_BAR_ICON "${CMAKE_CURRENT_SOURCE_DIR}/src/resources/ClippMenuBarTemplate.png")
-    set(CLIPP_MACOS_ABOUT_IMAGE "${CMAKE_CURRENT_SOURCE_DIR}/src/resources/Clipboard4DevAspect-macos-1024-transparent.png")
+
+    # About-box artwork: the master is a 1024x1024 transparent PNG (~720KB) -- too big
+    # to ship when the About box renders it at ~112px. The app icon (Clipp.icns) is the
+    # wrong substitute (it's the opaque rounded-tile, no transparency). So generate a
+    # small TRANSPARENT 256px derivative at build time with sips (preinstalled on macOS)
+    # and bundle that. No generated binary is committed, and it can't drift from the
+    # master. ~720KB -> ~56KB in the .app.
+    set(CLIPP_MACOS_ABOUT_MASTER "${CMAKE_CURRENT_SOURCE_DIR}/src/resources/Clipboard4DevAspect-macos-1024-transparent.png")
+    set(CLIPP_MACOS_ABOUT_IMAGE "${CMAKE_CURRENT_BINARY_DIR}/generated/ClippAbout.png")
+    add_custom_command(
+        OUTPUT "${CLIPP_MACOS_ABOUT_IMAGE}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
+        COMMAND sips -s format png -z 256 256 "${CLIPP_MACOS_ABOUT_MASTER}" --out "${CLIPP_MACOS_ABOUT_IMAGE}"
+        DEPENDS "${CLIPP_MACOS_ABOUT_MASTER}"
+        COMMENT "Generating 256px About artwork from master PNG (sips)"
+        VERBATIM
+    )
+
     set_source_files_properties(
         "${CLIPP_MACOS_APP_ICON}"
         "${CLIPP_MACOS_MENU_BAR_ICON}"
@@ -405,6 +433,43 @@ elseif (UNIX AND NOT APPLE)
     # Settings default-name and LocalPeerName paths rely on. GCC/Clang only.
     if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         target_link_options(clipp-linux PRIVATE -static-libstdc++ -static-libgcc)
+
+        # Dead-code elimination, the GNU analogue of Windows' /OPT:REF. CMake's Release
+        # sets -O2/-O3 -DNDEBUG but does NOT dead-strip, and GNU ld (unlike macOS ld64)
+        # keeps everything by default. -ffunction-sections/-fdata-sections + --gc-sections
+        # drop unreferenced functions/data. (NOTE: the prebuilt libstdc++.a is not itself
+        # function-sectioned, so gc-sections can only drop whole unreferenced object
+        # members from it, not individual dead functions -- this is why the headless
+        # Linux binary doesn't shrink as much as you'd expect vs the GUI builds.)
+        target_compile_options(clipp-linux PRIVATE -ffunction-sections -fdata-sections)
+        target_link_options(clipp-linux PRIVATE -Wl,--gc-sections)
+
+        # Release: ship a SMALL stripped binary + a separate full-symbol sidecar
+        # (clipp.debug), mirroring the Windows exe/PDB split. CMake's Release omits -g,
+        # so we add it to generate DWARF, then objcopy splits it out: the .debug sections
+        # only ever live in the sidecar, so the shipped binary stays fully stripped while
+        # crash backtraces remain symbolicatable from clipp.debug (gdb/addr2line find it
+        # via the embedded .gnu_debuglink). Debug builds are left untouched -- symbols
+        # stay in the binary for direct gdb, the idiomatic Linux dev flow.
+        if (CMAKE_BUILD_TYPE STREQUAL "Release")
+            target_compile_options(clipp-linux PRIVATE -g)
+            find_program(CLIPP_OBJCOPY NAMES objcopy llvm-objcopy)
+            if (CLIPP_OBJCOPY)
+                add_custom_command(TARGET clipp-linux POST_BUILD
+                    COMMAND "${CLIPP_OBJCOPY}" --only-keep-debug
+                            "$<TARGET_FILE:clipp-linux>" "$<TARGET_FILE:clipp-linux>.debug"
+                    COMMAND "${CLIPP_OBJCOPY}" --strip-all "$<TARGET_FILE:clipp-linux>"
+                    COMMAND "${CLIPP_OBJCOPY}" --add-gnu-debuglink=clipp.debug
+                            "$<TARGET_FILE:clipp-linux>"
+                    WORKING_DIRECTORY "$<TARGET_FILE_DIR:clipp-linux>"
+                    COMMENT "Splitting debug symbols -> clipp.debug, stripping clipp"
+                    VERBATIM
+                )
+            else()
+                message(WARNING
+                    "objcopy not found: clipp-linux will ship UNSTRIPPED with no debug sidecar.")
+            endif()
+        endif()
     endif()
     # Let the binary land at the root of the build tree ($BUILD_DIR/clipp). We
     # deliberately do NOT pin RUNTIME_OUTPUT_DIRECTORY into the source tree the way

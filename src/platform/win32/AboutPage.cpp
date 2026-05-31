@@ -14,9 +14,9 @@
 #define NOMINMAX
 #endif
 #include <Windows.h>
-#include <shcore.h>        // CreateStreamOverRandomAccessStream — see comment in
-                           // LoadResourceStream below for why we route through a
-                           // COM IStream instead of DataWriter.
+#include <wincodec.h>      // WIC: decode the app .ico into 32bpp BGRA pixels.
+#include <wrl/client.h>    // Microsoft::WRL::ComPtr (matches Clipboard.cpp's WIC usage).
+#include <robuffer.h>      // IBufferByteAccess — raw write into the WriteableBitmap buffer.
 #ifdef GetCurrentTime
 #undef GetCurrentTime
 #endif
@@ -36,41 +36,75 @@
 #include <winrt/base.h>
 
 namespace {
-winrt::Windows::Storage::Streams::IRandomAccessStream LoadResourceStream(int resourceId)
+// Loads the application icon (IDI_CLIPP_ICON, already embedded for the window/tray)
+// at the given square size and decodes it into a XAML WriteableBitmap, alpha intact.
+//
+// Why not just SetSource() a stream like ClippPage's image path? That path decodes a
+// compressed PNG/JPEG byte stream; an .ico is a GDI icon resource, not such a stream.
+// So we go HICON -> WIC (CreateBitmapFromHICON merges the icon's color + AND-mask into
+// straight 32bpp BGRA) -> premultiplied BGRA -> raw pixels copied into a
+// WriteableBitmap. This lets us drop the separate ~720KB About PNG and reuse the icon
+// the binary already ships. Returns nullptr on any failure (caller leaves the image
+// blank).
+winrt::Windows::UI::Xaml::Media::Imaging::WriteableBitmap LoadAppIconBitmap(int pixelSize)
 {
-    using namespace winrt::Windows::Storage::Streams;
+    using namespace winrt::Windows::UI::Xaml::Media::Imaging;
+    using Microsoft::WRL::ComPtr;
 
     HINSTANCE const instance = GetModuleHandleW(nullptr);
-    HRSRC const resource = FindResourceW(instance, MAKEINTRESOURCEW(resourceId), RT_RCDATA);
-    if (!resource) {
+    // LR_DEFAULTSIZE off + explicit size => WIC/User picks the best-fit frame from the
+    // multi-resolution .ico (it has a 256px frame) and scales to pixelSize.
+    HICON const icon = static_cast<HICON>(LoadImageW(
+        instance, MAKEINTRESOURCEW(IDI_CLIPP_ICON), IMAGE_ICON, pixelSize, pixelSize, LR_DEFAULTCOLOR));
+    if (!icon) {
         return nullptr;
     }
 
-    DWORD const resourceSize = SizeofResource(instance, resource);
-    HGLOBAL const resourceData = LoadResource(instance, resource);
-    if (!resourceData) {
+    WriteableBitmap result{ nullptr };
+    try {
+        ComPtr<IWICImagingFactory> factory;
+        winrt::check_hresult(CoCreateInstance(
+            CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory)));
+
+        ComPtr<IWICBitmap> wicBitmap;
+        // Pulls in the color bitmap AND the transparency mask, producing 32bpp BGRA.
+        winrt::check_hresult(factory->CreateBitmapFromHICON(icon, &wicBitmap));
+
+        // XAML WriteableBitmap expects premultiplied BGRA (PBGRA); convert to be safe.
+        ComPtr<IWICFormatConverter> converter;
+        winrt::check_hresult(factory->CreateFormatConverter(&converter));
+        winrt::check_hresult(converter->Initialize(
+            wicBitmap.Get(), GUID_WICPixelFormat32bppPBGRA,
+            WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom));
+
+        UINT w = 0, h = 0;
+        winrt::check_hresult(wicBitmap->GetSize(&w, &h));
+        if (w == 0 || h == 0) {
+            DestroyIcon(icon);
+            return nullptr;
+        }
+
+        result = WriteableBitmap(static_cast<int32_t>(w), static_cast<int32_t>(h));
+        winrt::Windows::Storage::Streams::IBuffer pixelBuffer = result.PixelBuffer();
+
+        // Reach the raw bytes behind the IBuffer via IBufferByteAccess (the documented
+        // way to fill a WriteableBitmap from native code).
+        ComPtr<Windows::Storage::Streams::IBufferByteAccess> byteAccess;
+        winrt::check_hresult(reinterpret_cast<::IUnknown*>(winrt::get_abi(pixelBuffer))
+            ->QueryInterface(IID_PPV_ARGS(&byteAccess)));
+        BYTE* dest = nullptr;
+        winrt::check_hresult(byteAccess->Buffer(&dest));
+
+        const UINT stride = w * 4;
+        const UINT sizeBytes = stride * h;
+        winrt::check_hresult(converter->CopyPixels(nullptr, stride, sizeBytes, dest));
+    } catch (const winrt::hresult_error&) {
+        DestroyIcon(icon);
         return nullptr;
     }
 
-    auto const* bytes = static_cast<const std::uint8_t*>(LockResource(resourceData));
-    if (!bytes || resourceSize == 0) {
-        return nullptr;
-    }
-
-    // Synchronous COM IStream write — see BitmapFromImageBytes in ClippPage.cpp
-    // for the longer rationale. tl;dr: DataWriter::StoreAsync().get() trips a
-    // debug-only STA-blocking-wait assert; IStream::Write avoids the async
-    // wrapper entirely while staying just as fast (it's the same underlying
-    // in-memory buffer, written through a thin COM adapter).
-    InMemoryRandomAccessStream stream;
-    winrt::com_ptr<IStream> rawStream;
-    winrt::check_hresult(::CreateStreamOverRandomAccessStream(
-        winrt::get_unknown(stream), IID_PPV_ARGS(rawStream.put())));
-    ULONG written = 0;
-    winrt::check_hresult(rawStream->Write(
-        bytes, static_cast<ULONG>(resourceSize), &written));
-    stream.Seek(0);
-    return stream;
+    DestroyIcon(icon);
+    return result;
 }
 
 winrt::Windows::UI::Xaml::Controls::TextBlock CreateTextBlock(
@@ -109,13 +143,11 @@ winrt::Windows::UI::Xaml::Controls::Grid CreateArtworkView()
     artwork.VerticalAlignment(VerticalAlignment::Stretch);
     artwork.Stretch(Stretch::Uniform);
 
-    try {
-        if (auto stream = LoadResourceStream(IDB_CLIPP_ABOUT_IMAGE)) {
-            BitmapImage bitmap;
-            bitmap.SetSource(stream);
-            artwork.Source(bitmap);
-        }
-    } catch (winrt::hresult_error const&) {
+    // Decode the app icon at 256px (the .ico's largest frame) and let Stretch::Uniform
+    // scale it down to the ~112-160px the band renders at — crisp on HiDPI, and no
+    // separate About PNG to embed.
+    if (auto bitmap = LoadAppIconBitmap(256)) {
+        artwork.Source(bitmap);
     }
 
     view.Children().Append(artwork);

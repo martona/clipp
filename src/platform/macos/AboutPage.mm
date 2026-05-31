@@ -83,15 +83,18 @@ NSTextField* MakeRepositoryLink() {
 }
 
 NSImage* LoadAboutArtwork() {
-    NSBundle* bundle = [NSBundle mainBundle];
-    NSString* path = [bundle pathForResource:@"Clipboard4DevAspect-macos-1024-transparent" ofType:@"png"];
+    // ClippAbout.png is a 256px TRANSPARENT derivative of the master art, generated at
+    // build time (see CMakeLists) so we don't ship the full 1024px/~720KB original.
+    // Renders crisply at the 112x112 view on Retina.
+    NSString* path = [[NSBundle mainBundle] pathForResource:@"ClippAbout" ofType:@"png"];
     if (path.length > 0) {
         NSImage* image = [[NSImage alloc] initWithContentsOfFile:path];
         if (image != nil) {
             return image;
         }
     }
-
+    // Fallback: the app icon (opaque tile). Should not happen in a normal bundle, but
+    // keeps the About box populated rather than blank if the asset is missing.
     return [NSImage imageNamed:@"Clipp"];
 }
 

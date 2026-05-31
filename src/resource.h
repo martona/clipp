@@ -3,7 +3,6 @@
 // Used by clipp-win32.rc
 
 #define IDI_CLIPP_ICON                  1
-#define IDB_CLIPP_ABOUT_IMAGE           2
 
 // Next default values for new objects
 // 

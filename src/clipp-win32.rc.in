@@ -52,14 +52,10 @@ END
 
 IDI_CLIPP_ICON          ICON                    "resources\\Clipboard4DevAspect-macos-1024-transparent.ico"
 
-#ifndef CLIPP_RESOURCE_SHIM
-/////////////////////////////////////////////////////////////////////////////
-//
-// Binary resources
-//
-
-IDB_CLIPP_ABOUT_IMAGE   RCDATA                  "resources\\Clipboard4DevAspect-macos-1024-transparent.png"
-#endif
+// The About box renders the app icon (IDI_CLIPP_ICON above) decoded via WIC, so there
+// is no longer a separate ~720KB About PNG embedded here (see win32/AboutPage.cpp,
+// LoadAppIconBitmap). The PNG master is retained in src/resources for the macOS/iOS
+// asset pipelines.
 
 /////////////////////////////////////////////////////////////////////////////
 //

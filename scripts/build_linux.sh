@@ -210,3 +210,8 @@ if [[ ! -x "$BINARY_PATH" ]]; then
 fi
 
 echo "[*] Build complete: $BINARY_PATH"
+# Release builds split debug symbols into a sidecar (see CMakeLists); mention it so a
+# local builder knows the shipped binary is stripped and where the symbols went.
+if [[ "$CONFIG" == "Release" && -f "$BINARY_PATH.debug" ]]; then
+    echo "[*] Debug symbols: $BINARY_PATH.debug (binary is stripped; gdb finds it via .gnu_debuglink)"
+fi
