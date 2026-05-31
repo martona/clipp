@@ -42,6 +42,16 @@
 #define CLP_UI_PRIVATE_PLACEHOLDER_DETAIL "The source app asked Clipp not to sync this clipboard item."
 #define CLP_UI_UNSUPPORTED_CLIPBOARD_ITEM "Unsupported clipboard item"
 
+// Command-line helper banner (macOS GUI). Shown once a network key exists and the
+// `clipp` CLI is not yet on a common PATH location, nudging the user to symlink it.
+// Dismissible permanently. The command itself is built at the use site; on MAS we
+// cannot create the symlink for the user (sandbox), so we only show the command.
+#define CLP_UI_CLI_BANNER_TITLE "Use Clipp from the command line"
+#define CLP_UI_CLI_BANNER_BODY "Run this in Terminal to add the clipp command to your PATH, then use clipp copy and clipp paste in scripts and over SSH."
+#define CLP_UI_CLI_BANNER_COPY "Copy command"
+#define CLP_UI_CLI_BANNER_COPIED "Copied"
+#define CLP_UI_CLI_BANNER_DISMISS "Dismiss"
+
 #define CLP_UI_PEERS "Peers"
 #define CLP_UI_NO_PEERS_HELP "Your devices will appear here when they're on the same network and running Clipp. Make sure they are are using the exact same network name and secret. Both are case-sensitive."
 #define CLP_UI_UNKNOWN_HOST "(unknown host)"

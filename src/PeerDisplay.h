@@ -69,6 +69,11 @@ public:
 	PeerDisplayRegistration QueryAndRegister(Watcher watcher, void* userData = nullptr);
 	void Unregister(std::size_t watcherID);
 
+	// Number of peers we can actually exchange clipboard data with right now: an
+	// established outgoing handshake or a live inbound connection. Used by the macOS
+	// CLI-path banner to confirm the user is genuinely past initial setup.
+	std::size_t ConnectedCount() const;
+
 private:
 	struct PeerDisplayEntry {
 		PeerDisplayItem item;

@@ -7,10 +7,13 @@
 #include "AboutPage.h"
 #include "ClippPage.h"
 #include "NetworkPage.h"
+#include "PeerDisplay.h"
 #include "SettingsPage.h"
 #include "TerminalLogView.h"
 #include "platform/uistrings.h"
 #include "version.h"
+
+#import "CliPathBanner.h"
 
 #import <AppKit/AppKit.h>
 #import <ServiceManagement/ServiceManagement.h>
@@ -29,6 +32,10 @@ constexpr NSInteger kPageNetwork = 1;
 constexpr NSInteger kPageSettings = 2;
 constexpr NSInteger kPageAbout = 3;
 constexpr NSInteger kPageLogs = 4;
+
+// Horizontal inset for the shell-level CLI banner host, so the banner aligns roughly
+// with page content rather than running edge-to-edge against the window border.
+constexpr CGFloat kBannerHostInsetH = 20.0;
 
 void MakePageFlexible(NSView* view) {
     [view setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
@@ -70,6 +77,7 @@ ClipboardPayload MakeTextClipboardPayload(NSString* text) {
 static ClippStatusMenuController* g_statusMenuController = nil;
 static ClippMainWindowController* g_logReflectorTarget = nil;
 extern ClipboardActivityStore g_clipboardActivityStore;
+extern PeerDisplay g_peerDisplay;
 
 static void LogReflectorCallback(const std::wstring& line);
 
@@ -171,6 +179,15 @@ bool UnregisterClippAutoStart() {
     NSButton* copyLogsButton_;
     bool logReflectorRegistered_;
     NSInteger currentPageIndex_;
+    // CLI-path nudge banner: lives in the shell above the swapped page content, so it
+    // shows on every page. bannerHost_ is its zero-or-content-height container;
+    // bannerHostZeroHeight_ collapses that container when no banner is present.
+    // cliBannerTimer_ polls (while the window is visible) so the banner appears once a
+    // peer connects and disappears the moment the user runs the install command.
+    ClippCliPathBanner* cliPathBanner_;
+    NSView* bannerHost_;
+    NSLayoutConstraint* bannerHostZeroHeight_;
+    NSTimer* cliBannerTimer_;
 }
 @property(nonatomic, strong) NSView* contentContainer;
 @property(nonatomic, strong) NSArray<NSButton*>* pageButtons;
@@ -188,6 +205,11 @@ bool UnregisterClippAutoStart() {
 - (void)activateCurrentPage;
 - (void)deactivateCurrentPage;
 - (void)networkKeyChanged;
+- (void)updateCliBanner;
+- (void)removeCliBanner;
+- (void)startCliBannerTimer;
+- (void)stopCliBannerTimer;
+- (void)cliBannerTick;
 @end
 
 @interface ClippStatusMenuController : NSObject <NSApplicationDelegate>
@@ -230,6 +252,8 @@ void RequestMacOSShowMainWindow(bool showNetworkPage) {
         currentPageIndex_ = -1;
         [self buildShell];
         [self selectPage:0];
+        // The CLI banner is driven by a poll timer started in activateCurrentPage
+        // (i.e. when the window is shown), so nothing to do here.
     }
     return self;
 }
@@ -245,12 +269,24 @@ void RequestMacOSShowMainWindow(bool showNetworkPage) {
     sidebar.blendingMode = NSVisualEffectBlendingModeBehindWindow;
     sidebar.state = NSVisualEffectStateActive;
 
+    // Banner host: a full-width strip to the right of the sidebar, above the page
+    // content. The CLI-path nudge banner (when shown) lives here, so it appears on
+    // every page without any page knowing about it. When empty it collapses to zero
+    // height via bannerHostZeroHeight_ and the content reclaims the space.
+    NSView* bannerHost = [[NSView alloc] initWithFrame:NSZeroRect];
+    bannerHost.translatesAutoresizingMaskIntoConstraints = NO;
+    bannerHost_ = bannerHost;
+
     NSView* content = [[NSView alloc] initWithFrame:NSZeroRect];
     content.translatesAutoresizingMaskIntoConstraints = NO;
     self.contentContainer = content;
 
     [root addSubview:sidebar];
+    [root addSubview:bannerHost];
     [root addSubview:content];
+
+    bannerHostZeroHeight_ = [bannerHost.heightAnchor constraintEqualToConstant:0.0];
+    bannerHostZeroHeight_.active = YES;  // start collapsed; updateCliBanner expands it if warranted
 
     [NSLayoutConstraint activateConstraints:@[
         [sidebar.leadingAnchor constraintEqualToAnchor:root.leadingAnchor],
@@ -258,9 +294,15 @@ void RequestMacOSShowMainWindow(bool showNetworkPage) {
         [sidebar.bottomAnchor constraintEqualToAnchor:root.bottomAnchor],
         [sidebar.widthAnchor constraintEqualToConstant:180],
 
+        // Banner host spans the area right of the sidebar, pinned to the top.
+        [bannerHost.leadingAnchor constraintEqualToAnchor:sidebar.trailingAnchor constant:kBannerHostInsetH],
+        [bannerHost.trailingAnchor constraintEqualToAnchor:root.trailingAnchor constant:-kBannerHostInsetH],
+        [bannerHost.topAnchor constraintEqualToAnchor:root.topAnchor],
+
+        // Content fills the rest, below the banner host.
         [content.leadingAnchor constraintEqualToAnchor:sidebar.trailingAnchor],
         [content.trailingAnchor constraintEqualToAnchor:root.trailingAnchor],
-        [content.topAnchor constraintEqualToAnchor:root.topAnchor],
+        [content.topAnchor constraintEqualToAnchor:bannerHost.bottomAnchor],
         [content.bottomAnchor constraintEqualToAnchor:root.bottomAnchor],
     ]];
 
@@ -676,6 +718,8 @@ void RequestMacOSShowMainWindow(bool showNetworkPage) {
     } else if (currentPageIndex_ == kPageLogs) {
         [self beginLogReflection];
     }
+    // Only poll the CLI banner while the window is actually up.
+    [self startCliBannerTimer];
 }
 
 - (void)deactivateCurrentPage {
@@ -686,11 +730,109 @@ void RequestMacOSShowMainWindow(bool showNetworkPage) {
     } else if (currentPageIndex_ == kPageLogs) {
         [self endLogReflection];
     }
+    [self stopCliBannerTimer];
 }
 
 - (void)networkKeyChanged {
     if (clippPage_) {
         clippPage_->OnNetworkKeyChanged();
+    }
+    // The CLI banner no longer keys off network-key state (it's gated on a real peer
+    // connection now), so there's nothing banner-related to do here -- the poll timer
+    // owns its visibility.
+}
+
+- (void)updateCliBanner {
+    if (bannerHost_ == nil) {
+        return;  // shell not built yet
+    }
+    const BOOL shouldShow = [ClippCliPathBanner shouldShow];
+    const BOOL isShowing = cliPathBanner_ != nil;
+    if (shouldShow == isShowing) {
+        return;  // already in the desired state
+    }
+
+    if (shouldShow) {
+        __weak ClippMainWindowController* weakSelf = self;
+        cliPathBanner_ = [[ClippCliPathBanner alloc] initWithDismissHandler:^{
+            // Dismiss is permanent -> resolved, so tear down AND stop polling now
+            // rather than waiting for the next tick to notice.
+            [weakSelf removeCliBanner];
+            [weakSelf stopCliBannerTimer];
+        }];
+        [bannerHost_ addSubview:cliPathBanner_];
+        [NSLayoutConstraint activateConstraints:@[
+            [cliPathBanner_.leadingAnchor constraintEqualToAnchor:bannerHost_.leadingAnchor],
+            [cliPathBanner_.trailingAnchor constraintEqualToAnchor:bannerHost_.trailingAnchor],
+            [cliPathBanner_.topAnchor constraintEqualToAnchor:bannerHost_.topAnchor],
+            [cliPathBanner_.bottomAnchor constraintEqualToAnchor:bannerHost_.bottomAnchor],
+        ]];
+        // Let the host take the banner's intrinsic height instead of collapsing.
+        bannerHostZeroHeight_.active = NO;
+    } else {
+        [self removeCliBanner];
+    }
+}
+
+- (void)removeCliBanner {
+    if (cliPathBanner_ != nil) {
+        [cliPathBanner_ removeFromSuperview];
+        cliPathBanner_ = nil;
+    }
+    // Collapse the host so page content reclaims the space.
+    bannerHostZeroHeight_.active = YES;
+}
+
+- (void)startCliBannerTimer {
+    if (cliBannerTimer_ != nil) {
+        return;
+    }
+    // Nothing left to watch once the banner is resolved (installed or dismissed), so
+    // don't even arm the timer -- this is the steady state for an installed user, who
+    // would otherwise pay a stat() every second forever. The pending case (no peer
+    // yet) is NOT resolved, so we still arm and wait for the connection.
+    if ([ClippCliPathBanner isResolved]) {
+        [self updateCliBanner];  // ensure any stale banner is torn down
+        return;
+    }
+    // Poll once a second while the window is open: cheap (a couple of stat()s + a
+    // peer-count scan), and it makes the banner reactive without any event plumbing --
+    // it latches "ever connected" as soon as a peer is up, and vanishes within ~1s of
+    // the user running the install command (CliAlreadyInstalled() flips). __weak so the
+    // timer never keeps the controller alive.
+    __weak ClippMainWindowController* weakSelf = self;
+    cliBannerTimer_ = [NSTimer scheduledTimerWithTimeInterval:1.0
+                                                      repeats:YES
+                                                        block:^(NSTimer* timer) {
+        ClippMainWindowController* strongSelf = weakSelf;
+        if (strongSelf == nil) {
+            [timer invalidate];
+            return;
+        }
+        [strongSelf cliBannerTick];
+    }];
+    // Tick once right now so we don't wait a second for the first evaluation.
+    [self cliBannerTick];
+}
+
+- (void)stopCliBannerTimer {
+    [cliBannerTimer_ invalidate];
+    cliBannerTimer_ = nil;
+}
+
+- (void)cliBannerTick {
+    // Latch "the user has genuinely connected to a peer" the moment we see one, then
+    // re-evaluate visibility.
+    if (g_peerDisplay.ConnectedCount() > 0) {
+        [ClippCliPathBanner noteConnectedPeers];
+    }
+    [self updateCliBanner];
+
+    // Once resolved (the user dismissed it, or installed the CLI this tick), there's
+    // nothing more to poll for -- stop the timer. updateCliBanner above has already
+    // torn the banner down. It re-arms on the next window show only if still unresolved.
+    if ([ClippCliPathBanner isResolved]) {
+        [self stopCliBannerTimer];
     }
 }
 

@@ -20,6 +20,21 @@ std::vector<PeerDisplayItem> PeerDisplay::SnapshotLocked() const {
 	return snapshot;
 }
 
+std::size_t PeerDisplay::ConnectedCount() const {
+	std::lock_guard<std::mutex> lock(mutex_);
+	std::size_t count = 0;
+	for (const auto& entry : entries_) {
+		const PeerDisplayItem& item = entry.item;
+		// "Connected" = we can move clipboard data with this peer right now: either a
+		// completed outgoing handshake or a live inbound socket. A peer merely in
+		// Connecting/Backoff/Failed with no inbound link does not count.
+		if (item.outgoingConnState == PeerConnState::Connected || item.hasIncomingConnection) {
+			++count;
+		}
+	}
+	return count;
+}
+
 void PeerDisplay::NotifyPeer(const std::wstring& hostName, const HostId& hostID, Peer::ConnType connType, std::chrono::steady_clock::time_point connectedSince) {
 	PeerDisplayUpdate update;
 	std::vector<WatcherRegistration> watchers;
