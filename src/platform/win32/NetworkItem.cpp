@@ -72,6 +72,12 @@ NetworkItemView::NetworkItemView(const PeerDisplayItem& item) {
     using namespace winrt::Windows::UI::Xaml::Controls::Primitives;
     using namespace winrt::Windows::UI::Xaml::Media;
 
+    // Compound device mark sizing (tweak freely): the OS-family glyph is the
+    // primary icon; the device-type glyph is a smaller badge over its bottom-right
+    // quarter.
+    constexpr double kFamilyGlyphPx = 27.0;  // +50% vs the prior 18px
+    constexpr double kDeviceGlyphPx = 13.0;  // ~30% smaller than 18px
+
     card_ = StackPanel();
     card_.CornerRadius(CornerRadius{ 4 });
     card_.BorderThickness(ThicknessHelper::FromLengths(1, 1, 1, 1));
@@ -79,32 +85,36 @@ NetworkItemView::NetworkItemView(const PeerDisplayItem& item) {
 
     Grid headerGrid;
     headerGrid.Padding(ThicknessHelper::FromLengths(16, 12, 16, 12));
-    headerGrid.ColumnDefinitions().Append(MakeColumn(48, GridUnitType::Pixel));
+    headerGrid.ColumnDefinitions().Append(MakeColumn(36, GridUnitType::Pixel));
     headerGrid.ColumnDefinitions().Append(MakeColumn(1, GridUnitType::Star));
     headerGrid.ColumnDefinitions().Append(MakeColumn(45, GridUnitType::Pixel));
     headerGrid.ColumnDefinitions().Append(MakeColumn(40, GridUnitType::Pixel));
 
-    // Two device glyphs (OS family + device type), rendered from the embedded
-    // "Clipp Symbols" font and driven by the peer's OsType. See SymbolGlyphs.
-    StackPanel glyphStack;
-    glyphStack.Orientation(Orientation::Horizontal);
-    glyphStack.Spacing(2);
+    // Compound mark: the OS-family glyph (primary) with the device-type glyph
+    // overlaid as a smaller badge centered over its bottom-right quarter. Both are
+    // transparent bitmaps from the embedded "Clipp Symbols" font, so they composite
+    // directly. See SymbolGlyphs.
+    Grid glyphStack;
+    glyphStack.Width(kFamilyGlyphPx);
+    glyphStack.Height(kFamilyGlyphPx);
     glyphStack.VerticalAlignment(VerticalAlignment::Center);
     glyphStack.HorizontalAlignment(HorizontalAlignment::Left);
     Grid::SetColumn(glyphStack, 0);
 
     osIcon_ = Image();
-    osIcon_.Width(18);
-    osIcon_.Height(18);
+    osIcon_.Width(kFamilyGlyphPx);
+    osIcon_.Height(kFamilyGlyphPx);
+    osIcon_.HorizontalAlignment(HorizontalAlignment::Center);
     osIcon_.VerticalAlignment(VerticalAlignment::Center);
 
     deviceIcon_ = Image();
-    deviceIcon_.Width(18);
-    deviceIcon_.Height(18);
-    deviceIcon_.VerticalAlignment(VerticalAlignment::Center);
+    deviceIcon_.Width(kDeviceGlyphPx);
+    deviceIcon_.Height(kDeviceGlyphPx);
+    deviceIcon_.HorizontalAlignment(HorizontalAlignment::Right);
+    deviceIcon_.VerticalAlignment(VerticalAlignment::Bottom);
 
-    glyphStack.Children().Append(osIcon_);
-    glyphStack.Children().Append(deviceIcon_);
+    glyphStack.Children().Append(osIcon_);     // primary, underneath
+    glyphStack.Children().Append(deviceIcon_); // badge, on top (bottom-right)
 
     StackPanel textStack;
     textStack.VerticalAlignment(VerticalAlignment::Center);
@@ -215,15 +225,14 @@ void NetworkItemView::RefreshGlyphs() {
     using winrt::Windows::UI::Xaml::Visibility;
     using winrt::Windows::UI::Xaml::Media::Imaging::WriteableBitmap;
 
-    const auto color = GlyphColor();
     const clipp::OsGlyphs glyphs = clipp::OsGlyphsFor(osType_);
     auto& symbols = clipp::win32::SymbolGlyphs::Instance();
 
-    const auto familyBitmap = symbols.Glyph(glyphs.family, color);
+    const auto familyBitmap = symbols.Glyph(glyphs.family, GlyphColor(/*device=*/false));
     osIcon_.Source(familyBitmap);
     osIcon_.Visibility(familyBitmap ? Visibility::Visible : Visibility::Collapsed);
 
-    const auto deviceBitmap = glyphs.device ? symbols.Glyph(glyphs.device, color)
+    const auto deviceBitmap = glyphs.device ? symbols.Glyph(glyphs.device, GlyphColor(/*device=*/true))
                                             : WriteableBitmap{ nullptr };
     deviceIcon_.Source(deviceBitmap);
     deviceIcon_.Visibility(deviceBitmap ? Visibility::Visible : Visibility::Collapsed);
@@ -234,13 +243,13 @@ void NetworkItemView::OnThemeChanged(winrt::Windows::UI::Xaml::FrameworkElement 
     RefreshGlyphs();
 }
 
-winrt::Windows::UI::Color NetworkItemView::GlyphColor() const {
-    using winrt::Windows::UI::Xaml::ElementTheme;
-    // A small monochrome mark; approximate the row's themed foreground.
-    if (card_ != nullptr && card_.ActualTheme() == ElementTheme::Dark) {
-        return winrt::Windows::UI::Color{ 0xFF, 0xE0, 0xE0, 0xE0 };
-    }
-    return winrt::Windows::UI::Color{ 0xFF, 0x20, 0x20, 0x20 };
+winrt::Windows::UI::Color NetworkItemView::GlyphColor(bool device) const {
+    using winrt::Windows::UI::Colors;
+    // Separate the two marks by HUE rather than lightness, reusing the connection-
+    // arrow palette so it reads the same in light and dark mode: family = blue,
+    // device badge = green. Hue contrast keeps the small overlaid badge legible
+    // against the family glyph, where adjusting lightness hit contrast walls.
+    return device ? Colors::LimeGreen() : Colors::DeepSkyBlue();
 }
 
 void NetworkItemView::UpdateHostName(const std::wstring& hostName) {
