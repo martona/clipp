@@ -5,9 +5,9 @@
 [![iOS CI](https://github.com/martona/clipp/actions/workflows/ios-ci.yml/badge.svg)](https://github.com/martona/clipp/actions/workflows/ios-ci.yml)
 [![Linux CI](https://github.com/martona/clipp/actions/workflows/linux-ci.yml/badge.svg)](https://github.com/martona/clipp/actions/workflows/linux-ci.yml)
 
-Secure cross-platform clipboard sync for trusted devices.
+Cross-platform clipboard sync for trusted devices.
 
-Clipp is a free, open source, peer-to-peer clipboard sync utility for Windows, macOS, and iOS. It is built for devices you trust, on a network you control, sharing clipboard text and images without routing your clipboard through the cloud. Having said that, security (mutual authentication and encryption) are not an afterthought. The terminal is a first-class citizen and in addition to a GUI, Clipp also supports `clipp copy` and `clipp paste` - think `pbcopy` but network-enabled. 
+Clipp is a free, open source, peer-to-peer clipboard sync utility for Windows, macOS, and iOS, with a terminal-only client for Linux. It is built for devices you trust, on a network you control, sharing clipboard text and images without routing your clipboard through the cloud. Having said that, security (mutual authentication and encryption) is [not an afterthought](docs/SECURITY-MODEL.md). The terminal is a first-class citizen and in addition to a GUI, Clipp also supports `clipp copy` and `clipp paste` - think `pbcopy` but network-enabled.
 
 I wrote Clipp because I needed this exact thing, and the usual options kept failing one or more basic tests: not open source, cloud-dependent, not free, or folded into a larger kitchen-sink app whose job was no longer just clipboard sync. Clipp tries to stay lean: discover nearby peers, verify device trust, move clipboard data directly, and otherwise stay out of the way.
 
@@ -35,7 +35,7 @@ Clipp is LAN-only by design. If you want the same workflow across networks, use 
 
 Clipp moves clipboard history between your own devices without a cloud service in the middle.
 
-- Syncs clipboard text and images across Windows, macOS, and iOS.
+- Syncs clipboard text and images across Windows, macOS, and iOS, with a terminal-only client for Linux.
 - Discovers peers on the local network automatically.
 - Sends clipboard data directly between devices.
 - Shows recent clipboard activity so you can copy an earlier item again.
@@ -55,32 +55,56 @@ Clipp's trust model is deliberately narrow - your own devices, on a network or V
 | Windows  | amd64, arm64    | Windows 10 1809 | Native builds for both architectures.                                |
 | macOS    | Apple Silicon   | macOS 14*       | Intel Macs are not supported.                                        |
 | iOS      | arm64           | iOS 17          | No App Store / TestFlight builds yet — install from Xcode for now.   |
+| Linux    | amd64, arm64    | glibc 2.31†     | Terminal client only (`clipp copy`/`paste`); no GUI, no tray.        |
 
 \* The 14 floor is arbitrary; I just don't have older Macs or Intel hardware to test on. PRs to lower the minimum are welcome.
+
+† glibc 2.31 (2021) covers Debian 11+, Ubuntu 20.04+, Fedora 33+, RHEL 9+, and current Arch/openSUSE. Requires `avahi-daemon` at runtime for peer discovery. The Linux client is headless by design — it has no clipboard-reading GUI; `clipp copy` reads stdin and sends it to the network, while `clipp paste` reads the network and writes stdout. It joins the same network and relays through your GUI devices.
 
 ## Installation
 
 ### Windows
 
-Download the zip for your architecture from the [latest release](https://github.com/martona/clipp/releases/latest), extract it anywhere, and run `clipp.exe`. The app writes to HKCU\Software\Clipp under the registry, and registers itself to auto-start with Windows, but otherwise leaves your system alone. To undo the latter (and stop Clipp from automatically starting), just use the Exit option in either the tray menu or the main app window. `clipp copy` and `clipp paste` work from the terminal as long as you have Clipp on the path. The app uses a .com shim to enable console operation.
+Download the portable zip for your architecture from the [latest release](https://github.com/martona/clipp/releases/latest), extract it anywhere, and run `clipp.exe`. Alternatively, there's an .msix installer if you prefer. The app writes to HKCU\Software\Clipp under the registry, and registers itself to auto-start with Windows, but otherwise leaves your system alone. To undo the latter (and stop Clipp from automatically starting), just use the Exit option in either the tray menu or the main app window. `clipp copy` and `clipp paste` work from the terminal as long as you have Clipp on the path. The app uses a .com shim to enable console operation.
 
 ### macOS
 
-Download the disk image or zip for Apple Silicon from the [latest release](https://github.com/martona/clipp/releases/latest), open it, and drag `Clipp.app` to `/Applications` then doubleclick to open. Clipp registers itself as a macOS background item so it can start with the system: use the Exit option in either the main app window or the menu bar menu to undo this. To use `clipp copy` / `paste` you probably want the app's binary (`/Applications/clipp.app/Contents/MacOS/clipp`) on your PATH.
+Download the zip for Apple Silicon from the [latest release](https://github.com/martona/clipp/releases/latest), open it, and drag `Clipp.app` to `/Applications` then doubleclick to open. Clipp registers itself as a macOS background item so it can start with the system: use the Exit option in either the main app window or the menu bar menu to undo this. To use `clipp copy` / `paste` you probably want the app's binary (`/Applications/clipp.app/Contents/MacOS/clipp`) on your PATH.
 
 ### iOS
 
 iOS distribution is not yet set up. Until TestFlight or App Store builds are published, the only way to install on a physical device is to build from source via Xcode (see [BUILDING.md](BUILDING.md#ios-device)).
 
-### Verifying downloads
+### Linux
 
-Every release zip is attested via Sigstore — you can confirm it's the unmodified output of this repo's [release workflow](.github/workflows/_release.yml) before running anything:
+The Linux client is terminal-only (`clipp copy` / `clipp paste`) — there is no GUI. Download the package for your distro and architecture from the [latest release](https://github.com/martona/clipp/releases/latest). Install with your package manager (not the raw `dpkg`/`rpm` tools) so the Avahi dependency is pulled in automatically:
 
 ```sh
-gh attestation verify clipp-<version>-<os>-<arch>.zip --repo martona/clipp
+# Debian / Ubuntu (amd64 or arm64)
+sudo apt install ./clipp-<version>-linux-<arch>.deb
+
+# Fedora / RHEL / openSUSE
+sudo dnf install ./clipp-<version>-linux-<arch>.rpm      # Fedora/RHEL
+sudo zypper install ./clipp-<version>-linux-<arch>.rpm   # openSUSE
+
+# Arch
+sudo pacman -U ./clipp-<version>-linux-<arch>.pkg.tar.zst
 ```
 
-Requires the [GitHub CLI](https://cli.github.com/). The verification ties the zip's SHA256 to the exact CI run that built it, on the exact commit. Tampering anywhere in the chain - replaced upload, swapped artifact, modified zip contents - makes verification fail.
+The package installs `clipp` to `/usr/bin` and pulls in `libavahi-client`; it *recommends* `avahi-daemon`, which `apt`/`dnf` install by default (discovery needs it running). If you used `dpkg -i` / `rpm -i` on the downloaded file directly, those don't process recommends — enable the daemon yourself: `sudo systemctl enable --now avahi-daemon`. A raw static binary (`clipp-<version>-linux-<arch>`) is also published for distros without a matching package; drop it anywhere on your `PATH`.
+
+Set up the network from the terminal with `clipp key set` (it prompts for the network name and secret, exactly like the GUI's Network tab), then `clipp copy` / `clipp paste`. See [Command line](#command-line) below. Note that with no GUI, the Linux client relies on at least one desktop peer being reachable on the network to relay through.
+
+### Verifying downloads
+
+Every release artifact — the Windows/macOS zips and the Linux packages alike — is attested via Sigstore. You can confirm it's the unmodified output of this repo's [release workflow](.github/workflows/_release.yml) before running anything:
+
+```sh
+gh attestation verify clipp-<version>-<os>-<arch>.zip --repo martona/clipp      # Windows / macOS
+gh attestation verify clipp-<version>-linux-<arch>.deb --repo martona/clipp     # or .rpm / .pkg.tar.zst
+```
+
+Requires the [GitHub CLI](https://cli.github.com/). The verification ties the artifact's SHA256 to the exact CI run that built it, on the exact commit. Tampering anywhere in the chain - replaced upload, swapped artifact, modified contents - makes verification fail. (Linux packages are not GPG-signed; this attestation is the integrity mechanism, so `apt`/`zypper` may note the package is unsigned — expected for direct downloads.)
 
 Windows binaries inside the zip are additionally Authenticode-signed via Microsoft Trusted Signing, which you can inspect via Properties -> Digital Signatures or:
 
@@ -149,6 +173,25 @@ This section covers runtime issues. For build problems, see [BUILDING.md's troub
 
 **Devices don't see each other.** Clipp discovers peers via mDNS / DNS-SD. Common blockers: the devices are on different VLANs or guest networks that don't forward multicast, the access point has multicast filtering enabled, or a firewall on either device is blocking incoming UDP/TCP. On Windows, allow `clipp.exe` through the firewall on the *Private* network profile. On macOS, allow incoming connections for `Clipp.app` in System Settings -> Network -> Firewall. macOS prompts for this on first run; you only need to add the rule manually if you denied the prompt or have a stricter firewall policy in place.
 
+**Linux: `Could not reach any device`, or no peers found.** One or more GUI peers need to be running on your network for CLI Clipp to work. In addition, Clipp needs the Avahi daemon running *and* mDNS allowed through the firewall:
+
+```sh
+# 1. Avahi must be running (the .deb/.rpm Recommends it, but `dpkg -i` / `rpm -i`
+#    of a downloaded file does NOT pull Recommends — only apt/dnf do):
+sudo systemctl enable --now avahi-daemon
+
+# 2. On firewalld distros (Fedora, RHEL, openSUSE), open mDNS permanently.
+sudo firewall-cmd --permanent --add-service=mdns
+sudo firewall-cmd --reload
+sudo firewall-cmd --list-services      # confirm 'mdns' is listed
+
+# 3. Confirm Avahi itself can see Clipp peers (independent of Clipp). With a Clipp
+#    GUI peer running elsewhere on the LAN, this should list a clipp-XXXXXXXX entry:
+avahi-browse -rt _clipp._tcp
+```
+
+If `avahi-browse` shows nothing while another device's Clipp GUI is up, the problem is below Clipp (firewall, daemon, or multicast not reaching this host) — Clipp can only resolve what Avahi surfaces.
+
 **Fingerprints don't match between devices.** The two devices have different inputs. Most often this is whitespace, case, or autocorrect on the network name or secret — the inputs are compared byte-for-byte. Re-enter both on the device with the mismatched fingerprint, being careful with mobile autocomplete and spell-correct.
 
 **Clipboard sync works one direction but not the other.** Almost always a firewall issue on the device that *receives* but doesn't *send*. Connections are established outbound from sender to receiver; if the receiver's firewall blocks the inbound TCP connection, the link is broken. Check both devices' firewall settings.
@@ -159,9 +202,9 @@ This section covers runtime issues. For build problems, see [BUILDING.md's troub
 
 ## Fervently Anticipated Questions
 
-**Will Clipp ever support Linux or Android?**
+**Does Linux have a GUI? What about Android?**
 
-Linux and Android aren't currently in scope. Clipp uses platform-specific clipboard APIs (Win32, AppKit, UIKit) and OS-protected key storage, and adding either platform is a meaningful engineering investment rather than a small port — Linux clipboard semantics in particular vary widely across desktop environments. If you have a strong use case, open an issue describing it. I'd like to do it eventually but Android isn't in my life, nor is a permanent Linux desktop.
+Linux ships as a **terminal-only** client — `clipp copy` / `clipp paste` — with no GUI, tray, or local-clipboard reading. That's a deliberate fit for the place a headless Clipp is most useful: servers, containers, and SSH sessions, where it joins the encrypted network and relays clipboard text through your desktop/mobile peers. A full Linux *desktop* GUI isn't planned — clipboard semantics vary widely across X11/Wayland and desktop environments, which is a much larger investment than the headless client was. Android isn't in scope either (it isn't in my life). If you have a strong use case for either, open an issue.
 
 **Can I sync over the internet without a VPN?**
 
