@@ -635,6 +635,179 @@ static bool WicDecodeImageToBgra(
     return true;
 }
 
+static void LogClipboardOwnerDossier(const char* function, const wchar_t* context) {
+    const HWND owner = GetClipboardOwner();
+    DWORD pid = 0;
+    DWORD tid = 0;
+    if (owner != nullptr) {
+        tid = GetWindowThreadProcessId(owner, &pid);
+    }
+
+    wchar_t path[MAX_PATH];
+    wcscpy_s(path, L"<unavailable>");
+    if (pid != 0) {
+        const HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (proc != nullptr) {
+            wchar_t buf[MAX_PATH] = {};
+            DWORD size = ARRAYSIZE(buf);
+            if (QueryFullProcessImageNameW(proc, 0, buf, &size)) {
+                wcscpy_s(path, buf);
+            }
+            CloseHandle(proc);
+        }
+    }
+    const wchar_t* slash = wcsrchr(path, L'\\');
+    const wchar_t* name = slash != nullptr ? slash + 1 : path;
+
+    wchar_t title[256] = {};
+    if (owner != nullptr) {
+        GetWindowTextW(owner, title, ARRAYSIZE(title));
+    }
+
+    g_logger.log(function, Logger::Level::Error,
+        L"%ls -- clipboard owner: pid=%lu tid=%lu hwnd=0x%p name=\"%ls\" title=\"%ls\" path=\"%ls\"",
+        context, pid, tid, static_cast<void*>(owner), name, title, path);
+}
+
+// VirtualQuery the whole span up front because a DIB on the clipboard is owned by
+// another process: its declared size (GlobalSize) is not a promise the memory is
+// committed. RDP clipboard redirection advertises the full bitmap and then streams
+// the rows in, so a read that races the transfer runs off the end of the committed
+// pages. On a short buffer, *readableBytes receives the length of the readable prefix.
+static bool DibPixelSpanIsReadable(const void* base, size_t bytes, size_t* readableBytes) {
+    const unsigned char* const start = static_cast<const unsigned char*>(base);
+    size_t readable = 0;
+    while (readable < bytes) {
+        MEMORY_BASIC_INFORMATION mbi = {};
+        if (VirtualQuery(start + readable, &mbi, sizeof(mbi)) == 0) break;
+        if (mbi.State != MEM_COMMIT) break;
+        if (mbi.Protect & PAGE_GUARD) break;
+        switch (mbi.Protect & 0xFFu) {
+            case PAGE_READONLY:
+            case PAGE_READWRITE:
+            case PAGE_WRITECOPY:
+            case PAGE_EXECUTE_READ:
+            case PAGE_EXECUTE_READWRITE:
+            case PAGE_EXECUTE_WRITECOPY:
+                break;
+            default:
+                goto done;
+        }
+        const unsigned char* const regionEnd =
+            static_cast<const unsigned char*>(mbi.BaseAddress) + mbi.RegionSize;
+        if (regionEnd <= start + readable) break;
+        readable = static_cast<size_t>(regionEnd - start);
+    }
+done:
+    if (readableBytes != nullptr) {
+        *readableBytes = (readable > bytes) ? bytes : readable;
+    }
+    return readable >= bytes;
+}
+
+enum class DibDecodeResult { Ok, Faulted, InvalidData };
+
+struct DibPixelDecode {
+    unsigned char* dst;
+    const unsigned char* pixels;
+    const unsigned char* palette;
+    size_t width;
+    size_t height;
+    size_t rowStride;
+    size_t paletteEntries;
+    uint32_t redMask;
+    uint32_t greenMask;
+    uint32_t blueMask;
+    uint32_t alphaMask;
+    uint16_t bitCount;
+    bool bottomUp;
+    bool standard32BppBgra;
+    bool preserveAlpha;
+};
+
+static int DibReadExceptionFilter(DWORD code) {
+    return (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_IN_PAGE_ERROR)
+        ? EXCEPTION_EXECUTE_HANDLER
+        : EXCEPTION_CONTINUE_SEARCH;
+}
+
+// No locals with destructors may live here: under /EHsc a structured exception
+// unwinding through this frame would not run C++ destructors, so keeping the body
+// trivially destructible is what makes catching the access violation safe. All
+// RAII (rgba, timers, GlobalUnlock, CloseClipboard) stays in the callers and
+// unwinds normally via the returned result.
+static DibDecodeResult SafeDecodeDibPixels(const DibPixelDecode& d) {
+    __try {
+        if (d.standard32BppBgra) {
+            for (size_t y = 0; y < d.height; ++y) {
+                const size_t srcY = d.bottomUp ? (d.height - 1u - y) : y;
+                const unsigned char* srcRow = d.pixels + srcY * d.rowStride;
+                unsigned char* dst = d.dst + (y * d.width * 4u);
+                ConvertBgraToRgbaRow(srcRow, dst, d.width, d.preserveAlpha);
+            }
+            return DibDecodeResult::Ok;
+        }
+
+        for (size_t y = 0; y < d.height; ++y) {
+            const size_t srcY = d.bottomUp ? (d.height - 1u - y) : y;
+            const unsigned char* srcRow = d.pixels + srcY * d.rowStride;
+            unsigned char* dst = d.dst + (y * d.width * 4u);
+
+            for (size_t x = 0; x < d.width; ++x) {
+                unsigned char r = 0;
+                unsigned char g = 0;
+                unsigned char b = 0;
+                unsigned char a = 255;
+
+                if (d.bitCount == 24) {
+                    const unsigned char* px = srcRow + x * 3u;
+                    b = px[0];
+                    g = px[1];
+                    r = px[2];
+                }
+                else if (d.bitCount == 32 || d.bitCount == 16) {
+                    const uint32_t pixel = d.bitCount == 32 ? ReadLe32(srcRow + x * 4u) : ReadLe16(srcRow + x * 2u);
+                    r = ScaleMaskComponent(pixel, d.redMask);
+                    g = ScaleMaskComponent(pixel, d.greenMask);
+                    b = ScaleMaskComponent(pixel, d.blueMask);
+                    if (d.preserveAlpha) a = ScaleMaskComponent(pixel, d.alphaMask);
+                } else {
+                    uint32_t index = 0;
+                    if (d.bitCount == 8) {
+                        index = srcRow[x];
+                    }
+                    else if (d.bitCount == 4) {
+                        const unsigned char packed = srcRow[x / 2u];
+                        index = (x % 2u == 0) ? (packed >> 4) : (packed & 0x0f);
+                    }
+                    else {
+                        const unsigned char packed = srcRow[x / 8u];
+                        index = (packed >> (7u - (x % 8u))) & 0x01;
+                    }
+
+                    if (index >= d.paletteEntries) {
+                        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot encode clipboard DIB as PNG: palette index %u exceeds %zu entries", index, d.paletteEntries);
+                        return DibDecodeResult::InvalidData;
+                    }
+                    const unsigned char* entry = d.palette + index * sizeof(RGBQUAD);
+                    b = entry[0];
+                    g = entry[1];
+                    r = entry[2];
+                }
+
+                dst[x * 4u + 0u] = r;
+                dst[x * 4u + 1u] = g;
+                dst[x * 4u + 2u] = b;
+                dst[x * 4u + 3u] = a;
+            }
+        }
+        return DibDecodeResult::Ok;
+    }
+    __except (DibReadExceptionFilter(GetExceptionCode())) {
+        return DibDecodeResult::Faulted;
+    }
+}
+
 static bool DIBToPNG(const unsigned char* dibData, size_t dibSize, std::vector<unsigned char>& pngData) {
     pngData.clear();
     if (dibSize < sizeof(BITMAPINFOHEADER)) {
@@ -751,68 +924,34 @@ static bool DIBToPNG(const unsigned char* dibData, size_t dibSize, std::vector<u
     const bool standard32BppBgra = bitCount == 32 && IsStandard32BppBgra(redMask, greenMask, blueMask, alphaMask);
     const bool preserveAlpha = header->biCompression == BI_ALPHABITFIELDS && alphaMask != 0;
 
-    if (standard32BppBgra) {
-        for (size_t y = 0; y < height; ++y) {
-            const size_t srcY = bottomUp ? (height - 1u - y) : y;
-            const unsigned char* srcRow = pixels + srcY * rowStride;
-            unsigned char* dst = rgba.data() + (y * width * 4u);
-            ConvertBgraToRgbaRow(srcRow, dst, width, preserveAlpha);
-        }
+    size_t readablePixelBytes = 0;
+    if (!DibPixelSpanIsReadable(pixels, pixelBytes, &readablePixelBytes)) {
+        const size_t readableRows = rowStride != 0 ? readablePixelBytes / rowStride : 0;
+        g_logger.log(__FUNCTION__, Logger::Level::Error,
+            L"Refusing to encode clipboard DIB as PNG: pixel buffer is not fully committed "
+            L"(declared %zu bytes / %zu rows, only %zu bytes / %zu rows readable)",
+            pixelBytes, height, readablePixelBytes, readableRows);
+        LogClipboardOwnerDossier(__FUNCTION__, L"truncated CF_DIB pixel buffer");
+        return false;
     }
-    else {
-        for (size_t y = 0; y < height; ++y) {
-            const size_t srcY = bottomUp ? (height - 1u - y) : y;
-            const unsigned char* srcRow = pixels + srcY * rowStride;
-            unsigned char* dst = rgba.data() + (y * width * 4u);
 
-            for (size_t x = 0; x < width; ++x) {
-                unsigned char r = 0;
-                unsigned char g = 0;
-                unsigned char b = 0;
-                unsigned char a = 255;
-
-                if (bitCount == 24) {
-                    const unsigned char* px = srcRow + x * 3u;
-                    b = px[0];
-                    g = px[1];
-                    r = px[2];
-                }
-                else if (bitCount == 32 || bitCount == 16) {
-                    const uint32_t pixel = bitCount == 32 ? ReadLe32(srcRow + x * 4u) : ReadLe16(srcRow + x * 2u);
-                    r = ScaleMaskComponent(pixel, redMask);
-                    g = ScaleMaskComponent(pixel, greenMask);
-                    b = ScaleMaskComponent(pixel, blueMask);
-                    if (preserveAlpha) a = ScaleMaskComponent(pixel, alphaMask);
-                } else {
-                    uint32_t index = 0;
-                    if (bitCount == 8) {
-                        index = srcRow[x];
-                    }
-                    else if (bitCount == 4) {
-                        const unsigned char packed = srcRow[x / 2u];
-                        index = (x % 2u == 0) ? (packed >> 4) : (packed & 0x0f);
-                    }
-                    else {
-                        const unsigned char packed = srcRow[x / 8u];
-                        index = (packed >> (7u - (x % 8u))) & 0x01;
-                    }
-
-                    if (index >= paletteEntries) {
-                        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Cannot encode clipboard DIB as PNG: palette index %u exceeds %zu entries", index, paletteEntries);
-                        return false;
-                    }
-                    const unsigned char* entry = palette + index * sizeof(RGBQUAD);
-                    b = entry[0];
-                    g = entry[1];
-                    r = entry[2];
-                }
-
-                dst[x * 4u + 0u] = r;
-                dst[x * 4u + 1u] = g;
-                dst[x * 4u + 2u] = b;
-                dst[x * 4u + 3u] = a;
-            }
-        }
+    const DibPixelDecode decode{
+        rgba.data(), pixels, palette,
+        width, height, rowStride, paletteEntries,
+        redMask, greenMask, blueMask, alphaMask,
+        bitCount, bottomUp, standard32BppBgra, preserveAlpha,
+    };
+    const DibDecodeResult decodeResult = SafeDecodeDibPixels(decode);
+    if (decodeResult == DibDecodeResult::Faulted) {
+        g_logger.log(__FUNCTION__, Logger::Level::Error,
+            L"Access violation reading clipboard DIB pixels (%zu x %zu, %u bpp): "
+            L"the clipboard owner's buffer is shorter than it advertised",
+            width, height, bitCount);
+        LogClipboardOwnerDossier(__FUNCTION__, L"faulting CF_DIB pixel buffer");
+        return false;
+    }
+    if (decodeResult != DibDecodeResult::Ok) {
+        return false;
     }
 
     {
