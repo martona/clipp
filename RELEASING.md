@@ -80,9 +80,12 @@ gh release edit v1.2.3.4 --draft=false
 
 | Job | Runner(s) | Produces |
 |-----|-----------|----------|
-| `build-windows` (matrix: amd64, arm64) | `windows-latest`, `windows-11-arm` | Built unsigned, then Trusted-Signing-signed; `clipp-<ver>-windows-<arch>.zip` (exe + com), `clipp-<ver>-windows-<arch>-symbols.zip` (PDBs), and `clipp-<ver>-windows-<arch>.msix` (signed, sideloadable) |
-| `build-macos` (arm64) | `macos-latest` | `build_macos.sh --notarize` → Developer ID-signed, notarized, stapled `clipp-<ver>-macos-arm64.zip` |
+| `build-windows` (matrix: amd64, arm64) | `windows-latest`, `windows-11-arm` | Built unsigned, then Trusted-Signing-signed; `clipp-windows-<arch>.zip` (exe + com), `clipp-<ver>-windows-<arch>-symbols.zip` (PDBs), and `clipp-windows-<arch>.msix` (signed, sideloadable) |
+| `build-macos` (arm64) | `macos-latest` | `build_macos.sh --notarize` → Developer ID-signed, notarized, stapled `clipp-macos-arm64.zip` |
+| `build-linux` (matrix: amd64, arm64) | `ubuntu-latest`, `ubuntu-24.04-arm` | Built in a `debian:11` (glibc 2.31) container, static libstdc++; `clipp-linux-<arch>.{deb,rpm,pkg.tar.zst}` via nfpm + the raw `clipp-linux-<arch>` binary. Unsigned (attestation covers integrity) |
 | `publish` | `ubuntu-latest` | Downloads artifacts, writes a build-provenance attestation, creates the GitHub release |
+
+Installable assets are deliberately **version-less** (`clipp-windows-amd64.zip`, not `clipp-1.2.3.4-windows-amd64.zip`) so the README can link stable `releases/latest/download/<name>` URLs that survive every release. Only the Windows **symbols** zip keeps the version (it's a build-tied debug artifact, never linked). The version still travels in `clipp --version`, the macOS `Info.plist`, and Linux package metadata; the Sigstore attestation binds by SHA256, so the filename carrying no version costs nothing.
 
 The Windows `.msix` is the same package `scripts/package_windows_msix.ps1` builds — packed unsigned (`-NoSign`) after the exe/com are signed (so it embeds the signed binaries and derives its `Publisher` from them), then signed by a second Trusted Signing step. Because Trusted Signing chains to a public root, users can `Add-AppxPackage` it directly with no certificate import.
 

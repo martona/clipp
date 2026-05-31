@@ -197,7 +197,12 @@ jobs:
           $stage = ".\release-stage"
           New-Item -ItemType Directory -Path $stage | Out-Null
 
-          $binZip = Join-Path $stage "clipp-$ver-windows-$arch.zip"
+          # Installable assets are VERSION-LESS so the README can link stable
+          # github.com/.../releases/latest/download/<name> URLs (that redirect needs a
+          # constant filename). The version still travels in clipp --version, and the
+          # attestation binds by SHA256, not name. Symbols stay versioned -- they're
+          # build-tied debugging artifacts, never linked from docs.
+          $binZip = Join-Path $stage "clipp-windows-$arch.zip"
           Compress-Archive -Path "$src\clipp.exe","$src\clipp.com" -DestinationPath $binZip
           Write-Host "Created $binZip"
 
@@ -211,7 +216,7 @@ jobs:
 
           $msix = ".\build\msix\clipp-$ver-$arch.msix"
           if (-not (Test-Path $msix)) { throw "Signed MSIX not found: $msix" }
-          Copy-Item $msix (Join-Path $stage "clipp-$ver-windows-$arch.msix")
+          Copy-Item $msix (Join-Path $stage "clipp-windows-$arch.msix")
           Write-Host "Staged $msix"
 
           Get-ChildItem $stage | Format-Table Name, Length
@@ -353,13 +358,15 @@ jobs:
 
       - name: Package artifact
         run: |
-          ver="${{ inputs.version }}"
           mkdir -p release-stage
+          # Version-less name so the README can link a stable releases/latest/download
+          # URL; the version still rides in the bundle's Info.plist + clipp --version,
+          # and attestation binds by SHA256.
           # ditto (not zip) preserves macOS metadata correctly; --sequesterRsrc keeps
           # the archive shape macOS expects; --keepParent puts Clipp.app at the root.
           /usr/bin/ditto -c -k --sequesterRsrc --keepParent \
             "$APP_PATH" \
-            "release-stage/clipp-$ver-macos-arm64.zip"
+            "release-stage/clipp-macos-arm64.zip"
           ls -la release-stage/
 
       - name: Upload artifact
@@ -509,19 +516,21 @@ jobs:
       - name: Stage release artifacts
         run: |
           set -euo pipefail
-          ver="${{ inputs.version }}"
           arch="${{ matrix.arch }}"
           mkdir -p release-stage
-          # Rename into the clipp-$ver-linux-$arch.<ext> convention used by the other
-          # platforms. nfpm's native names differ per format; normalize for the release.
+          # Version-LESS names so the README can link stable
+          # releases/latest/download/clipp-linux-$arch.<ext> URLs. nfpm's native names
+          # embed the version; normalize them away here. The version still lives in the
+          # package metadata (dpkg -I / rpm -qi), in clipp --version, and the
+          # attestation binds by SHA256 -- so nothing depends on the filename carrying it.
           deb="$(ls dist/*.deb)"
           rpm="$(ls dist/*.rpm)"
           pkg="$(ls dist/*.pkg.tar.zst)"
-          cp "$deb" "release-stage/clipp-$ver-linux-$arch.deb"
-          cp "$rpm" "release-stage/clipp-$ver-linux-$arch.rpm"
-          cp "$pkg" "release-stage/clipp-$ver-linux-$arch.pkg.tar.zst"
+          cp "$deb" "release-stage/clipp-linux-$arch.deb"
+          cp "$rpm" "release-stage/clipp-linux-$arch.rpm"
+          cp "$pkg" "release-stage/clipp-linux-$arch.pkg.tar.zst"
           # Also ship the raw binary for users who just want it on PATH themselves.
-          cp build/linux-release/clipp "release-stage/clipp-$ver-linux-$arch"
+          cp build/linux-release/clipp "release-stage/clipp-linux-$arch"
           ls -la release-stage/
 
       - name: Upload artifacts

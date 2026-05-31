@@ -63,13 +63,39 @@ Clipp's trust model is deliberately narrow - your own devices, on a network or V
 
 ## Installation
 
+Direct download links below always point at the **latest published release** — no need to hunt through the [releases page](https://github.com/martona/clipp/releases/latest). (The version isn't in the filename; it's in `clipp --version` and, for Linux, the package metadata.)
+
+| Platform | amd64 / x86_64 | arm64 |
+|----------|----------------|-------|
+| Windows (portable zip) | [clipp-windows-amd64.zip][win-amd64-zip] | [clipp-windows-arm64.zip][win-arm64-zip] |
+| Windows (MSIX installer) | [clipp-windows-amd64.msix][win-amd64-msix] | [clipp-windows-arm64.msix][win-arm64-msix] |
+| macOS (Apple Silicon) | — | [clipp-macos-arm64.zip][mac-arm64-zip] |
+| Linux (.deb) | [clipp-linux-amd64.deb][lin-amd64-deb] | [clipp-linux-arm64.deb][lin-arm64-deb] |
+| Linux (.rpm) | [clipp-linux-amd64.rpm][lin-amd64-rpm] | [clipp-linux-arm64.rpm][lin-arm64-rpm] |
+| Linux (Arch) | [clipp-linux-amd64.pkg.tar.zst][lin-amd64-pkg] | [clipp-linux-arm64.pkg.tar.zst][lin-arm64-pkg] |
+| Linux (raw binary) | [clipp-linux-amd64][lin-amd64-bin] | [clipp-linux-arm64][lin-arm64-bin] |
+
+[win-amd64-zip]: https://github.com/martona/clipp/releases/latest/download/clipp-windows-amd64.zip
+[win-arm64-zip]: https://github.com/martona/clipp/releases/latest/download/clipp-windows-arm64.zip
+[win-amd64-msix]: https://github.com/martona/clipp/releases/latest/download/clipp-windows-amd64.msix
+[win-arm64-msix]: https://github.com/martona/clipp/releases/latest/download/clipp-windows-arm64.msix
+[mac-arm64-zip]: https://github.com/martona/clipp/releases/latest/download/clipp-macos-arm64.zip
+[lin-amd64-deb]: https://github.com/martona/clipp/releases/latest/download/clipp-linux-amd64.deb
+[lin-arm64-deb]: https://github.com/martona/clipp/releases/latest/download/clipp-linux-arm64.deb
+[lin-amd64-rpm]: https://github.com/martona/clipp/releases/latest/download/clipp-linux-amd64.rpm
+[lin-arm64-rpm]: https://github.com/martona/clipp/releases/latest/download/clipp-linux-arm64.rpm
+[lin-amd64-pkg]: https://github.com/martona/clipp/releases/latest/download/clipp-linux-amd64.pkg.tar.zst
+[lin-arm64-pkg]: https://github.com/martona/clipp/releases/latest/download/clipp-linux-arm64.pkg.tar.zst
+[lin-amd64-bin]: https://github.com/martona/clipp/releases/latest/download/clipp-linux-amd64
+[lin-arm64-bin]: https://github.com/martona/clipp/releases/latest/download/clipp-linux-arm64
+
 ### Windows
 
-Download the portable zip for your architecture from the [latest release](https://github.com/martona/clipp/releases/latest), extract it anywhere, and run `clipp.exe`. Alternatively, there's an .msix installer if you prefer. The app writes to HKCU\Software\Clipp under the registry, and registers itself to auto-start with Windows, but otherwise leaves your system alone. To undo the latter (and stop Clipp from automatically starting), just use the Exit option in either the tray menu or the main app window. `clipp copy` and `clipp paste` work from the terminal as long as you have Clipp on the path. The app uses a .com shim to enable console operation.
+Download the portable zip ([amd64][win-amd64-zip] / [arm64][win-arm64-zip]), extract it anywhere, and run `clipp.exe`. Alternatively, there's an MSIX installer ([amd64][win-amd64-msix] / [arm64][win-arm64-msix]) if you prefer. The app writes to HKCU\Software\Clipp under the registry, and registers itself to auto-start with Windows, but otherwise leaves your system alone. To undo the latter (and stop Clipp from automatically starting), just use the Exit option in either the tray menu or the main app window. `clipp copy` and `clipp paste` work from the terminal as long as you have Clipp on the path. The app uses a .com shim to enable console operation.
 
 ### macOS
 
-Download the zip for Apple Silicon from the [latest release](https://github.com/martona/clipp/releases/latest), open it, and drag `Clipp.app` to `/Applications` then doubleclick to open. Clipp registers itself as a macOS background item so it can start with the system: use the Exit option in either the main app window or the menu bar menu to undo this. To use `clipp copy` / `paste` you probably want the app's binary (`/Applications/clipp.app/Contents/MacOS/clipp`) on your PATH.
+Download the [Apple Silicon zip][mac-arm64-zip], open it, and drag `Clipp.app` to `/Applications` then doubleclick to open. Clipp registers itself as a macOS background item so it can start with the system: use the Exit option in either the main app window or the menu bar menu to undo this. To use `clipp copy` / `paste` you probably want the app's binary (`/Applications/clipp.app/Contents/MacOS/clipp`) on your PATH.
 
 ### iOS
 
@@ -77,21 +103,21 @@ iOS distribution is not yet set up. Until TestFlight or App Store builds are pub
 
 ### Linux
 
-The Linux client is terminal-only (`clipp copy` / `clipp paste`) — there is no GUI. Download the package for your distro and architecture from the [latest release](https://github.com/martona/clipp/releases/latest). Install with your package manager (not the raw `dpkg`/`rpm` tools) so the Avahi dependency is pulled in automatically:
+The Linux client is terminal-only (`clipp copy` / `clipp paste`) — there is no GUI. Grab the package for your distro from the table above (or `curl -LO` the link), then install it with your package manager — not the raw `dpkg`/`rpm` tools — so the Avahi dependency is pulled in automatically. Replace `<arch>` with `amd64` or `arm64`:
 
 ```sh
-# Debian / Ubuntu (amd64 or arm64)
-sudo apt install ./clipp-<version>-linux-<arch>.deb
+# Debian / Ubuntu
+sudo apt install ./clipp-linux-<arch>.deb
 
 # Fedora / RHEL / openSUSE
-sudo dnf install ./clipp-<version>-linux-<arch>.rpm      # Fedora/RHEL
-sudo zypper install ./clipp-<version>-linux-<arch>.rpm   # openSUSE
+sudo dnf install ./clipp-linux-<arch>.rpm      # Fedora/RHEL
+sudo zypper install ./clipp-linux-<arch>.rpm   # openSUSE
 
 # Arch
-sudo pacman -U ./clipp-<version>-linux-<arch>.pkg.tar.zst
+sudo pacman -U ./clipp-linux-<arch>.pkg.tar.zst
 ```
 
-The package installs `clipp` to `/usr/bin` and pulls in `libavahi-client`; it *recommends* `avahi-daemon`, which `apt`/`dnf` install by default (discovery needs it running). If you used `dpkg -i` / `rpm -i` on the downloaded file directly, those don't process recommends — enable the daemon yourself: `sudo systemctl enable --now avahi-daemon`. A raw static binary (`clipp-<version>-linux-<arch>`) is also published for distros without a matching package; drop it anywhere on your `PATH`.
+The package installs `clipp` to `/usr/bin` and pulls in `libavahi-client`; it *recommends* `avahi-daemon`, which `apt`/`dnf` install by default (discovery needs it running). If you used `dpkg -i` / `rpm -i` on the downloaded file directly, those don't process recommends — enable the daemon yourself: `sudo systemctl enable --now avahi-daemon`. A raw static binary ([amd64][lin-amd64-bin] / [arm64][lin-arm64-bin]) is also published for distros without a matching package; `chmod +x` it and drop it anywhere on your `PATH`.
 
 Set up the network from the terminal with `clipp key set` (it prompts for the network name and secret, exactly like the GUI's Network tab), then `clipp copy` / `clipp paste`. See [Command line](#command-line) below. Note that with no GUI, the Linux client relies on at least one desktop peer being reachable on the network to relay through.
 
@@ -100,8 +126,8 @@ Set up the network from the terminal with `clipp key set` (it prompts for the ne
 Every release artifact — the Windows/macOS zips and the Linux packages alike — is attested via Sigstore. You can confirm it's the unmodified output of this repo's [release workflow](.github/workflows/_release.yml) before running anything:
 
 ```sh
-gh attestation verify clipp-<version>-<os>-<arch>.zip --repo martona/clipp      # Windows / macOS
-gh attestation verify clipp-<version>-linux-<arch>.deb --repo martona/clipp     # or .rpm / .pkg.tar.zst
+gh attestation verify clipp-windows-amd64.zip --repo martona/clipp     # Windows / macOS zips
+gh attestation verify clipp-linux-amd64.deb --repo martona/clipp       # or .rpm / .pkg.tar.zst / the raw binary
 ```
 
 Requires the [GitHub CLI](https://cli.github.com/). The verification ties the artifact's SHA256 to the exact CI run that built it, on the exact commit. Tampering anywhere in the chain - replaced upload, swapped artifact, modified contents - makes verification fail. (Linux packages are not GPG-signed; this attestation is the integrity mechanism, so `apt`/`zypper` may note the package is unsigned — expected for direct downloads.)
