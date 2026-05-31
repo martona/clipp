@@ -150,6 +150,46 @@ static UINT CanUploadToCloudClipboardFormat() {
     return format;
 }
 
+// De-facto-standard registered format for lossless images. There is no official
+// CF_PNG, but every modern producer/consumer agrees on the registered name "PNG"
+// (browsers, Office, Snipping Tool, Paint.NET, GIMP, Pinta). It is the ONE image
+// format Windows will never synthesize from a DIB, so it must be offered (write)
+// and probed (read) explicitly; CF_DIB/CF_DIBV5/CF_BITMAP remain available for
+// free via Windows' own DIB-family synthesis.
+static UINT PngClipboardFormat() {
+    static const UINT format = RegisterClipboardFormatW(L"PNG");
+    return format;
+}
+
+// The MIME spelling of PNG. Some consumers (e.g. GTK-based apps like Pinta) probe
+// "image/png" rather than the shorter "PNG"; we offer both so whichever a consumer
+// prefers is present. Costs nothing extra -- both are delay-rendered.
+static UINT PngMimeClipboardFormat() {
+    static const UINT format = RegisterClipboardFormatW(L"image/png");
+    return format;
+}
+
+// JPEG family. macOS/iOS shares frequently arrive as JPEG with no PNG alternative,
+// and we carry those bytes to Windows verbatim. "JFIF" is the registered name
+// Windows producers use for JPEG (see the Snipping Tool / Pinta format dumps);
+// "image/jpeg" is the cross-platform MIME spelling. Offered only when the payload
+// is actually JPEG. We never need to CONSUME these on Windows -- CF_DIBV5 remains
+// the universal fallback so a JPEG-origin image still pastes into consumers that
+// don't read JPEG (i.e. essentially every native Windows app).
+static UINT JfifClipboardFormat() {
+    static const UINT format = RegisterClipboardFormatW(L"JFIF");
+    return format;
+}
+
+static UINT JpegMimeClipboardFormat() {
+    static const UINT format = RegisterClipboardFormatW(L"image/jpeg");
+    return format;
+}
+
+// Defined further down (next to ReadClipboardData); forward-declared here so the
+// delayed-render and window-proc paths can resolve a format id to a readable name.
+static const wchar_t* ClipboardFormatLabel(UINT format, wchar_t* buf, int bufLen);
+
 // Remote-session clipboard redirectors (RDP and friends) set
 // CanIncludeInClipboardHistory and CanUploadToCloudClipboard on every
 // redirected clipboard write, regardless of the source app — they treat
@@ -669,12 +709,13 @@ static void LogClipboardOwnerDossier(const char* function, const wchar_t* contex
         context, pid, tid, static_cast<void*>(owner), name, title, path);
 }
 
-// VirtualQuery the whole span up front because a DIB on the clipboard is owned by
-// another process: its declared size (GlobalSize) is not a promise the memory is
-// committed. RDP clipboard redirection advertises the full bitmap and then streams
-// the rows in, so a read that races the transfer runs off the end of the committed
-// pages. On a short buffer, *readableBytes receives the length of the readable prefix.
-static bool DibPixelSpanIsReadable(const void* base, size_t bytes, size_t* readableBytes) {
+// VirtualQuery the whole span up front because clipboard data is owned by another
+// process: the declared size (GlobalSize) is the owner's claim, not a promise the
+// memory is actually committed. RDP clipboard redirection, for one, advertises the
+// full size and then streams the bytes in, so a read that races the transfer runs
+// off the end of the committed pages. Used for both the CF_DIB pixel buffer and the
+// "PNG" blob. On a short buffer, *readableBytes receives the readable-prefix length.
+static bool ClipboardSpanIsReadable(const void* base, size_t bytes, size_t* readableBytes) {
     const unsigned char* const start = static_cast<const unsigned char*>(base);
     size_t readable = 0;
     while (readable < bytes) {
@@ -925,7 +966,7 @@ static bool DIBToPNG(const unsigned char* dibData, size_t dibSize, std::vector<u
     const bool preserveAlpha = header->biCompression == BI_ALPHABITFIELDS && alphaMask != 0;
 
     size_t readablePixelBytes = 0;
-    if (!DibPixelSpanIsReadable(pixels, pixelBytes, &readablePixelBytes)) {
+    if (!ClipboardSpanIsReadable(pixels, pixelBytes, &readablePixelBytes)) {
         const size_t readableRows = rowStride != 0 ? readablePixelBytes / rowStride : 0;
         g_logger.log(__FUNCTION__, Logger::Level::Error,
             L"Refusing to encode clipboard DIB as PNG: pixel buffer is not fully committed "
@@ -1080,22 +1121,19 @@ static HGLOBAL CreateClipboardGlobalMemory(const std::vector<unsigned char>& dat
 }
 
 static bool RenderDelayedClipboardFormat(UINT format) {
-    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Delayed clipboard render requested for format %u.", format);
-
-    if (format != CF_DIB) {
-        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Ignoring delayed clipboard render request for unsupported format %u.", format);
-        return false;
-    }
+    wchar_t requestedName[256];
+    const wchar_t* requestedLabel = ClipboardFormatLabel(format, requestedName, ARRAYSIZE(requestedName));
+    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Delayed clipboard render requested for format id=%u (0x%04x) name=\"%ls\".", format, format, requestedLabel);
 
     auto renderPayload = DelayedClipboardRenderPayload();
     if (!renderPayload) {
-        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Ignoring delayed CF_DIB render request because no payload is retained.");
+        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Ignoring delayed render request because no payload is retained.");
         return false;
     }
 
     const ClipboardPayload& payload = *renderPayload;
     if (!IsClippImageFormat(payload.meta.formatId)) {
-        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Ignoring delayed CF_DIB render request because retained payload format is %ls (%u).",
+        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Ignoring delayed render request because retained payload format is %ls (%u).",
             ClippClipboardFormatNameW(payload.meta.formatId),
             payload.meta.formatId);
         return false;
@@ -1104,38 +1142,69 @@ static bool RenderDelayedClipboardFormat(UINT format) {
     // Images are never zstd-compressed (see SetUncompressedBytes), so EncodedBytes() IS the image bytes.
     const std::vector<unsigned char>& imageBytes = payload.EncodedBytes();
 
-    std::vector<unsigned char> dibData;
-    {
-        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Rendering delayed CF_DIB from %ls payload (%zu bytes).",
-            ClippClipboardFormatNameW(payload.meta.formatId),
-            imageBytes.size());
-        ScopedTimer timer(L"Delayed clipboard image to CF_DIB rendering");
-        if (!EncodedImageToDIB(imageBytes, payload.meta.formatId, dibData)) {
-            g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to render delayed %ls clipboard payload as CF_DIB.", ClippClipboardFormatNameW(payload.meta.formatId));
+    // Verbatim path: the requested registered format matches the payload's own
+    // encoding, so the stored bytes ARE the answer -- no decode, no re-encode.
+    const bool requestedPng = (format == PngClipboardFormat() || format == PngMimeClipboardFormat());
+    const bool requestedJpeg = (format == JfifClipboardFormat() || format == JpegMimeClipboardFormat());
+    const bool payloadIsPng = (payload.meta.formatId == CLIPP_FORMAT_PNG);
+    const bool payloadIsJpeg = (payload.meta.formatId == CLIPP_FORMAT_JPEG);
+
+    if ((requestedPng && payloadIsPng) || (requestedJpeg && payloadIsJpeg)) {
+        HGLOBAL hMem = CreateClipboardGlobalMemory(imageBytes, requestedLabel);
+        if (!hMem) {
             return false;
         }
+        if (!::SetClipboardData(format, hMem)) {
+            LogLastError(__FUNCTION__, L"Failed to set delayed encoded-image clipboard data");
+            GlobalFree(hMem);
+            return false;
+        }
+        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Rendered delayed \"%ls\" clipboard data verbatim from %ls payload (%zu bytes)",
+            requestedLabel,
+            ClippClipboardFormatNameW(payload.meta.formatId),
+            imageBytes.size());
+        return true;
     }
 
-    HGLOBAL hMem = CreateClipboardGlobalMemory(dibData, L"CF_DIB");
-    if (!hMem) {
-        return false;
+    // Compatibility path: decode the encoded image into a DIB. Windows synthesizes
+    // CF_DIB / CF_BITMAP from CF_DIBV5, so this one branch serves every legacy
+    // consumer regardless of whether the payload was PNG or JPEG.
+    if (format == CF_DIBV5) {
+        std::vector<unsigned char> dibData;
+        {
+            g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Rendering delayed CF_DIBV5 from %ls payload (%zu bytes).",
+                ClippClipboardFormatNameW(payload.meta.formatId),
+                imageBytes.size());
+            ScopedTimer timer(L"Delayed clipboard image to CF_DIBV5 rendering");
+            if (!EncodedImageToDIB(imageBytes, payload.meta.formatId, dibData)) {
+                g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to render delayed %ls clipboard payload as CF_DIBV5.", ClippClipboardFormatNameW(payload.meta.formatId));
+                return false;
+            }
+        }
+
+        HGLOBAL hMem = CreateClipboardGlobalMemory(dibData, L"CF_DIBV5");
+        if (!hMem) {
+            return false;
+        }
+        if (!::SetClipboardData(CF_DIBV5, hMem)) {
+            LogLastError(__FUNCTION__, L"Failed to set delayed CF_DIBV5 clipboard data");
+            GlobalFree(hMem);
+            return false;
+        }
+        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Rendered delayed CF_DIBV5 clipboard data from %ls payload (encoded: %zu bytes, DIB: %zu bytes)",
+            ClippClipboardFormatNameW(payload.meta.formatId),
+            imageBytes.size(),
+            dibData.size());
+        return true;
     }
 
-    if (!::SetClipboardData(CF_DIB, hMem)) {
-        LogLastError(__FUNCTION__, L"Failed to set delayed CF_DIB clipboard data");
-        GlobalFree(hMem);
-        return false;
-    }
-
-    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Rendered delayed CF_DIB clipboard data from %ls payload (encoded: %zu bytes, DIB: %zu bytes)",
-        ClippClipboardFormatNameW(payload.meta.formatId),
-        imageBytes.size(),
-        dibData.size());
-    return true;
+    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Ignoring delayed render request for unexpected format id=%u name=\"%ls\".", format, requestedLabel);
+    return false;
 }
 
 static void RenderAllDelayedClipboardFormats(HWND hwnd) {
-    if (!DelayedClipboardRenderPayload()) {
+    auto renderPayload = DelayedClipboardRenderPayload();
+    if (!renderPayload) {
         g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Ignoring WM_RENDERALLFORMATS because no delayed payload is retained.");
         return;
     }
@@ -1146,7 +1215,21 @@ static void RenderAllDelayedClipboardFormats(HWND hwnd) {
         return;
     }
 
-    RenderDelayedClipboardFormat(CF_DIB);
+    // The owner is going away, so every advertised format must be materialized now.
+    // This is the one path where delayed rendering is forced to go eager -- and the
+    // only place the per-format memory multiplies -- so it mirrors exactly what the
+    // write path advertised for this payload type, then the CF_DIBV5 fallback.
+    const uint32_t fmtId = renderPayload->meta.formatId;
+    if (fmtId == CLIPP_FORMAT_PNG) {
+        RenderDelayedClipboardFormat(PngClipboardFormat());
+        RenderDelayedClipboardFormat(PngMimeClipboardFormat());
+    }
+    else if (fmtId == CLIPP_FORMAT_JPEG) {
+        RenderDelayedClipboardFormat(JfifClipboardFormat());
+        RenderDelayedClipboardFormat(JpegMimeClipboardFormat());
+    }
+    RenderDelayedClipboardFormat(CF_DIBV5);
+
     CloseClipboard();
     ClearDelayedClipboardRenderState();
 }
@@ -1157,9 +1240,18 @@ LRESULT CALLBACK ClipboardWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         // Register for clipboard update notifications
         AddClipboardFormatListener(hwnd);
         return 0;
-    case WM_RENDERFORMAT:
-        RenderDelayedClipboardFormat(static_cast<UINT>(wParam));
+    case WM_RENDERFORMAT: {
+        // A real consumer is pasting and has asked for exactly this format. Log it
+        // at INFO -- this is the signal for which clipboard format consumers actually
+        // pull from us (note: a consumer wanting CF_DIB/CF_BITMAP shows up here as
+        // CF_DIBV5, the synthesis source Windows asks us to render).
+        const UINT requested = static_cast<UINT>(wParam);
+        wchar_t nameBuf[256];
+        const wchar_t* label = ClipboardFormatLabel(requested, nameBuf, ARRAYSIZE(nameBuf));
+        g_logger.log(__FUNCTION__, Logger::Level::Info, L"WM_RENDERFORMAT: clipboard consumer requested format id=%u (0x%04x) name=\"%ls\"", requested, requested, label);
+        RenderDelayedClipboardFormat(requested);
         return 0;
+    }
     case WM_RENDERALLFORMATS:
         RenderAllDelayedClipboardFormats(hwnd);
         return 0;
@@ -1237,6 +1329,62 @@ void StopClipboardNotification() {
         g_clipboardThread.join();
 }
 
+// Resolve a clipboard format id to a human-readable label: the standard CF_*
+// constants by name, registered formats via GetClipboardFormatNameW, everything
+// else as <unnamed>. `buf` backs the registered-name case; the return value is
+// either a static string or `buf`.
+static const wchar_t* ClipboardFormatLabel(UINT format, wchar_t* buf, int bufLen) {
+    switch (format) {
+        case CF_TEXT:          return L"CF_TEXT";
+        case CF_BITMAP:        return L"CF_BITMAP";
+        case CF_METAFILEPICT:  return L"CF_METAFILEPICT";
+        case CF_SYLK:          return L"CF_SYLK";
+        case CF_DIF:           return L"CF_DIF";
+        case CF_TIFF:          return L"CF_TIFF";
+        case CF_OEMTEXT:       return L"CF_OEMTEXT";
+        case CF_DIB:           return L"CF_DIB";
+        case CF_PALETTE:       return L"CF_PALETTE";
+        case CF_PENDATA:       return L"CF_PENDATA";
+        case CF_RIFF:          return L"CF_RIFF";
+        case CF_WAVE:          return L"CF_WAVE";
+        case CF_UNICODETEXT:   return L"CF_UNICODETEXT";
+        case CF_ENHMETAFILE:   return L"CF_ENHMETAFILE";
+        case CF_HDROP:         return L"CF_HDROP";
+        case CF_LOCALE:        return L"CF_LOCALE";
+        case CF_DIBV5:         return L"CF_DIBV5";
+        default:               break;
+    }
+    if (buf != nullptr && bufLen > 0) {
+        if (GetClipboardFormatNameW(format, buf, bufLen) > 0) {
+            return buf;
+        }
+        buf[0] = L'\0';
+    }
+    return L"<unnamed>";
+}
+
+// Diagnostic: dump every format currently on the clipboard at DDebug so it stays
+// out of normal debug logs. Caller must already hold the clipboard open, since
+// EnumClipboardFormats requires it. Reads only format ids/names -- never calls
+// GetClipboardData -- so it cannot trigger a delayed render or disturb ownership.
+static void LogAvailableClipboardFormats(const char* function) {
+    UINT format = 0;
+    int index = 0;
+    while ((format = EnumClipboardFormats(format)) != 0) {
+        wchar_t name[256];
+        const wchar_t* label = ClipboardFormatLabel(format, name, ARRAYSIZE(name));
+        g_logger.log(function, Logger::Level::DDebug, L"Clipboard format [%d]: id=%u (0x%04x) name=\"%ls\"",
+            index, format, format, label);
+        ++index;
+    }
+    if (index == 0) {
+        const DWORD err = GetLastError();
+        g_logger.log(function, Logger::Level::DDebug, L"Clipboard exposes no formats (GetLastError=%lu).", err);
+    } else {
+        g_logger.log(function, Logger::Level::DDebug, L"Clipboard exposes %d format(s) total.", index);
+    }
+}
+
 ClipboardPayload ReadClipboardData(HWND hwnd) {
     ClipboardPayload payload{};
     payload.meta.formatId = CLIPP_FORMAT_NONE;
@@ -1247,6 +1395,7 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
     for (int i = 0; i < 5; ++i) {
         if (OpenClipboard(hwnd)) {
             opened = true;
+            LogAvailableClipboardFormats(__FUNCTION__);
             if (ClipboardHasClippOriginMarker()) {
                 g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Ignoring clipboard notification for Clipp-originated clipboard contents.");
                 CloseClipboard();
@@ -1293,7 +1442,49 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
                     LogLastError(__FUNCTION__, L"Failed to retrieve CF_UNICODETEXT clipboard data");
                 }
             }
-            // 2. Try to read an Image (if text isn't available)
+            // 2a. Prefer the registered "PNG" format: it's lossless, preserves
+            // alpha, needs no DIB decode, and sidesteps the CF_DIB truncation
+            // hazard entirely. Every modern source offers it (browsers, Office,
+            // Snipping Tool, Paint.NET, Pinta). The bytes are already a PNG, so
+            // they become the payload verbatim.
+            else if (PngClipboardFormat() != 0 && IsClipboardFormatAvailable(PngClipboardFormat())) {
+                HANDLE hData = GetClipboardData(PngClipboardFormat());
+                if (hData) {
+                    const unsigned char* pngBytes = static_cast<const unsigned char*>(GlobalLock(hData));
+                    if (pngBytes) {
+                        const SIZE_T dataSize = GlobalSize(hData);
+                        size_t readablePngBytes = 0;
+                        if (dataSize > 0 && !ClipboardSpanIsReadable(pngBytes, static_cast<size_t>(dataSize), &readablePngBytes)) {
+                            // Same foreign-memory hazard as the CF_DIB path: GlobalSize is
+                            // the owner's claim, not a guarantee the pages are committed.
+                            // Refuse rather than copy off the end of mapped memory.
+                            g_logger.log(__FUNCTION__, Logger::Level::Error,
+                                L"Refusing to read \"PNG\" clipboard data: buffer is not fully committed (declared %zu bytes, only %zu readable)",
+                                static_cast<size_t>(dataSize), readablePngBytes);
+                            LogClipboardOwnerDossier(__FUNCTION__, L"truncated \"PNG\" clipboard buffer");
+                        }
+                        else if (dataSize > 0) {
+                            std::vector<unsigned char> pngData(pngBytes, pngBytes + static_cast<size_t>(dataSize));
+                            if (IsPngStream(pngData)) {
+                                payload.meta.formatId = CLIPP_FORMAT_PNG;
+                                bytes = std::move(pngData);
+                                g_logger.log(__FUNCTION__, Logger::Level::Info, L"Read \"PNG\" clipboard format from system clipboard (%zu bytes)", static_cast<size_t>(dataSize));
+                            } else {
+                                g_logger.log(__FUNCTION__, Logger::Level::Warning, L"\"PNG\" clipboard format present but bytes are not a PNG stream; skipping image payload");
+                            }
+                        } else {
+                            g_logger.log(__FUNCTION__, Logger::Level::Debug, L"\"PNG\" clipboard data has zero byte GlobalSize; skipping image payload");
+                        }
+                        GlobalUnlock(hData);
+                    } else {
+                        LogLastError(__FUNCTION__, L"Failed to lock \"PNG\" clipboard data");
+                    }
+                } else {
+                    LogLastError(__FUNCTION__, L"Failed to retrieve \"PNG\" clipboard data");
+                }
+            }
+            // 2b. Fall back to CF_DIB (Windows synthesizes it from whatever the
+            // source offered). DIBToPNG re-encodes it under the truncation guard.
             else if (IsClipboardFormatAvailable(CF_DIB)) {
                 HANDLE hData = GetClipboardData(CF_DIB);
                 if (hData) {
@@ -1445,25 +1636,78 @@ void SetClipboardData(
                 }
             }
             else if (IsClippImageFormat(payload->meta.formatId)) {
-                // Stash the same shared_ptr we were handed for delayed CF_DIB rendering.
+                // Stash the same shared_ptr we were handed for delayed image rendering.
                 // No copy, no re-encode — the bytes are already the storage form.
-                g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Preparing delayed CF_DIB clipboard rendering for %ls payload (%zu bytes).",
+                g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Preparing delayed clipboard image rendering for %ls payload (%zu bytes).",
                     ClippClipboardFormatNameW(payload->meta.formatId),
                     payload->EncodedBytes().size());
                 SetDelayedClipboardRenderState(payload);
 
+                // Advertise (delayed) the registered encoded-image formats that match
+                // the payload, then CF_DIBV5 as the universal compatibility path:
+                //   PNG payload  -> "PNG", "image/png"
+                //   JPEG payload -> "JFIF", "image/jpeg"
+                //   either       -> CF_DIBV5 (Windows synthesizes CF_DIB / CF_BITMAP)
+                // Every format is advertised with a NULL handle: nothing is materialized
+                // until a consumer actually requests one (WM_RENDERFORMAT), so a copy
+                // that nobody pastes costs zero memory. Encoded-image formats are
+                // advertised FIRST so they lead the clipboard's enumeration order; the
+                // origin + privacy markers are written afterward.
+                UINT encodedFormats[2] = { 0, 0 };
+                int encodedFormatCount = 0;
+                if (payload->meta.formatId == CLIPP_FORMAT_PNG) {
+                    encodedFormats[encodedFormatCount++] = PngClipboardFormat();
+                    encodedFormats[encodedFormatCount++] = PngMimeClipboardFormat();
+                }
+                else if (payload->meta.formatId == CLIPP_FORMAT_JPEG) {
+                    encodedFormats[encodedFormatCount++] = JfifClipboardFormat();
+                    encodedFormats[encodedFormatCount++] = JpegMimeClipboardFormat();
+                }
+
+                bool advertisedAny = false;
+                for (int idx = 0; idx < encodedFormatCount; ++idx) {
+                    const UINT fmt = encodedFormats[idx];
+                    if (fmt == 0) {
+                        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Could not register an encoded-image clipboard format for %ls payload; relying on CF_DIBV5.",
+                            ClippClipboardFormatNameW(payload->meta.formatId));
+                        continue;
+                    }
+                    SetLastError(ERROR_SUCCESS);
+                    HANDLE h = ::SetClipboardData(fmt, nullptr);
+                    const DWORD err = GetLastError();
+                    if (h != nullptr || err == ERROR_SUCCESS) {
+                        advertisedAny = true;
+                        g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Advertised delayed clipboard image format id=%u from %ls payload (encoded: %zu bytes)",
+                            fmt,
+                            ClippClipboardFormatNameW(payload->meta.formatId),
+                            payload->EncodedBytes().size());
+                    }
+                    else {
+                        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to advertise delayed clipboard image format id=%u (GetLastError=%lu)", fmt, err);
+                    }
+                }
+
+                // CF_DIBV5 compatibility path (also delayed). Windows synthesizes
+                // CF_DIB / CF_BITMAP from it on demand, even after this process exits,
+                // so legacy consumers (Paint, Word) still get a clean classic DIB.
                 SetLastError(ERROR_SUCCESS);
-                HANDLE delayedHandle = ::SetClipboardData(CF_DIB, nullptr);
+                HANDLE delayedHandle = ::SetClipboardData(CF_DIBV5, nullptr);
                 const DWORD delayedError = GetLastError();
                 if (delayedHandle != nullptr || delayedError == ERROR_SUCCESS) {
-                    wroteClipboard = true;
-                    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Advertised delayed CF_DIB clipboard rendering from %ls payload (encoded: %zu bytes)",
+                    advertisedAny = true;
+                    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Advertised delayed CF_DIBV5 clipboard rendering from %ls payload (encoded: %zu bytes)",
                         ClippClipboardFormatNameW(payload->meta.formatId),
                         payload->EncodedBytes().size());
                 }
                 else {
+                    g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to advertise delayed CF_DIBV5 clipboard rendering (GetLastError=%lu)", delayedError);
+                }
+
+                if (advertisedAny) {
+                    wroteClipboard = true;
+                }
+                else {
                     ClearDelayedClipboardRenderState();
-                    g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Failed to advertise delayed CF_DIB clipboard rendering (GetLastError=%lu)", delayedError);
                 }
             }
             else {
