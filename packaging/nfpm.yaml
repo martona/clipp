@@ -46,8 +46,16 @@ overrides:
     recommends:
       - avahi-daemon
   rpm:
+    # Depend on the SONAMEs, not a package name: Fedora/RHEL ship the runtime libs in
+    # `avahi-libs` while openSUSE names it `libavahi-client3`, but BOTH provide these
+    # soname capabilities (rpm auto-generates Provides for each .so). One rpm thus
+    # satisfies both families -- a package-name dep ("avahi-libs") is unresolvable on
+    # SUSE (`nothing provides 'avahi-libs'`). The "()(64bit)" suffix is how rpm tags a
+    # 64-bit ELF soname capability; it's correct for both x86_64 and aarch64 (the tag
+    # denotes 64-bit-ness, not the specific arch).
     depends:
-      - avahi-libs
+      - libavahi-client.so.3()(64bit)
+      - libavahi-common.so.3()(64bit)
     recommends:
       - avahi
   archlinux:
