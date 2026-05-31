@@ -17,6 +17,7 @@ enum class OsType : uint16_t {
     MacOS   = 2,
     IOS_iPhone = 3,
     IOS_iPad = 4,
+    Linux   = 5,
 };
 
 inline OsType GetLocalOsType() {
@@ -34,6 +35,8 @@ inline OsType GetLocalOsType() {
     #else
         return OsType::MacOS;
     #endif
+#elif defined(__linux__)
+    return OsType::Linux;
 #else
     return OsType::Unknown;
 #endif
