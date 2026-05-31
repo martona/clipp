@@ -370,9 +370,150 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  build-linux:
+    name: Build Linux (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    # Build inside an OLD-glibc base (Debian 11 / glibc 2.31) so the binary runs on
+    # anything from ~2021 on (Debian 11+, Ubuntu 20.04+, RHEL 9+, Fedora 33+). The
+    # C++20 runtime is statically linked (-static-libstdc++/-static-libgcc, set in
+    # CMakeLists), so the only runtime deps are glibc + libavahi-client. Native arm64
+    # runner (no QEMU) -- both arches run the identical container.
+    container:
+      image: debian:11
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    # The scripts and steps below use bash-isms ([[ ]], heredocs). A container job's
+    # default shell can be plain sh, so pin bash (present in the debian:11 base).
+    defaults:
+      run:
+        shell: bash
+    env:
+      CLIPP_CACHE_DIR: ${{ github.workspace }}/clipp-cache
+      VCPKG_ROOT: ${{ github.workspace }}/v
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-cache
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/vcpkg-cache,readwrite
+    steps:
+      # debian:11 is bare -- install the toolchain build_linux.sh expects plus the
+      # bits vcpkg needs to build libsodium from source, and the Avahi client headers.
+      # gettext-base provides envsubst for package_linux.sh's config rendering; rpm and
+      # zstd let nfpm emit .rpm / Arch packages; sudo so the scripts' calls are no-ops
+      # as root in-container.
+      - name: Install toolchain
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config git curl ca-certificates \
+            autoconf autoconf-archive automake libtool \
+            libavahi-client-dev \
+            gettext-base rpm zstd \
+            zip unzip tar
+
+      - name: Checkout clipp
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Read vcpkg baseline
+        id: vcpkg-baseline
+        run: |
+          # Grep the 40-hex baseline straight out of the manifest. (The macOS/Windows
+          # jobs use python/PowerShell JSON parsing; the bare debian:11 base has no
+          # python3, and a grep is sufficient for a single well-formed field.)
+          baseline="$(grep -oE '"builtin-baseline"[[:space:]]*:[[:space:]]*"[0-9a-f]+"' src/vcpkg.json | grep -oE '[0-9a-f]{40}')"
+          if [[ -z "$baseline" ]]; then
+            echo "src/vcpkg.json must define builtin-baseline for CI." >&2
+            exit 1
+          fi
+          echo "ref=$baseline" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout vcpkg
+        run: |
+          git clone --no-tags https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" checkout --detach "${{ steps.vcpkg-baseline.outputs.ref }}"
+
+      - name: Bootstrap vcpkg
+        run: "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+
+      - name: Prepare vcpkg binary cache
+        run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+
+      - name: Cache vcpkg binaries
+        uses: actions/cache@v5
+        with:
+          path: vcpkg-cache
+          key: linux-${{ matrix.arch }}-glibc231-vcpkg-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}
+          restore-keys: |
+            linux-${{ matrix.arch }}-glibc231-vcpkg-
+
+      - name: Build Release
+        run: bash ./scripts/build_linux.sh --release --version "${{ inputs.version }}"
+
+      - name: Verify dependency closure
+        run: |
+          set -euo pipefail
+          binary="build/linux-release/clipp"
+          if [[ ! -x "$binary" ]]; then
+            echo "Missing expected executable: $binary" >&2
+            exit 1
+          fi
+          echo "=== readelf -d NEEDED ==="
+          readelf -d "$binary" | grep NEEDED || true
+          # Guard the static-runtime invariant: libstdc++/libgcc_s must NOT be dynamic
+          # deps, and the vcpkg libs must be absent (statically baked in). If any
+          # reappear, the package's declared deps would be wrong.
+          needed="$(readelf -d "$binary" | grep NEEDED || true)"
+          for forbidden in libstdc++ libgcc_s libsodium libxxhash libzstd libutf8proc; do
+            if echo "$needed" | grep -q "$forbidden"; then
+              echo "Unexpected dynamic dependency on $forbidden — static-link invariant broken." >&2
+              exit 1
+            fi
+          done
+          echo "Static-runtime invariant holds (only avahi + libc are dynamic)."
+
+      - name: Package (deb, rpm, Arch)
+        run: |
+          set -euo pipefail
+          bash ./scripts/package_linux.sh \
+            --version "${{ inputs.version }}" \
+            --binary build/linux-release/clipp \
+            --arch ${{ matrix.arch }} \
+            --outdir dist
+
+      - name: Stage release artifacts
+        run: |
+          set -euo pipefail
+          ver="${{ inputs.version }}"
+          arch="${{ matrix.arch }}"
+          mkdir -p release-stage
+          # Rename into the clipp-$ver-linux-$arch.<ext> convention used by the other
+          # platforms. nfpm's native names differ per format; normalize for the release.
+          deb="$(ls dist/*.deb)"
+          rpm="$(ls dist/*.rpm)"
+          pkg="$(ls dist/*.pkg.tar.zst)"
+          cp "$deb" "release-stage/clipp-$ver-linux-$arch.deb"
+          cp "$rpm" "release-stage/clipp-$ver-linux-$arch.rpm"
+          cp "$pkg" "release-stage/clipp-$ver-linux-$arch.pkg.tar.zst"
+          # Also ship the raw binary for users who just want it on PATH themselves.
+          cp build/linux-release/clipp "release-stage/clipp-$ver-linux-$arch"
+          ls -la release-stage/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: release-stage/*
+          if-no-files-found: error
+          retention-days: 1
+
   publish:
     name: Create release
-    needs: [build-windows, build-macos]
+    needs: [build-windows, build-macos, build-linux]
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts

@@ -1,0 +1,55 @@
+# nfpm config: one binary -> .deb, .rpm, and Arch .pkg.tar.zst.
+# https://nfpm.goreleaser.com/configuration/
+#
+# Driven by scripts/package_linux.sh. The ${...} tokens below are NOT expanded by
+# nfpm (its contents[].src glob arrives literal) -- the script renders them with
+# envsubst/perl into a concrete config before invoking `nfpm package` per packager.
+#
+# Dependencies: the release binary statically links libstdc++/libgcc and the vcpkg
+# libs (libsodium/xxhash/zstd/utf8proc), so the ONLY shared-lib dependency is
+# libavahi-client (+ its transitive libavahi-common, pulled by the avahi package).
+# avahi-daemon is a *weak* dep: apt/dnf install Recommends by default, so a normal
+# install pulls the daemon onto the box (discovery needs it running) without
+# hard-failing on a deliberately stripped system.
+
+name: clipp
+arch: ${NFPM_ARCH}
+platform: linux
+version: ${NFPM_VERSION}
+# Our versions are 4-part W.X.Y.Z (e.g. 1.0.4.105), which is not semver -- tell nfpm
+# to pass it through verbatim rather than trying to parse it.
+version_schema: none
+section: utils
+priority: optional
+maintainer: Marton Anka <martona@users.noreply.github.com>
+vendor: Marton Anka
+homepage: https://github.com/martona/clipp
+license: MIT
+description: |
+  Cross-platform clipboard sync (terminal client).
+  Shares clipboard text between devices over the LAN, end-to-end encrypted with a
+  key derived from a network name and secret you choose. This package is the
+  headless command-line client: `clipp copy` reads stdin onto the shared clipboard
+  and `clipp paste` writes the newest item to stdout. Peer discovery uses Avahi
+  (mDNS/DNS-SD), so avahi-daemon must be running for copy/paste to find devices.
+
+contents:
+  - src: ${CLIPP_BINARY}
+    dst: /usr/bin/clipp
+    file_info:
+      mode: 0755
+
+overrides:
+  deb:
+    depends:
+      - libavahi-client3
+    recommends:
+      - avahi-daemon
+  rpm:
+    depends:
+      - avahi-libs
+    recommends:
+      - avahi
+  archlinux:
+    depends:
+      - avahi

@@ -395,6 +395,17 @@ elseif (UNIX AND NOT APPLE)
         PkgConfig::AVAHI
         utf8proc::utf8proc
     )
+    # Statically link the C++ runtime (libstdc++) and the GCC support lib (libgcc).
+    # We build releases on an old-glibc base (Debian 11 / glibc 2.31) for broad
+    # compatibility, but that base's libstdc++ is too old for our C++20 binary on
+    # NEWER targets -- and conversely a new build host's libstdc++ wouldn't exist on
+    # old targets. Baking both in decouples the C++ runtime from the target entirely,
+    # leaving only glibc + libavahi as runtime deps. Deliberately NOT fully static:
+    # glibc must stay dynamic or NSS breaks getpwuid()/gethostname(), which the
+    # Settings default-name and LocalPeerName paths rely on. GCC/Clang only.
+    if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        target_link_options(clipp-linux PRIVATE -static-libstdc++ -static-libgcc)
+    endif()
     # Let the binary land at the root of the build tree ($BUILD_DIR/clipp). We
     # deliberately do NOT pin RUNTIME_OUTPUT_DIRECTORY into the source tree the way
     # the Windows target does: build_linux.sh relocates the build tree to local disk

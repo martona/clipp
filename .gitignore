@@ -101,6 +101,7 @@ xcuserdata/
 build/
 build-mas/
 build-xcode/
+dist/
 CMakeCache.txt
 CMakeFiles/
 CMakeScripts/
