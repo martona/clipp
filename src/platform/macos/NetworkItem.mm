@@ -2,6 +2,7 @@
 
 #ifdef __APPLE__
 
+#include "OsGlyphs.h"
 #include "platform/uiClippPage.h"
 #include "UiHelpers.h"
 
@@ -10,6 +11,7 @@
 #include <string>
 
 #import <AppKit/AppKit.h>
+#import <CoreText/CoreText.h>
 
 @interface MacOSNetworkItemTarget : NSObject {
 @private
@@ -20,6 +22,30 @@
 @end
 
 namespace {
+constexpr CGFloat kBadgeViewPx = 27.0;     // family glyph box / badge view size
+constexpr CGFloat kBadgeDevicePx = 13.0;   // device badge box
+constexpr CGFloat kBadgeGlyphFill = 0.85;  // font size as a fraction of its box
+                                           // (CoreText line height > point size, so
+                                           // < 1.0 avoids vertical clipping; raise to
+                                           // fill more)
+constexpr CGFloat kBadgeHaloPct = 9.0;     // halo as % of device font (NSStrokeWidth)
+
+void EnsureSymbolsFontRegistered() {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSURL* url = [[NSBundle mainBundle] URLForResource:@"ClippSymbols" withExtension:@"ttf"];
+        if (url != nil) {
+            CTFontManagerRegisterFontsForURL((__bridge CFURLRef)url, kCTFontManagerScopeProcess, NULL);
+        }
+    });
+}
+
+NSString* GlyphString(char32_t codepoint) {
+    return [[NSString alloc] initWithBytes:&codepoint
+                                    length:sizeof(codepoint)
+                                  encoding:NSUTF32LittleEndianStringEncoding];
+}
+
 NSString* DisplayHostName(const std::wstring& hostName) {
     return MacOSToNSString(uiClippPage::DisplayHostNameOrUnknown(hostName));
 }
@@ -33,9 +59,140 @@ NSString* FormatConnectionState(bool connected) {
 }
 }
 
+// Compound device mark: the OS-family glyph (primary) with the device-type glyph
+// overlaid as a smaller badge over its bottom-right quarter, with a background-color
+// halo knocked out of the family glyph (mirrors the Windows treatment). Drawn in
+// drawRect: so AppKit re-renders on light/dark switches automatically.
+@interface ClippGlyphBadgeView : NSView
+- (void)setOsType:(OsType)osType;
+@end
+
+@implementation ClippGlyphBadgeView {
+    OsType _osType;
+}
+
+- (void)setOsType:(OsType)osType {
+    _osType = osType;
+    [self setNeedsDisplay:YES];
+}
+
+- (NSSize)intrinsicContentSize {
+    return NSMakeSize(kBadgeViewPx, kBadgeViewPx);
+}
+
+- (void)drawGlyph:(char32_t)codepoint
+             fill:(NSColor*)fill
+           stroke:(NSColor*)stroke
+        strokePct:(CGFloat)strokePct
+           inRect:(NSRect)rect {
+    if (codepoint == 0) {
+        return;
+    }
+    NSString* str = GlyphString(codepoint);
+    // Reference size only -- the glyph is scaled to fit `rect` below, so the absolute
+    // point size doesn't matter (it just keeps the metrics precise).
+    const CGFloat refSize = 128.0;
+    CTFontRef font = CTFontCreateWithName(CFSTR("Clipp Symbols"), refSize, NULL);
+    if (str == nil || font == NULL) {
+        if (font != NULL) {
+            CFRelease(font);
+        }
+        return;
+    }
+
+    // Shape into a single glyph (this is how the astral md-* codepoints survive the
+    // surrogate pair) and capture the glyph id + the font CoreText actually used.
+    NSDictionary* attrs = @{ (__bridge NSString*)kCTFontAttributeName: (__bridge id)font };
+    NSAttributedString* attributed = [[NSAttributedString alloc] initWithString:str attributes:attrs];
+    CTLineRef line = CTLineCreateWithAttributedString((__bridge CFAttributedStringRef)attributed);
+    CFArrayRef runs = CTLineGetGlyphRuns(line);
+    CGGlyph glyph = 0;
+    CTFontRef glyphFont = NULL;
+    if (CFArrayGetCount(runs) > 0) {
+        CTRunRef run = (CTRunRef)CFArrayGetValueAtIndex(runs, 0);
+        if (CTRunGetGlyphCount(run) > 0) {
+            CTRunGetGlyphs(run, CFRangeMake(0, 1), &glyph);
+            CTFontRef runFont = (CTFontRef)CFDictionaryGetValue(CTRunGetAttributes(run), kCTFontAttributeName);
+            if (runFont != NULL) {
+                glyphFont = (CTFontRef)CFRetain(runFont);
+            }
+        }
+    }
+    CFRelease(line);
+    if (glyphFont == NULL || glyph == 0) {
+        CFRelease(font);
+        return;
+    }
+
+    // Fit the glyph's TRUE ink bounds into rect (times the fill fraction) and center
+    // it. Icon glyphs have wildly different advances/metrics, so measuring the actual
+    // path bbox and scaling to fit is the only reliable way to size + place them --
+    // and it can't overflow the box, so nothing clips at the view edge.
+    const CGRect ink = CTFontGetBoundingRectsForGlyphs(glyphFont, kCTFontOrientationHorizontal, &glyph, NULL, 1);
+    if (ink.size.width > 0.0 && ink.size.height > 0.0) {
+        const CGFloat scale = kBadgeGlyphFill * MIN(rect.size.width / ink.size.width,
+                                                    rect.size.height / ink.size.height);
+        CGContextRef ctx = [NSGraphicsContext currentContext].CGContext;
+        CGContextSaveGState(ctx);
+        CGContextTranslateCTM(ctx, NSMidX(rect), NSMidY(rect));
+        CGContextScaleCTM(ctx, scale, scale);
+
+        const CGPoint pos = CGPointMake(-(ink.origin.x + ink.size.width / 2.0),
+                                        -(ink.origin.y + ink.size.height / 2.0));
+
+        // Halo FIRST (stroke only, bg color), then the green fill ON TOP. Order
+        // matters: a single fill+stroke pass strokes over the fill, so the bg halo
+        // eats into the green (erasing thin glyphs entirely). Drawing the fill last
+        // keeps the glyph fully visible and leaves the stroke as an outward halo only.
+        // Width is doubled because the fill covers the stroke's inner half.
+        if (stroke != nil && strokePct > 0.0) {
+            CGContextSetTextDrawingMode(ctx, kCGTextStroke);
+            CGContextSetStrokeColorWithColor(ctx, stroke.CGColor);
+            CGContextSetLineWidth(ctx, refSize * strokePct / 100.0 * 2.0);
+            CGContextSetLineJoin(ctx, kCGLineJoinRound);
+            CTFontDrawGlyphs(glyphFont, &glyph, &pos, 1, ctx);
+        }
+        CGContextSetTextDrawingMode(ctx, kCGTextFill);
+        CGContextSetFillColorWithColor(ctx, fill.CGColor);
+        CTFontDrawGlyphs(glyphFont, &glyph, &pos, 1, ctx);
+        CGContextRestoreGState(ctx);
+    }
+
+    CFRelease(glyphFont);
+    CFRelease(font);
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    (void)dirtyRect;
+    EnsureSymbolsFontRegistered();
+    const clipp::OsGlyphs glyphs = clipp::OsGlyphsFor(_osType);
+    const CGFloat boxW = self.bounds.size.width;
+
+    // Family glyph: primary, blue, fills the box (macOS arrow palette: outgoing=blue).
+    [self drawGlyph:glyphs.family
+               fill:[NSColor systemBlueColor]
+             stroke:nil
+          strokePct:0.0
+             inRect:self.bounds];
+
+    // Device glyph: smaller green badge over the bottom-right quarter, with a
+    // window-background halo so it knocks cleanly out of the family glyph.
+    if (glyphs.device != 0) {
+        const NSRect devRect = NSMakeRect(boxW - kBadgeDevicePx, 0.0, kBadgeDevicePx, kBadgeDevicePx);
+        [self drawGlyph:glyphs.device
+                   fill:[NSColor systemGreenColor]
+                 stroke:[NSColor windowBackgroundColor]
+              strokePct:kBadgeHaloPct
+                 inRect:devRect];
+    }
+}
+
+@end
+
 MacOSNetworkItemView::MacOSNetworkItemView(const PeerDisplayItem& item)
     : disclosureTarget_([[MacOSNetworkItemTarget alloc] initWithOwner:this]) {
     BuildView();
+    UpdateOsType(item.osType);
     UpdateHostName(item.hostName);
     UpdateIncomingConnection(item.hasIncomingConnection);
     UpdateOutgoingConnection(item.hasOutgoingConnection);
@@ -64,6 +221,11 @@ void MacOSNetworkItemView::UpdateHostName(const std::wstring& hostName) {
 }
 
 void MacOSNetworkItemView::UpdateHostID(const HostId&) {
+}
+
+void MacOSNetworkItemView::UpdateOsType(OsType osType) {
+    osType_ = osType;
+    [glyphBadge_ setOsType:osType];
 }
 
 void MacOSNetworkItemView::UpdateIncomingConnection(bool connected) {
@@ -163,7 +325,8 @@ void MacOSNetworkItemView::BuildView() {
     NSView* headerRow = [[NSView alloc] initWithFrame:NSZeroRect];
     headerRow.translatesAutoresizingMaskIntoConstraints = NO;
 
-    NSImageView* networkIcon = MacOSMakeSymbolImageView(@"network", CLP_NS(CLP_UI_NETWORK), [NSColor secondaryLabelColor]);
+    glyphBadge_ = [[ClippGlyphBadgeView alloc] initWithFrame:NSZeroRect];
+    glyphBadge_.translatesAutoresizingMaskIntoConstraints = NO;
     NSStackView* titleStack = CreateTitleStack();
     NSStackView* statusStack = CreateStatusStack();
     NSButton* disclosureButton = CreateDisclosureButton();
@@ -173,7 +336,7 @@ void MacOSNetworkItemView::BuildView() {
     [statusStack setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
     [statusStack setContentCompressionResistancePriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
 
-    [headerRow addSubview:networkIcon];
+    [headerRow addSubview:glyphBadge_];
     [headerRow addSubview:titleStack];
     [headerRow addSubview:statusStack];
     [headerRow addSubview:disclosureButton];
@@ -208,10 +371,10 @@ void MacOSNetworkItemView::BuildView() {
         [headerRow.widthAnchor constraintEqualToAnchor:cardStack.widthAnchor],
         [headerRow.heightAnchor constraintGreaterThanOrEqualToConstant:64.0],
 
-        [networkIcon.leadingAnchor constraintEqualToAnchor:headerRow.leadingAnchor constant:16.0],
-        [networkIcon.centerYAnchor constraintEqualToAnchor:headerRow.centerYAnchor],
+        [glyphBadge_.leadingAnchor constraintEqualToAnchor:headerRow.leadingAnchor constant:16.0],
+        [glyphBadge_.centerYAnchor constraintEqualToAnchor:headerRow.centerYAnchor],
 
-        [titleStack.leadingAnchor constraintEqualToAnchor:networkIcon.trailingAnchor constant:12.0],
+        [titleStack.leadingAnchor constraintEqualToAnchor:glyphBadge_.trailingAnchor constant:12.0],
         [titleStack.centerYAnchor constraintEqualToAnchor:headerRow.centerYAnchor],
         [titleStack.topAnchor constraintGreaterThanOrEqualToAnchor:headerRow.topAnchor constant:12.0],
         [titleStack.bottomAnchor constraintLessThanOrEqualToAnchor:headerRow.bottomAnchor constant:-12.0],

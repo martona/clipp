@@ -11,6 +11,7 @@
 #import <AppKit/AppKit.h>
 
 @class MacOSNetworkItemTarget;
+@class ClippGlyphBadgeView;
 
 class MacOSNetworkItemView {
 public:
@@ -20,6 +21,7 @@ public:
     NSButton* DisclosureButton() const;
 
     void ToggleDisclosure();
+    void UpdateOsType(OsType osType);
     void UpdateHostName(const std::wstring& hostName);
     void UpdateHostID(const HostId& hostID);
     void UpdateIncomingConnection(bool connected);
@@ -41,6 +43,7 @@ private:
     NSView* card_ = nullptr;
     NSTextField* title_ = nullptr;
     NSTextField* subtitle_ = nullptr;
+    ClippGlyphBadgeView* glyphBadge_ = nullptr;
     NSImageView* incomingIcon_ = nullptr;
     NSImageView* outgoingIcon_ = nullptr;
     NSButton* disclosureButton_ = nullptr;
@@ -54,6 +57,7 @@ private:
     std::string connectedForText_;
     bool hasIncoming_ = false;
     PeerConnState outgoingState_ = PeerConnState::Connecting;
+    OsType osType_ = OsType::Unknown;
 };
 
 #endif

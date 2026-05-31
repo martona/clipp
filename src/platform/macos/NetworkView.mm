@@ -152,6 +152,9 @@ void MacOSNetworkView::UpdateEntry(Entry& entry, const PeerDisplayItem& item, st
     if (entry.item.hostID != item.hostID) {
         entry.view->UpdateHostID(item.hostID);
     }
+    if (entry.item.osType != item.osType) {
+        entry.view->UpdateOsType(item.osType);
+    }
     if (entry.item.hasIncomingConnection != item.hasIncomingConnection) {
         entry.view->UpdateIncomingConnection(item.hasIncomingConnection);
     }

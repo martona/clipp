@@ -292,6 +292,10 @@ elseif (APPLE)
     list(APPEND CLIPP_MACOS_PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/MDNSDiscovery_Apple.mm")
     set(CLIPP_MACOS_APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/src/resources/Clipp.icns")
     set(CLIPP_MACOS_MENU_BAR_ICON "${CMAKE_CURRENT_SOURCE_DIR}/src/resources/ClippMenuBarTemplate.png")
+    # Device-type peer glyphs: the committed Nerd Fonts subset, registered at runtime
+    # via CTFontManager (see platform/macos/NetworkItem.mm). Regenerate with
+    # tools/symbols/build_symbols_font.py.
+    set(CLIPP_MACOS_SYMBOLS_FONT "${CMAKE_CURRENT_SOURCE_DIR}/src/resources/ClippSymbols.ttf")
 
     # About-box artwork: the master is a 1024x1024 transparent PNG (~720KB) -- too big
     # to ship when the About box renders it at ~112px. The app icon (Clipp.icns) is the
@@ -314,6 +318,7 @@ elseif (APPLE)
         "${CLIPP_MACOS_APP_ICON}"
         "${CLIPP_MACOS_MENU_BAR_ICON}"
         "${CLIPP_MACOS_ABOUT_IMAGE}"
+        "${CLIPP_MACOS_SYMBOLS_FONT}"
         PROPERTIES MACOSX_PACKAGE_LOCATION "Resources"
     )
 
@@ -323,6 +328,7 @@ elseif (APPLE)
         "${CLIPP_MACOS_APP_ICON}"
         "${CLIPP_MACOS_MENU_BAR_ICON}"
         "${CLIPP_MACOS_ABOUT_IMAGE}"
+        "${CLIPP_MACOS_SYMBOLS_FONT}"
     )
     clipp_apply_common_target_settings(clipp)
     target_compile_options(clipp PRIVATE "-Wno-deprecated-declarations")
