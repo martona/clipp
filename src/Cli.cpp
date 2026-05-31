@@ -99,12 +99,12 @@ void OutLine(const std::wstring& line) {
 void ErrLine(const std::wstring& line) {
 #ifdef _WIN32
     if (StdHandleIsConsole(STD_ERROR_HANDLE)) {
-        std::wcerr << L"\x1b[0;31m" << line << L"\x1b[0m\n";
+        std::wcerr << L"\x1b[0;91m" << line << L"\x1b[0m\n";
         return;
     }
 #endif
     const std::string utf8 = clipp_platform_detail::Utf16ToUtf8String(line);
-    if (StderrIsTty()) std::cerr << "\x1b[0;31m" << utf8 << "\x1b[0m\n";
+    if (StderrIsTty()) std::cerr << "\x1b[0;91m" << utf8 << "\x1b[0m\n";
     else               std::cerr << utf8 << '\n';
 }
 
