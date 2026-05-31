@@ -16,6 +16,7 @@
 #include <string>
 
 #include "Logger.h"
+#include "platform.h"  // clipp_platform_detail::Utf16ToUtf8String
 
 #pragma comment(lib, "dbghelp.lib")
 #pragma comment(lib, "shell32.lib")
@@ -239,6 +240,12 @@ void InstallCrashHandler() {
             dir.size(), dir.c_str());
         return;
     }
+
+    // Minidumps can contain clipboard contents and other process memory, so don't let
+    // them accumulate. Sweep the same retention window the logger uses, keyed off the
+    // shared clipp-YYYYMMDD- name. The heap is healthy here (install time), so the
+    // filesystem work is safe; PruneAgedFiles never throws.
+    Logger::PruneAgedFiles(clipp_platform_detail::Utf16ToUtf8String(dir), "clipp-", ".dmp", Logger::kDefaultRetentionDays);
 
     std::wmemcpy(g_dumpDirectory, dir.c_str(), dir.size() + 1);
 

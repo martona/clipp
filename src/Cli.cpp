@@ -25,6 +25,7 @@
 #include "OneShotPeer.h"
 #include "Settings.h"
 #include "platform.h"
+#include "platform/LogPaths.h"
 #include "version.h"
 
 #ifdef _WIN32
@@ -650,6 +651,21 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
         std::cout.flush();
         return 0;
     }
+
+#if defined(_WIN32) || defined(__APPLE__)
+    // Persist this launch's logs to a rolling per-launch file (and prune the
+    // retention window) now that the level is decided and the usage early-return
+    // above has been passed, so a bare `--help` launch writes nothing. The file is
+    // lazy-opened on the first emitted line, so a silent command (level Off) leaves
+    // no file behind. Desktop only -- the Linux CLI logs to stderr by design and iOS
+    // file logs are inaccessible without archaeology.
+    {
+        std::string logDir;
+        if (clipp::ResolveLogDirectory(logDir)) {
+            g_logger.EnableFileLogging(logDir);
+        }
+    }
+#endif
 
 #ifdef _WIN32
     // Install the crash handler now that the log level is decided: its "installed"
