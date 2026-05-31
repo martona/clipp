@@ -52,7 +52,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Version (W.X.Y.Z). Passed as -DCLIPP_VERSION=...; defaults to 0.0.0.0 so plain
 # `cmake ...` / `./scripts/build_*` runs without any version flag still configure.
 if (NOT DEFINED CLIPP_VERSION OR CLIPP_VERSION STREQUAL "")
-    set(CLIPP_VERSION "1.1.0.110")
+    set(CLIPP_VERSION "1.1.1.111")
 endif()
 
 string(REPLACE "." ";" _clipp_version_parts "${CLIPP_VERSION}")
