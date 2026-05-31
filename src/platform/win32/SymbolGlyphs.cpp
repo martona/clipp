@@ -7,9 +7,11 @@
 #include <wincodec.h>
 #include <robuffer.h>
 
+#include <cmath>
 #include <cstring>
+#include <map>
 #include <string>
-#include <unordered_map>
+#include <tuple>
 
 #include <winrt/Windows.Storage.Streams.h>
 
@@ -36,12 +38,11 @@ std::wstring Utf16FromCodepoint(char32_t cp) {
     return s;
 }
 
-uint64_t CacheKey(char32_t cp, winrt::Windows::UI::Color c) {
-    const uint32_t argb = (static_cast<uint32_t>(c.A) << 24) |
-                          (static_cast<uint32_t>(c.R) << 16) |
-                          (static_cast<uint32_t>(c.G) << 8) |
-                          static_cast<uint32_t>(c.B);
-    return (static_cast<uint64_t>(cp) << 32) | argb;
+uint32_t ColorU32(winrt::Windows::UI::Color c) {
+    return (static_cast<uint32_t>(c.A) << 24) |
+           (static_cast<uint32_t>(c.R) << 16) |
+           (static_cast<uint32_t>(c.G) << 8) |
+           static_cast<uint32_t>(c.B);
 }
 
 }  // namespace
@@ -53,7 +54,9 @@ struct SymbolGlyphs::Impl {
     winrt::com_ptr<ID2D1Factory> d2d;
     winrt::com_ptr<IWICImagingFactory> wic;
     bool ready = false;
-    std::unordered_map<uint64_t, winrt::Windows::UI::Xaml::Media::Imaging::WriteableBitmap> cache;
+    // Keyed by (codepoint, fill ARGB, halo ARGB, halo-fraction x1000).
+    std::map<std::tuple<char32_t, uint32_t, uint32_t, int>,
+             winrt::Windows::UI::Xaml::Media::Imaging::WriteableBitmap> cache;
 };
 
 SymbolGlyphs& SymbolGlyphs::Instance() {
@@ -108,12 +111,16 @@ SymbolGlyphs::SymbolGlyphs() : impl_(std::make_shared<Impl>()) {
 }
 
 winrt::Windows::UI::Xaml::Media::Imaging::WriteableBitmap
-SymbolGlyphs::Glyph(char32_t codepoint, winrt::Windows::UI::Color color) {
+SymbolGlyphs::Glyph(char32_t codepoint, winrt::Windows::UI::Color fill,
+                    winrt::Windows::UI::Color halo, float haloFrac) {
     using winrt::Windows::UI::Xaml::Media::Imaging::WriteableBitmap;
 
     if (codepoint == 0 || !impl_->ready) return nullptr;
 
-    const uint64_t key = CacheKey(codepoint, color);
+    const bool withHalo = (haloFrac > 0.0f && halo.A > 0);
+    const auto key = std::make_tuple(codepoint, ColorU32(fill),
+                                     withHalo ? ColorU32(halo) : 0u,
+                                     withHalo ? static_cast<int>(haloFrac * 1000.0f + 0.5f) : 0);
     if (auto it = impl_->cache.find(key); it != impl_->cache.end()) {
         return it->second;
     }
@@ -132,29 +139,51 @@ SymbolGlyphs::Glyph(char32_t codepoint, winrt::Windows::UI::Color color) {
         winrt::check_hresult(impl_->d2d->CreateWicBitmapRenderTarget(
             wicBitmap.get(), rtProps, rt.put()));
 
+        // The halo dilates the glyph outward, so shrink the glyph to leave room.
+        const float haloR = withHalo ? haloFrac * static_cast<float>(kRenderPx) : 0.0f;
+        const float fontSize = (static_cast<float>(kRenderPx) - 2.0f * haloR) * 0.92f;
+
         winrt::com_ptr<IDWriteTextFormat> fmt;
         winrt::check_hresult(impl_->dwrite->CreateTextFormat(
             kFontFamily, impl_->collection.get(),
             DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-            kRenderPx * 0.92f, L"", fmt.put()));
+            fontSize, L"", fmt.put()));
         fmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
         fmt->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
 
-        winrt::com_ptr<ID2D1SolidColorBrush> brush;
-        winrt::check_hresult(rt->CreateSolidColorBrush(
-            D2D1::ColorF(color.R / 255.0f, color.G / 255.0f, color.B / 255.0f, color.A / 255.0f),
-            brush.put()));
+        auto makeBrush = [&](winrt::Windows::UI::Color c) {
+            winrt::com_ptr<ID2D1SolidColorBrush> b;
+            winrt::check_hresult(rt->CreateSolidColorBrush(
+                D2D1::ColorF(c.R / 255.0f, c.G / 255.0f, c.B / 255.0f, c.A / 255.0f), b.put()));
+            return b;
+        };
+        auto fillBrush = makeBrush(fill);
+        winrt::com_ptr<ID2D1SolidColorBrush> haloBrush;
+        if (withHalo) {
+            haloBrush = makeBrush(halo);
+        }
 
         const std::wstring text = Utf16FromCodepoint(codepoint);
-        const D2D1_RECT_F layout = D2D1::RectF(0.0f, 0.0f,
-                                               static_cast<float>(kRenderPx),
-                                               static_cast<float>(kRenderPx));
+        auto drawAt = [&](ID2D1SolidColorBrush* brush, float dx, float dy) {
+            const D2D1_RECT_F lr = D2D1::RectF(dx, dy,
+                                               static_cast<float>(kRenderPx) + dx,
+                                               static_cast<float>(kRenderPx) + dy);
+            rt->DrawText(text.c_str(), static_cast<UINT32>(text.size()), fmt.get(),
+                         lr, brush, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
+        };
 
         rt->BeginDraw();
         rt->Clear(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.0f));
-        rt->DrawText(text.c_str(), static_cast<UINT32>(text.size()), fmt.get(),
-                     layout, brush.get(), D2D1_DRAW_TEXT_OPTIONS_NONE,
-                     DWRITE_MEASURING_MODE_NATURAL);
+        if (withHalo) {
+            // Stamp the glyph in the halo color around a ring -> a shape-hugging
+            // outline that fakes the bold weight the icon font doesn't have.
+            constexpr int kDirs = 16;
+            for (int i = 0; i < kDirs; ++i) {
+                const float a = static_cast<float>(i) * 6.2831853f / static_cast<float>(kDirs);
+                drawAt(haloBrush.get(), haloR * std::cos(a), haloR * std::sin(a));
+            }
+        }
+        drawAt(fillBrush.get(), 0.0f, 0.0f);
         winrt::check_hresult(rt->EndDraw());
 
         // Copy the premultiplied-BGRA WIC pixels into a WriteableBitmap (same format).

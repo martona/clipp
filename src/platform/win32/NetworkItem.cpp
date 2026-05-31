@@ -24,6 +24,14 @@
 #include "HostId.h"
 
 namespace {
+
+// Compound device-mark tuning (display px unless noted). The OS-family glyph is the
+// primary icon; the device-type glyph is a smaller badge over its bottom-right
+// quarter, with a background-color halo knocked out of the family glyph behind it.
+constexpr double kFamilyGlyphPx = 27.0;    // +50% vs the original 18px
+constexpr double kDeviceGlyphPx = 14.0;    // badge box (incl. halo room)
+constexpr float  kDeviceHaloFrac = 0.09f;  // halo width as a fraction of the badge
+
 winrt::Windows::UI::Xaml::Controls::ColumnDefinition MakeColumn(double value, winrt::Windows::UI::Xaml::GridUnitType type) {
     winrt::Windows::UI::Xaml::Controls::ColumnDefinition column;
     column.Width(winrt::Windows::UI::Xaml::GridLength{ value, type });
@@ -71,12 +79,6 @@ NetworkItemView::NetworkItemView(const PeerDisplayItem& item) {
     using namespace winrt::Windows::UI::Xaml::Controls;
     using namespace winrt::Windows::UI::Xaml::Controls::Primitives;
     using namespace winrt::Windows::UI::Xaml::Media;
-
-    // Compound device mark sizing (tweak freely): the OS-family glyph is the
-    // primary icon; the device-type glyph is a smaller badge over its bottom-right
-    // quarter.
-    constexpr double kFamilyGlyphPx = 27.0;  // +50% vs the prior 18px
-    constexpr double kDeviceGlyphPx = 13.0;  // ~30% smaller than 18px
 
     card_ = StackPanel();
     card_.CornerRadius(CornerRadius{ 4 });
@@ -232,8 +234,9 @@ void NetworkItemView::RefreshGlyphs() {
     osIcon_.Source(familyBitmap);
     osIcon_.Visibility(familyBitmap ? Visibility::Visible : Visibility::Collapsed);
 
-    const auto deviceBitmap = glyphs.device ? symbols.Glyph(glyphs.device, GlyphColor(/*device=*/true))
-                                            : WriteableBitmap{ nullptr };
+    const auto deviceBitmap = glyphs.device
+        ? symbols.Glyph(glyphs.device, GlyphColor(/*device=*/true), BackgroundColor(), kDeviceHaloFrac)
+        : WriteableBitmap{ nullptr };
     deviceIcon_.Source(deviceBitmap);
     deviceIcon_.Visibility(deviceBitmap ? Visibility::Visible : Visibility::Collapsed);
 }
@@ -250,6 +253,26 @@ winrt::Windows::UI::Color NetworkItemView::GlyphColor(bool device) const {
     // device badge = green. Hue contrast keeps the small overlaid badge legible
     // against the family glyph, where adjusting lightness hit contrast walls.
     return device ? Colors::LimeGreen() : Colors::DeepSkyBlue();
+}
+
+winrt::Windows::UI::Color NetworkItemView::BackgroundColor() const {
+    using namespace winrt::Windows::UI::Xaml;
+    // The device badge's halo is drawn in the page background color so it knocks a
+    // clean moat out of the family glyph and stays invisible over empty areas.
+    // Prefer the live themed brush; fall back to a per-theme approximation.
+    try {
+        auto resources = Application::Current().Resources();
+        auto key = winrt::box_value(winrt::hstring{ L"ApplicationPageBackgroundThemeBrush" });
+        if (resources.HasKey(key)) {
+            if (auto brush = resources.Lookup(key).try_as<Media::SolidColorBrush>()) {
+                return brush.Color();
+            }
+        }
+    } catch (...) {
+    }
+    const bool dark = (card_ != nullptr && card_.ActualTheme() == ElementTheme::Dark);
+    return dark ? winrt::Windows::UI::Color{ 0xFF, 0x20, 0x20, 0x20 }
+                : winrt::Windows::UI::Color{ 0xFF, 0xFF, 0xFF, 0xFF };
 }
 
 void NetworkItemView::UpdateHostName(const std::wstring& hostName) {

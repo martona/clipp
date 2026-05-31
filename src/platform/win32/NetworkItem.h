@@ -37,6 +37,7 @@ private:
     void OnThemeChanged(winrt::Windows::UI::Xaml::FrameworkElement const& sender,
                         winrt::Windows::Foundation::IInspectable const& args);
     winrt::Windows::UI::Color GlyphColor(bool device = false) const;
+    winrt::Windows::UI::Color BackgroundColor() const;
 
     static std::wstring DisplayHostName(const std::wstring& hostName);
     static std::wstring FormatHostID(const HostId::Bytes& hostID);

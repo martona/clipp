@@ -24,11 +24,18 @@ public:
     // Lazily constructed singleton (first use loads the embedded font).
     static SymbolGlyphs& Instance();
 
-    // An ImageSource for `codepoint` filled with `color`. Returns a null
-    // WriteableBitmap (operator bool == false) when codepoint == 0 or rendering
-    // is unavailable; callers should hide the Image in that case.
+    // An ImageSource for `codepoint` filled with `fill`. When `haloFrac > 0` and
+    // `halo` is opaque, the glyph is first dilated in `halo` (a shape-hugging
+    // knockout outline whose width is that fraction of the bitmap) so an overlaid
+    // badge stays legible against whatever it sits on. Returns a null WriteableBitmap
+    // (operator bool == false) when codepoint == 0 or rendering is unavailable;
+    // callers should hide the Image in that case. Cached per (codepoint, fill, halo,
+    // haloFrac).
     winrt::Windows::UI::Xaml::Media::Imaging::WriteableBitmap
-    Glyph(char32_t codepoint, winrt::Windows::UI::Color color);
+    Glyph(char32_t codepoint,
+          winrt::Windows::UI::Color fill,
+          winrt::Windows::UI::Color halo = {},
+          float haloFrac = 0.0f);
 
     SymbolGlyphs(const SymbolGlyphs&) = delete;
     SymbolGlyphs& operator=(const SymbolGlyphs&) = delete;
