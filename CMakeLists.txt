@@ -173,6 +173,18 @@ endfunction()
 if (WIN32)
     enable_language(RC)
 
+    # The device-type peer glyphs are embedded into the exe from this committed,
+    # generated font (see src/clipp-win32.rc.in). It is produced on demand by
+    # tools/symbols/build_symbols_font.py, not at build time -- fail early with a
+    # clear message rather than a cryptic rc.exe "file not found".
+    if (NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/resources/ClippSymbols.ttf")
+        message(FATAL_ERROR
+            "src/resources/ClippSymbols.ttf is missing. Generate it first:\n"
+            "    pip install fonttools\n"
+            "    python tools/symbols/build_symbols_font.py\n"
+            "See BUILDING.md (\"Regenerating the device-type symbol font\").")
+    endif()
+
     set(CLIPP_WINDOWS_OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/windows-$<LOWER_CASE:$<CONFIG>>")
 
     # Substitute @CLIPP_VERSION_*@ into the resource script. The generated .rc
@@ -230,6 +242,8 @@ if (WIN32)
         Crypt32
         Normaliz
         windowscodecs
+        dwrite       # device-type peer glyphs: load the embedded "Clipp Symbols"
+        d2d1         # font from RCDATA and rasterize it (see win32/SymbolGlyphs.cpp).
         dnsapi
         dbghelp      # MiniDumpWriteDump for the on-crash handler.
     )

@@ -12,6 +12,7 @@
 
 #include "Peer.h"
 #include "HostId.h"
+#include "OsType.h"
 
 // Outgoing connection state, as seen from this device. (Incoming state is just
 // "we have an inbound socket or not" — the two-way nature is captured by the pair.)
@@ -25,6 +26,7 @@ enum class PeerConnState {
 struct PeerDisplayItem {
 	std::wstring hostName;
 	HostId hostID;
+	OsType osType{ OsType::Unknown };
 	bool hasIncomingConnection{ false };
 	bool hasOutgoingConnection{ false };
 	PeerConnState outgoingConnState{ PeerConnState::Connecting };
@@ -60,7 +62,7 @@ class PeerDisplay {
 public:
 	using Watcher = std::function<void(const PeerDisplayUpdate&, void*)>;
 
-	void NotifyPeer(const std::wstring& hostName, const HostId& hostID, Peer::ConnType connType, std::chrono::steady_clock::time_point connectedSince);
+	void NotifyPeer(const std::wstring& hostName, const HostId& hostID, OsType osType, Peer::ConnType connType, std::chrono::steady_clock::time_point connectedSince);
 	void NotifyPeerRemoved(const HostId& hostID, Peer::ConnType connType);
 	void NotifyPeerBytes(const HostId& hostID, uint64_t bytesSent, uint64_t bytesReceived);
 	// Outgoing-direction connection state transitions (called by Peer::ThreadProcSend).

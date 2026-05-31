@@ -9,13 +9,17 @@
 
 #include "platform.h"
 #include "HostId.h"
+#include "OsType.h"
 
 struct SocketIoContext;
 
 class CryptoChannel {
 public:
     static constexpr size_t HOSTNAME_MAX_BYTES = 128;
-    static constexpr size_t CAPS_BYTES = 16;
+    // Was 16; 2 bytes were peeled off for the dedicated osType field in
+    // HandshakePlaintext (see CryptoChannel.cpp). The on-wire struct size is
+    // unchanged, so this stays interoperable with peers that predate osType.
+    static constexpr size_t CAPS_BYTES = 14;
     using Caps = std::array<uint8_t, CAPS_BYTES>;
 
     // Capability bits advertised in the handshake (Caps[0]). SERVES_RECENT means
@@ -53,6 +57,10 @@ public:
 
     const Caps& RemoteCaps() const { return remoteCaps_; }
 
+    // The remote's self-reported OS, learned from the handshake. OsType::Unknown
+    // for peers that predate the field (they send those bytes as zero).
+    OsType RemoteOsType() const { return remoteOsType_; }
+
 private:
     bool SendHandshakeDone(const SocketIoContext& io);
     bool ReceiveHandshakeDone(const SocketIoContext& io);
@@ -61,4 +69,5 @@ private:
     crypto_secretstream_xchacha20poly1305_state rxState_{};
     std::vector<unsigned char> sendScratch_;
     Caps remoteCaps_{};
+    OsType remoteOsType_{ OsType::Unknown };
 };

@@ -162,6 +162,11 @@ HostId Peer::hostID() const {
 	return hostID_;
 }
 
+OsType Peer::osType() const {
+	std::lock_guard<std::mutex> lock(dataMutex_);
+	return osType_;
+}
+
 std::wstring Peer::ip() const {
 	std::lock_guard<std::mutex> lock(dataMutex_);
 	return ip_;
@@ -376,6 +381,7 @@ void Peer::ThreadProcSend() {
 			hostIDMismatch = hostID_ != remoteHostId;
 			hostNameMismatch = hostName_ != remoteHostName;
 			expectedHostName = hostName_;
+			osType_ = channel.RemoteOsType();
 		}
 		if (hostIDMismatch) {
 			log(__FUNCTION__, Logger::Level::Warning, L"Peer: host ID mismatch");
@@ -556,9 +562,10 @@ void Peer::ThreadProcRecv() {
 			std::lock_guard<std::mutex> lock(dataMutex_);
 			hostID_ = remoteHostId;
 			hostName_ = Utf8ToWideString(remoteHostNameUtf8);
+			osType_ = channel.RemoteOsType();
 		}
 		if (verifiedCallback_) {
-			verifiedCallback_(Utf8ToWideString(remoteHostNameUtf8), remoteHostId, connType_, createdAt_);
+			verifiedCallback_(Utf8ToWideString(remoteHostNameUtf8), remoteHostId, channel.RemoteOsType(), connType_, createdAt_);
 		}
 
 		log(__FUNCTION__, Logger::Level::Info, L"Client connected");

@@ -35,7 +35,7 @@ std::size_t PeerDisplay::ConnectedCount() const {
 	return count;
 }
 
-void PeerDisplay::NotifyPeer(const std::wstring& hostName, const HostId& hostID, Peer::ConnType connType, std::chrono::steady_clock::time_point connectedSince) {
+void PeerDisplay::NotifyPeer(const std::wstring& hostName, const HostId& hostID, OsType osType, Peer::ConnType connType, std::chrono::steady_clock::time_point connectedSince) {
 	PeerDisplayUpdate update;
 	std::vector<WatcherRegistration> watchers;
 
@@ -53,6 +53,12 @@ void PeerDisplay::NotifyPeer(const std::wstring& hostName, const HostId& hostID,
 				[](const PeerDisplayItem& item, const PeerDisplayEntry& entry) { return LessDisplayItem(item, entry.item); }), entry);
 		} else if (!hostName.empty()) {
 			found->item.hostName = hostName;
+		}
+
+		// Once learned, the peer's OS is permanent for this entry. A divergent later
+		// report (inbound vs outbound) is treated as a bug and ignored, not reconciled.
+		if (found->item.osType == OsType::Unknown && osType != OsType::Unknown) {
+			found->item.osType = osType;
 		}
 
 		if (connType == Peer::ConnType::Incoming) {

@@ -39,6 +39,10 @@ namespace {
         // breaking peers that predate them. Authentication relies on the surrounding
         // secretbox MAC.
         uint8_t       caps[CryptoChannel::CAPS_BYTES];
+        // Sender's OsType (network order). Lives in 2 bytes peeled off caps, so the
+        // struct size is unchanged and peers predating this field interoperate (they
+        // send zero here -> decoded as OsType::Unknown).
+        uint16_t      osType;
         char          hostNameUTF8[CryptoChannel::HOSTNAME_MAX_BYTES];
     };
 
@@ -62,6 +66,7 @@ namespace {
         std::memcpy(plaintext.ephemeralPk, publicKey.data(), publicKey.size());
         std::memcpy(plaintext.hostId, hostId.data().data(), hostId.data().size());
         std::memcpy(plaintext.caps, caps.data(), caps.size());
+        plaintext.osType = htons(static_cast<uint16_t>(GetLocalOsType()));
         strncpys(plaintext.hostNameUTF8, hostNameUtf8);
     }
 
@@ -75,10 +80,12 @@ namespace {
         const HandshakePlaintext& plaintext,
         HostId& remoteHostId,
         CryptoChannel::Caps& remoteCaps,
+        OsType& remoteOsType,
         std::string& remoteHostNameUtf8)
     {
         std::memcpy(remoteHostId.data().data(), plaintext.hostId, remoteHostId.data().size());
         std::memcpy(remoteCaps.data(), plaintext.caps, remoteCaps.size());
+        remoteOsType = static_cast<OsType>(ntohs(plaintext.osType));
         remoteHostNameUtf8 = plaintext.hostNameUTF8;
     }
 
@@ -244,7 +251,7 @@ bool CryptoChannel::ClientHandshake(
     }
 
     const PublicKey serverPublicKey = CopyPublicKey(remotePlaintext);
-    CopyRemoteIdentity(remotePlaintext, remoteHostId, remoteCaps_, remoteHostNameUtf8);
+    CopyRemoteIdentity(remotePlaintext, remoteHostId, remoteCaps_, remoteOsType_, remoteHostNameUtf8);
 
     SessionKeys sessionKeys{};
     if (!DeriveClientSessionKeys(clientKeys, serverPublicKey, sessionKeys)) {
@@ -275,7 +282,7 @@ bool CryptoChannel::ServerHandshake(
     }
 
     const PublicKey clientPublicKey = CopyPublicKey(remotePlaintext);
-    CopyRemoteIdentity(remotePlaintext, remoteHostId, remoteCaps_, remoteHostNameUtf8);
+    CopyRemoteIdentity(remotePlaintext, remoteHostId, remoteCaps_, remoteOsType_, remoteHostNameUtf8);
 
     HostId localHostId;
     std::array<char, HOSTNAME_MAX_BYTES> localHostNameUtf8{};

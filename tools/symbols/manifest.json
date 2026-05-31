@@ -1,0 +1,21 @@
+{
+  "_comment": [
+    "Source of truth for the device-type symbol font. Maps each OsType to two",
+    "Nerd Font glyphs (an OS-family mark and a device-type mark). Edit this, then",
+    "run `python tools/symbols/build_symbols_font.py` to regenerate the committed",
+    "src/resources/ClippSymbols.ttf + src/OsGlyphs.h. Glyph names are Nerd Fonts",
+    "cheat-sheet names (https://www.nerdfonts.com/cheat-sheet); the build resolves",
+    "them to codepoints via the pinned glyphnames.json and fails if one is absent.",
+    "Use null for 'device' to render no device glyph (e.g. Unknown). Keys must",
+    "match the OsType enum names in src/OsType.h exactly."
+  ],
+  "font_family_name": "Clipp Symbols",
+  "mapping": {
+    "Windows":    { "family": "nf-dev-windows11", "device": "nf-md-desktop_classic" },
+    "MacOS":      { "family": "nf-dev-apple",      "device": "nf-md-desktop_classic" },
+    "IOS_iPhone": { "family": "nf-dev-apple",      "device": "nf-md-cellphone" },
+    "IOS_iPad":   { "family": "nf-dev-apple",      "device": "nf-fa-tablet" },
+    "Linux":      { "family": "nf-dev-linux",      "device": "nf-md-desktop_classic" },
+    "Unknown":    { "family": "nf-cod-question",   "device": null }
+  }
+}

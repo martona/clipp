@@ -1,6 +1,10 @@
 #include "NetworkItem.h"
 
+#include "OsGlyphs.h"
+#include "SymbolGlyphs.h"
 #include "platform/uiClippPage.h"
+
+#include <winrt/Windows.UI.Xaml.Media.Imaging.h>
 
 #include <algorithm>
 #include <array>
@@ -75,18 +79,32 @@ NetworkItemView::NetworkItemView(const PeerDisplayItem& item) {
 
     Grid headerGrid;
     headerGrid.Padding(ThicknessHelper::FromLengths(16, 12, 16, 12));
-    headerGrid.ColumnDefinitions().Append(MakeColumn(40, GridUnitType::Pixel));
+    headerGrid.ColumnDefinitions().Append(MakeColumn(48, GridUnitType::Pixel));
     headerGrid.ColumnDefinitions().Append(MakeColumn(1, GridUnitType::Star));
     headerGrid.ColumnDefinitions().Append(MakeColumn(45, GridUnitType::Pixel));
     headerGrid.ColumnDefinitions().Append(MakeColumn(40, GridUnitType::Pixel));
 
-    FontIcon netIcon;
-    netIcon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
-    netIcon.Glyph(L"\xE839");
-    netIcon.FontSize(18);
-    netIcon.VerticalAlignment(VerticalAlignment::Center);
-    netIcon.HorizontalAlignment(HorizontalAlignment::Left);
-    Grid::SetColumn(netIcon, 0);
+    // Two device glyphs (OS family + device type), rendered from the embedded
+    // "Clipp Symbols" font and driven by the peer's OsType. See SymbolGlyphs.
+    StackPanel glyphStack;
+    glyphStack.Orientation(Orientation::Horizontal);
+    glyphStack.Spacing(2);
+    glyphStack.VerticalAlignment(VerticalAlignment::Center);
+    glyphStack.HorizontalAlignment(HorizontalAlignment::Left);
+    Grid::SetColumn(glyphStack, 0);
+
+    osIcon_ = Image();
+    osIcon_.Width(18);
+    osIcon_.Height(18);
+    osIcon_.VerticalAlignment(VerticalAlignment::Center);
+
+    deviceIcon_ = Image();
+    deviceIcon_.Width(18);
+    deviceIcon_.Height(18);
+    deviceIcon_.VerticalAlignment(VerticalAlignment::Center);
+
+    glyphStack.Children().Append(osIcon_);
+    glyphStack.Children().Append(deviceIcon_);
 
     StackPanel textStack;
     textStack.VerticalAlignment(VerticalAlignment::Center);
@@ -135,7 +153,7 @@ NetworkItemView::NetworkItemView(const PeerDisplayItem& item) {
     statusIcons.Children().Append(inIcon_);
     statusIcons.Children().Append(outIcon_);
 
-    headerGrid.Children().Append(netIcon);
+    headerGrid.Children().Append(glyphStack);
     headerGrid.Children().Append(textStack);
     headerGrid.Children().Append(chevron);
     headerGrid.Children().Append(statusIcons);
@@ -175,10 +193,54 @@ NetworkItemView::NetworkItemView(const PeerDisplayItem& item) {
     UpdateBytesSent(item.bytesSent);
     UpdateBytesReceived(item.bytesReceived);
     UpdateConnectedSince(item.connectedSince);
+
+    // Re-tint the rasterized glyphs when the system light/dark theme changes.
+    themeRevoker_ = card_.ActualThemeChanged(winrt::auto_revoke, { this, &NetworkItemView::OnThemeChanged });
+    UpdateOsType(item.osType);
 }
 
 winrt::Windows::UI::Xaml::Controls::StackPanel NetworkItemView::View() const {
     return card_;
+}
+
+void NetworkItemView::UpdateOsType(OsType osType) {
+    osType_ = osType;
+    RefreshGlyphs();
+}
+
+void NetworkItemView::RefreshGlyphs() {
+    if (osIcon_ == nullptr) {
+        return;
+    }
+    using winrt::Windows::UI::Xaml::Visibility;
+    using winrt::Windows::UI::Xaml::Media::Imaging::WriteableBitmap;
+
+    const auto color = GlyphColor();
+    const clipp::OsGlyphs glyphs = clipp::OsGlyphsFor(osType_);
+    auto& symbols = clipp::win32::SymbolGlyphs::Instance();
+
+    const auto familyBitmap = symbols.Glyph(glyphs.family, color);
+    osIcon_.Source(familyBitmap);
+    osIcon_.Visibility(familyBitmap ? Visibility::Visible : Visibility::Collapsed);
+
+    const auto deviceBitmap = glyphs.device ? symbols.Glyph(glyphs.device, color)
+                                            : WriteableBitmap{ nullptr };
+    deviceIcon_.Source(deviceBitmap);
+    deviceIcon_.Visibility(deviceBitmap ? Visibility::Visible : Visibility::Collapsed);
+}
+
+void NetworkItemView::OnThemeChanged(winrt::Windows::UI::Xaml::FrameworkElement const&,
+                                     winrt::Windows::Foundation::IInspectable const&) {
+    RefreshGlyphs();
+}
+
+winrt::Windows::UI::Color NetworkItemView::GlyphColor() const {
+    using winrt::Windows::UI::Xaml::ElementTheme;
+    // A small monochrome mark; approximate the row's themed foreground.
+    if (card_ != nullptr && card_.ActualTheme() == ElementTheme::Dark) {
+        return winrt::Windows::UI::Color{ 0xFF, 0xE0, 0xE0, 0xE0 };
+    }
+    return winrt::Windows::UI::Color{ 0xFF, 0x20, 0x20, 0x20 };
 }
 
 void NetworkItemView::UpdateHostName(const std::wstring& hostName) {

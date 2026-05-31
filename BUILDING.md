@@ -147,6 +147,40 @@ CI does not currently build for physical devices; device builds are produced man
 3. Select your development team under **Signing & Capabilities** for the `Clipp` target.
 4. Choose a connected device (or "Any iOS Device") and **Product → Build / Archive**.
 
+### Regenerating the device-type symbol font
+
+Each peer row shows two small glyphs — an OS-family mark and a device-type mark —
+chosen from the peer's reported `OsType`. They are drawn from **`ClippSymbols.ttf`**,
+a tiny ([~2–5 KB](src/resources/ClippSymbols.ttf)) subset of [Nerd Fonts](https://www.nerdfonts.com/)
+containing only the handful of glyphs we use. The subset and its codepoint header
+are **generated and committed**, so a normal build needs no extra tooling — Python
+is *not* a build dependency. You only run the generator when changing the glyph set.
+
+To add, remove, or swap a glyph:
+
+1. Install the one-time tool: `pip install fonttools`.
+2. Edit [`tools/symbols/manifest.json`](tools/symbols/manifest.json) — the `mapping`
+   table pairs each `OsType` with an OS-family and a device-type glyph, named by their
+   [Nerd Fonts cheat-sheet](https://www.nerdfonts.com/cheat-sheet) names (e.g.
+   `nf-md-cellphone`). Use `null` for `device` to render no device glyph.
+3. Regenerate:
+   ```sh
+   python tools/symbols/build_symbols_font.py
+   ```
+   This resolves each name to a codepoint against the pinned Nerd Fonts
+   `glyphnames.json` (failing loudly if a name doesn't exist), subsets the font,
+   renames the family to `Clipp Symbols`, and rewrites two files:
+   - [`src/resources/ClippSymbols.ttf`](src/resources/ClippSymbols.ttf) — embedded in the
+     Windows exe; bundled in the macOS/iOS app resources.
+   - [`src/OsGlyphs.h`](src/OsGlyphs.h) — the `OsType → {family, device}` codepoint map
+     consumed by the renderers.
+4. **Commit both regenerated files.**
+
+The script downloads the pinned Symbols Nerd Font and `glyphnames.json` by default;
+pass `--symbols-font <path>` / `--glyphnames <path>` to use local copies offline. Both
+generated files are required to build on Windows (the `.ttf` is compiled into the exe);
+a fresh checkout already contains them.
+
 ## Build outputs
 
 | Platform / generator | Output                                                                     |

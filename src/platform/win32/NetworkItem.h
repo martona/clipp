@@ -11,6 +11,8 @@
 #include <cstdint>
 #include <string>
 
+#include <winrt/Windows.UI.h>
+#include <winrt/Windows.UI.Xaml.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
 
 class NetworkItemView {
@@ -19,6 +21,7 @@ public:
 
     winrt::Windows::UI::Xaml::Controls::StackPanel View() const;
 
+    void UpdateOsType(OsType osType);
     void UpdateHostName(const std::wstring& hostName);
     void UpdateHostID(const HostId& hostID);
     void UpdateIncomingConnection(bool connected);
@@ -30,6 +33,11 @@ public:
     void RefreshConnectedFor(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
 
 private:
+    void RefreshGlyphs();
+    void OnThemeChanged(winrt::Windows::UI::Xaml::FrameworkElement const& sender,
+                        winrt::Windows::Foundation::IInspectable const& args);
+    winrt::Windows::UI::Color GlyphColor() const;
+
     static std::wstring DisplayHostName(const std::wstring& hostName);
     static std::wstring FormatHostID(const HostId::Bytes& hostID);
     static std::wstring FormatByteCounter(uint64_t bytes);
@@ -41,6 +49,8 @@ private:
     winrt::Windows::UI::Xaml::Controls::TextBlock subtitle_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::FontIcon inIcon_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::FontIcon outIcon_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::Image osIcon_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::Image deviceIcon_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBlock hostIDValue_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBlock bytesSentValue_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBlock bytesReceivedValue_{ nullptr };
@@ -51,4 +61,6 @@ private:
     std::wstring connectedForText_;
     bool hasIncoming_{ false };
     PeerConnState outgoingState_{ PeerConnState::Connecting };
+    OsType osType_{ OsType::Unknown };
+    winrt::Windows::UI::Xaml::FrameworkElement::ActualThemeChanged_revoker themeRevoker_{};
 };

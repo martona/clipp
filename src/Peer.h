@@ -19,6 +19,7 @@
 #include "ClipboardPayload.h"
 #include "Logger.h"
 #include "HostId.h"
+#include "OsType.h"
 
 class CryptoChannel;
 
@@ -31,7 +32,7 @@ public:
 	ConnType connType_;
 
 	using ClipboardReceivedCallback = std::function<void(std::shared_ptr<const ClipboardPayload>)>;
-	using VerifiedCallback = std::function<void(const std::wstring&, const HostId&, ConnType, std::chrono::steady_clock::time_point)>;
+	using VerifiedCallback = std::function<void(const std::wstring&, const HostId&, OsType, ConnType, std::chrono::steady_clock::time_point)>;
 	using TrafficCallback = std::function<void(const HostId&, uint64_t, uint64_t)>;
 
 	// peers we're connecting to
@@ -46,6 +47,9 @@ public:
 
 	std::wstring hostName() const;
 	HostId hostID() const;
+	// The remote's self-reported OS, learned at handshake. OsType::Unknown until
+	// then (and for outgoing peers, which carry it but never surface it).
+	OsType osType() const;
 	std::wstring ip() const;
 	unsigned short port() const;
 	std::chrono::steady_clock::time_point lastPingReceivedAt() const;
@@ -74,6 +78,7 @@ private:
 	std::wstring ip_;
 	unsigned short port_{};
 	HostId hostID_;
+	OsType osType_{ OsType::Unknown };
 	std::chrono::steady_clock::time_point createdAt_;
 	std::chrono::steady_clock::time_point lastPingReceivedAt_;
 
