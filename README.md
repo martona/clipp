@@ -54,7 +54,7 @@ Clipp's trust model is deliberately narrow - your own devices, on a network or V
 |----------|-----------------|-----------------|----------------------------------------------------------------------|
 | Windows  | amd64, arm64    | Windows 10 1809 | Native builds for both architectures.                                |
 | macOS    | Apple Silicon   | macOS 14*       | Intel Macs are not supported.                                        |
-| iOS      | arm64           | iOS 17          | No App Store / TestFlight builds yet — install from Xcode for now.   |
+| iOS      | arm64           | iOS 17          | App Store build under review (free); until then, install from Xcode. |
 | Linux    | amd64, arm64    | glibc 2.31†     | Terminal client only (`clipp copy`/`paste`); no GUI, no tray.        |
 
 \* The 14 floor is arbitrary; I just don't have older Macs or Intel hardware to test on. PRs to lower the minimum are welcome.
@@ -99,7 +99,7 @@ Download the [Apple Silicon zip][mac-arm64-zip], open it, and drag `Clipp.app` t
 
 ### iOS
 
-iOS distribution is not yet set up. Until TestFlight or App Store builds are published, the only way to install on a physical device is to build from source via Xcode (see [BUILDING.md](BUILDING.md#ios-device)).
+The iOS app is in App Store review, priced free. Until it's approved, install on a physical device by building from source via Xcode (see [BUILDING.md](BUILDING.md#ios-device)).
 
 ### Linux
 
@@ -228,13 +228,17 @@ If `avahi-browse` shows nothing while another device's Clipp GUI is up, the prob
 
 ## Fervently Anticipated Questions
 
+**Is Clipp free? Is there a catch? Are you smuggling malware?**
+
+No catch. Clipp is open source under the MIT license - read it, build it, and run it yourself at no cost. The prebuilt binaries are free too, App Store builds included (when available). No paid tier, no subscription, no ads, and no telemetry. As a friend of mine used to say: released code can't be un-MIT'd. The releases are GitHub-attested (meaning they _actually_ came from the source here) and I signed my legal name on them, once for Apple, and once for Microsoft. 
+
 **Does Linux have a GUI? What about Android?**
 
-Linux ships as a **terminal-only** client — `clipp copy` / `clipp paste` — with no GUI, tray, or local-clipboard reading. That's a deliberate fit for the place a headless Clipp is most useful: servers, containers, and SSH sessions, where it joins the encrypted network and relays clipboard text through your desktop/mobile peers. A full Linux *desktop* GUI isn't planned — clipboard semantics vary widely across X11/Wayland and desktop environments, which is a much larger investment than the headless client was. Android isn't in scope either (it isn't in my life). If you have a strong use case for either, open an issue.
+Linux ships as a **terminal-only** client - `clipp copy` / `clipp paste` - with no GUI, tray, or local-clipboard reading. That's a deliberate fit for the place a headless Clipp is most useful: servers, containers, and SSH sessions, where it joins the encrypted network and relays clipboard text through your desktop peers. A full Linux *desktop* GUI isn't planned — clipboard semantics vary widely across X11/Wayland and desktop environments, which is a much larger investment than the headless client was. Android isn't in scope either (it isn't in my life). If you have a strong use case for either, open an issue.
 
 **Can I sync over the internet without a VPN?**
 
-No, and that's intentional. Clipp discovers peers via local multicast and isn't designed to be exposed directly to the internet. To use it between devices on different networks, put them on a mesh or overlay network you trust (Tailscale, ZeroTier, NostrVPN, WireGuard, etc.) — multicast works on most of those, and Clipp's discovery picks up as usual.
+No, and that's intentional. Clipp discovers peers via local multicast and isn't designed to be exposed directly to the internet. To use it between devices on different networks, put them on a mesh or overlay network you trust (Tailscale, ZeroTier, NostrVPN, WireGuard, etc.) - multicast works on most of those, and Clipp's discovery picks up as usual.
 
 **Does Clipp upload anything to a server?**
 
@@ -242,7 +246,7 @@ No. There is no telemetry, no analytics, no crash reporting. Clipp's only networ
 
 **I forgot the network secret. Can I recover it?**
 
-No. The secret is part of the key — there's no recovery channel. If you forget it, set up a fresh network with a new name and secret on every device. The fingerprint will change; that's expected.
+No. The secret is part of the key - there's no recovery channel. If you forget it, set up a fresh network with a new name and secret on every device. The fingerprint will change; that's expected.
 
 ## Building From Source
 
@@ -253,7 +257,7 @@ See [BUILDING.md](BUILDING.md) for prerequisites and build instructions for Wind
 Clipp is currently **early-stage public preview**: it works for the cases I use day-to-day, but it's not a finished product. Specifically:
 
 - The wire protocol is subject to breaking changes.
-- iOS distribution (TestFlight / App Store) is not yet set up; iOS users currently need Xcode to install on a device.
+- iOS and macOS App Store builds are submitted and under review, priced free; until they're approved, install iOS from Xcode and macOS from the released binary.
 - Bug reports are welcome, but expect a single-maintainer response time.
 
 Clipp is actively developed.
