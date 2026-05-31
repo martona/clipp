@@ -29,6 +29,7 @@ import argparse
 import hashlib
 import io
 import json
+import shutil
 import sys
 import urllib.request
 import zipfile
@@ -59,6 +60,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_PATH = Path(__file__).resolve().parent / "manifest.json"
 OUT_TTF = REPO_ROOT / "src" / "resources" / "ClippSymbols.ttf"
 OUT_HEADER = REPO_ROOT / "src" / "OsGlyphs.h"
+# The iOS app bundles its own copy from the Xcode project tree (Xcode can't
+# reference the shared src/resources file), so keep that copy in sync here.
+IOS_TTF = REPO_ROOT / "ios" / "Clipp" / "Resources" / "ClippSymbols.ttf"
 
 
 def fail(msg: str) -> "NoReturn":  # type: ignore[name-defined]
@@ -238,9 +242,13 @@ def main() -> None:
     print(f"  wrote {OUT_TTF.relative_to(REPO_ROOT)} ({size} bytes, "
           f"{len(codepoints_by_name)} glyphs)")
 
+    IOS_TTF.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(OUT_TTF, IOS_TTF)
+    print(f"  copied to {IOS_TTF.relative_to(REPO_ROOT)} (iOS bundle)")
+
     OUT_HEADER.write_text(emit_header(mapping, codepoints_by_name), encoding="utf-8")
     print(f"  wrote {OUT_HEADER.relative_to(REPO_ROOT)}")
-    print("Done. Commit both generated files.")
+    print("Done. Commit the generated files (src/resources + ios/Clipp/Resources ttf, header).")
 
 
 if __name__ == "__main__":

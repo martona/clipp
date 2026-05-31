@@ -169,12 +169,14 @@ To add, remove, or swap a glyph:
    ```
    This resolves each name to a codepoint against the pinned Nerd Fonts
    `glyphnames.json` (failing loudly if a name doesn't exist), subsets the font,
-   renames the family to `Clipp Symbols`, and rewrites two files:
+   renames the family to `Clipp Symbols`, and rewrites:
    - [`src/resources/ClippSymbols.ttf`](src/resources/ClippSymbols.ttf) — embedded in the
-     Windows exe; bundled in the macOS/iOS app resources.
+     Windows exe; bundled in the macOS `.app` resources.
+   - `ios/Clipp/Resources/ClippSymbols.ttf` — a copy for the iOS bundle (Xcode can't
+     reference the shared `src/resources` file, so the generator keeps this in sync).
    - [`src/OsGlyphs.h`](src/OsGlyphs.h) — the `OsType → {family, device}` codepoint map
      consumed by the renderers.
-4. **Commit both regenerated files.**
+4. **Commit all three regenerated files.**
 
 The script downloads the pinned Symbols Nerd Font and `glyphnames.json` by default;
 pass `--symbols-font <path>` / `--glyphnames <path>` to use local copies offline. Both

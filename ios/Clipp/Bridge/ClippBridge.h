@@ -4,6 +4,8 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+@class UIImage;
+
 NS_SWIFT_NAME(ClipboardPayloadKind)
 typedef NS_ENUM(NSInteger, CLPClipboardPayloadKind) {
     CLPClipboardPayloadKindUnsupported = 0,
@@ -116,8 +118,14 @@ NS_SWIFT_NAME(NetworkPeerItem)
 - (instancetype)initWithIdentifier:(NSString*)identifier
                          deviceName:(NSString*)deviceName
               hasIncomingConnection:(BOOL)hasIncomingConnection
-              hasOutgoingConnection:(BOOL)hasOutgoingConnection NS_DESIGNATED_INITIALIZER;
+              hasOutgoingConnection:(BOOL)hasOutgoingConnection
+                             osType:(uint16_t)osType NS_DESIGNATED_INITIALIZER;
 - (instancetype)init NS_UNAVAILABLE;
+
+// Renders the compound OS-family + device-type badge for this peer at `pointSize`
+// (square points), themed for light/dark, via the shared CoreText renderer.
+- (UIImage*)deviceBadgeImageForPointSize:(CGFloat)pointSize
+                                    dark:(BOOL)dark NS_SWIFT_NAME(deviceBadgeImage(pointSize:dark:));
 
 @end
 

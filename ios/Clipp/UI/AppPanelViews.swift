@@ -202,10 +202,12 @@ private struct PeerStatusItem: Identifiable {
     let deviceName: String
     let status: String
     let state: PeerConnectionState
+    let item: NetworkPeerItem
 
     init(_ peer: NetworkPeerItem) {
         id = peer.identifier
         deviceName = peer.deviceName
+        item = peer
         state = PeerConnectionState(
             hasIncomingConnection: peer.hasIncomingConnection,
             hasOutgoingConnection: peer.hasOutgoingConnection
@@ -1038,16 +1040,12 @@ private struct AboutPanelView: View {
 
 private struct PeerStatusRow: View {
     let peer: PeerStatusItem
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HStack(spacing: 12) {
-            Circle()
-                .fill(peer.state.color)
-                .frame(width: 10, height: 10)
-                .overlay {
-                    Circle()
-                        .stroke(Color.primary.opacity(0.12), lineWidth: 1)
-                }
+            Image(uiImage: peer.item.deviceBadgeImage(pointSize: 28, dark: colorScheme == .dark))
+                .frame(width: 28, height: 28)
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -1056,6 +1054,17 @@ private struct PeerStatusRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Spacer(minLength: 8)
+
+            Circle()
+                .fill(peer.state.color)
+                .frame(width: 10, height: 10)
+                .overlay {
+                    Circle()
+                        .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+                }
+                .accessibilityHidden(true)
         }
         .accessibilityElement(children: .combine)
     }

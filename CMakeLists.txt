@@ -290,6 +290,9 @@ elseif (APPLE)
     # Cross-Apple discovery impl (used on macOS and iOS); add by name since the common glob is
     # restricted to *.cpp / *.h.
     list(APPEND CLIPP_MACOS_PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/MDNSDiscovery_Apple.mm")
+    # Cross-Apple compound device-badge renderer (CoreText/CoreGraphics); shared
+    # verbatim with the iOS target.
+    list(APPEND CLIPP_MACOS_PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/ClippGlyphBadge.mm")
     set(CLIPP_MACOS_APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/src/resources/Clipp.icns")
     set(CLIPP_MACOS_MENU_BAR_ICON "${CMAKE_CURRENT_SOURCE_DIR}/src/resources/ClippMenuBarTemplate.png")
     # Device-type peer glyphs: the committed Nerd Fonts subset, registered at runtime

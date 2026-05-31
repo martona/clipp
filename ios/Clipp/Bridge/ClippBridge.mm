@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "../../../src/ClipboardActivityStore.cpp"
+#include "../../../src/ClippGlyphBadge.mm"
 
 extern Settings g_settings;
 extern KeyManager g_keyManager;
@@ -408,7 +409,8 @@ CLPNetworkPeerItem* MakeNetworkPeerItem(const PeerDisplayItem& item) {
     return [[CLPNetworkPeerItem alloc] initWithIdentifier:ToNSString(item.hostID.ToHexString())
                                                deviceName:ToNSString(uiClippPage::DisplayHostNameOrUnknown(item.hostName))
                                     hasIncomingConnection:item.hasIncomingConnection
-                                    hasOutgoingConnection:item.hasOutgoingConnection];
+                                    hasOutgoingConnection:item.hasOutgoingConnection
+                                                   osType:static_cast<uint16_t>(item.osType)];
 }
 
 bool ClipboardPayloadFromPasteboard(ClipboardPayload& payload, NSError** error) {
@@ -798,20 +800,61 @@ void CLPIOSReceiveClipboardPayload(std::shared_ptr<const ClipboardPayload> paylo
 
 @end
 
-@implementation CLPNetworkPeerItem
+@implementation CLPNetworkPeerItem {
+    OsType _osType;
+}
 
 - (instancetype)initWithIdentifier:(NSString*)identifier
                          deviceName:(NSString*)deviceName
               hasIncomingConnection:(BOOL)hasIncomingConnection
-              hasOutgoingConnection:(BOOL)hasOutgoingConnection {
+              hasOutgoingConnection:(BOOL)hasOutgoingConnection
+                             osType:(uint16_t)osType {
     self = [super init];
     if (self) {
         _identifier = [identifier copy];
         _deviceName = [deviceName copy];
         _hasIncomingConnection = hasIncomingConnection;
         _hasOutgoingConnection = hasOutgoingConnection;
+        _osType = static_cast<OsType>(osType);
     }
     return self;
+}
+
+- (UIImage*)deviceBadgeImageForPointSize:(CGFloat)pointSize dark:(BOOL)dark {
+    // Cache by (osType, size, appearance) so the peer list doesn't re-rasterize the
+    // same badge on every reload/redraw.
+    static NSCache<NSString*, UIImage*>* cache;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ cache = [[NSCache alloc] init]; });
+    NSString* key = [NSString stringWithFormat:@"%u/%.0f/%d",
+                     static_cast<unsigned>(_osType), pointSize, dark ? 1 : 0];
+    UIImage* cached = [cache objectForKey:key];
+    if (cached != nil) {
+        return cached;
+    }
+
+    UITraitCollection* traits = [UITraitCollection traitCollectionWithUserInterfaceStyle:
+        (dark ? UIUserInterfaceStyleDark : UIUserInterfaceStyleLight)];
+    UIColor* familyColor = [[UIColor systemBlueColor] resolvedColorWithTraitCollection:traits];
+    UIColor* deviceColor = [[UIColor systemGreenColor] resolvedColorWithTraitCollection:traits];
+    // Match the grouped-Form cell background so the halo knocks out invisibly.
+    UIColor* haloColor = [[UIColor secondarySystemGroupedBackgroundColor] resolvedColorWithTraitCollection:traits];
+    const OsType osType = _osType;
+
+    UIGraphicsImageRendererFormat* format = [UIGraphicsImageRendererFormat preferredFormat];
+    format.opaque = NO;
+    UIGraphicsImageRenderer* renderer =
+        [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(pointSize, pointSize) format:format];
+    UIImage* image = [renderer imageWithActions:^(UIGraphicsImageRendererContext* rendererContext) {
+        CGContextRef ctx = rendererContext.CGContext;
+        // UIKit's context is y-down; flip to y-up for the shared renderer.
+        CGContextTranslateCTM(ctx, 0.0, pointSize);
+        CGContextScaleCTM(ctx, 1.0, -1.0);
+        ClippDrawDeviceBadge(ctx, CGRectMake(0.0, 0.0, pointSize, pointSize), osType,
+                             familyColor.CGColor, deviceColor.CGColor, haloColor.CGColor);
+    }];
+    [cache setObject:image forKey:key];
+    return image;
 }
 
 @end
