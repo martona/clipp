@@ -438,7 +438,8 @@ jobs:
           git -C "$VCPKG_ROOT" checkout --detach "${{ steps.vcpkg-baseline.outputs.ref }}"
 
       - name: Bootstrap vcpkg
-        run: "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+        run: |
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
 
       - name: Prepare vcpkg binary cache
         run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
