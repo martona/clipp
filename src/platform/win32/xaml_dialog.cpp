@@ -339,6 +339,17 @@ private:
             xamlHost_ = nullptr;
             return 0;
 
+        case WM_SETTINGCHANGE:
+            // The OS broadcasts this with lParam == "ImmersiveColorSet" when the light/dark
+            // theme flips. The darkmode32 subclass already ran (and re-seeded force-dark via
+            // its handleSettingChange -> initDarkMode()); re-derive + re-apply so the open
+            // window follows the OS live.
+            if (lParam != 0 &&
+                _wcsicmp(reinterpret_cast<const wchar_t*>(lParam), L"ImmersiveColorSet") == 0) {
+                RefreshTheme();
+            }
+            return DefWindowProcW(hwnd_, msg, wParam, lParam);
+
         default:
             if (msg == derivedKeyMessage_) {
                 auto* result = reinterpret_cast<const KeyManager::NetworkKey*>(wParam);
@@ -359,6 +370,29 @@ private:
             }
 
             return DefWindowProcW(hwnd_, msg, wParam, lParam);
+        }
+    }
+
+    // Re-derive the OS theme and re-apply it to the title bar and the XAML island, so a live
+    // OS light/dark switch is followed without a restart (driven from WM_SETTINGCHANGE).
+    void RefreshTheme() {
+        // The darkmode32 WM_SETTINGCHANGE subclass already ran and re-seeded force-dark (its
+        // handleSettingChange re-runs initDarkMode()); re-derive from the registry so
+        // DarkMode::isEnabled() reflects the actual OS theme again.
+        DarkMode::setDarkModeConfig();
+
+        if (hwnd_) {
+            ApplyModernWindowAttributes(hwnd_);  // title bar follows the corrected theme
+        }
+
+        if (xamlSource_) {
+            if (auto root = xamlSource_.Content().try_as<winrt::Windows::UI::Xaml::Controls::Grid>()) {
+                // Re-pointing RequestedTheme cascades to inherited text + themed brushes,
+                // and fires ActualThemeChanged on the NetworkItem cards.
+                root.RequestedTheme(GetCurrentXamlTheme());
+                ApplyTextControlThemeResources(root);
+                root.Background(GetThemeBackgroundBrush());
+            }
         }
     }
 

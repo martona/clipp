@@ -53,6 +53,11 @@ LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                 ShowClippMainDialog(hwnd);
             }
             else if (LOWORD(lParam) == WM_RBUTTONUP) {
+                // This window is message-only, so it never receives the WM_SETTINGCHANGE
+                // broadcast that refreshes the theme. Re-derive from the registry (which
+                // also re-flushes menu themes) so the popup matches the current OS theme.
+                DarkMode::setDarkModeConfig();
+
                 // 1. Create a native, Unicode context menu
                 HMENU hMenu = CreatePopupMenu();
                 AppendMenuW(hMenu, MF_STRING, ID_TRAY_OPEN, CLP_W(CLP_UI_OPEN_CLIPP));
@@ -117,6 +122,10 @@ LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
 }
 
 void TrayIconMessageLoop(bool showNetworkPageOnStartup) {
+    // darkmode32 is built with _DARKMODE_NO_INI_CONFIG, so initDarkMode() derives the mode
+    // from the registry (AppsUseLightTheme -> follows the OS) instead of defaulting to
+    // force-dark. isEnabled() then reflects the real OS theme, which drives the title bar,
+    // tray menu, and the XAML island's RequestedTheme.
     DarkMode::initDarkMode();
     HINSTANCE hInstance = GetModuleHandleW(NULL);
 

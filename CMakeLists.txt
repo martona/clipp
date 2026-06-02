@@ -210,6 +210,11 @@ if (WIN32)
     target_include_directories(darkmode32 PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_compile_definitions(darkmode32 PUBLIC WIN32 UNICODE _UNICODE)
     target_compile_definitions(darkmode32 PRIVATE _LIB)
+    # We don't use darkmode32's INI-file config path; compile it out (the flag is .cpp-only,
+    # never in a header, so PRIVATE). Side benefit: it routes initDarkMode() and the lib's
+    # WM_SETTINGCHANGE re-init onto the registry-following (follow-OS) branch instead of the
+    # force-dark default -- so the lib no longer has to be corrected from the app.
+    target_compile_definitions(darkmode32 PRIVATE _DARKMODE_NO_INI_CONFIG)
     target_link_libraries(darkmode32 PUBLIC dwmapi uxtheme Comctl32 Gdi32)
     if (MSVC)
         target_compile_options(darkmode32 PRIVATE /utf-8)
