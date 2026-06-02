@@ -175,6 +175,10 @@ bool Start(Callback /*callback*/, bool /*publishLocal*/, bool /*includeSelf*/) {
 
 void Stop() {}
 
+// Continuous publish is a stub on the headless Linux build (see Start), so there is
+// nothing to re-announce.
+void Republish() {}
+
 bool HasHostIDCollisionWarning() { return false; }
 
 void ClearHostIDCollisionWarning() {}

@@ -162,6 +162,7 @@ std::map<std::string, std::string> ParseTxtRecordData(NSData* data) {
 
 - (void)startContinuousPublish:(BOOL)publishLocal;
 - (void)stopContinuous;
+- (void)republishNow:(id)unused;
 @end
 
 @implementation ClippMDNSAppleCoordinator
@@ -274,6 +275,23 @@ static std::string LowerCaseUtf8FromNSString(NSString* s) {
         [NSThread sleepForTimeInterval:0.05];
     }
     self.thread = nil;
+}
+
+- (void)republishNow:(id)unused {
+    (void)unused;
+    // Runs on the coordinator's own run-loop thread (marshaled via performSelector:
+    // onThread:), so NSNetService is only ever touched from the thread it was
+    // scheduled on. Drop the current publication (sends a goodbye) and re-publish,
+    // which mints a fresh random instance name in publishLocalOnRunLoop:.
+    auto& s = MDNSDiscovery::GlobalState();
+    {
+        std::lock_guard<std::mutex> lock(s.mutex);
+        if (!s.started || !s.publishLocal) return;
+    }
+    [self unpublish];
+    [self publishLocalOnRunLoop:[NSRunLoop currentRunLoop]];
+    g_logger.log("MDNSDiscovery::Republish", Logger::Level::Info,
+        "DNS-SD re-announced under a fresh instance name.");
 }
 
 - (void)tearDownOnRunLoop:(NSRunLoop*)runLoop {
@@ -461,7 +479,6 @@ static std::string LowerCaseUtf8FromNSString(NSString* s) {
     }
     if (peer.ip.empty()) return;
 
-    bool firstForHost = true;
     if (self.liveInstances && self.liveInstancesMutex) {
         const std::string nameKey = LowerCaseUtf8FromNSString(service.name);
         std::lock_guard<std::mutex> lock(*self.liveInstancesMutex);
@@ -470,15 +487,21 @@ static std::string LowerCaseUtf8FromNSString(NSString* s) {
         entry.hostId = peer.hostId;
         entry.deviceName = peer.deviceName;
 
-        // hostId-level dedup: only fire Added on the empty→non-empty transition.
+        // Track the instance under its hostId for the Removed-side dedup (fire Removed
+        // only when the hostId's last instance disappears). The Added side is no longer
+        // gated here -- see below.
         if (self.liveByHostId) {
-            auto& instancesForHost = (*self.liveByHostId)[peer.hostId];
-            firstForHost = instancesForHost.empty();
-            instancesForHost.insert(nameKey);
+            (*self.liveByHostId)[peer.hostId].insert(nameKey);
         }
     }
 
-    if (cb && firstForHost) cb(MDNSDiscovery::Event::Added, peer);
+    // Fire Added on every successful resolve. The NetworkRuntime reconciler owns
+    // hostId/endpoint dedup (suppressing same-endpoint repeats, re-pointing on a changed
+    // address), so surfacing every resolved endpoint is what lets a republish under a
+    // fresh instance name propagate an address change even when the old instance's
+    // goodbye is delayed or lost. (Gating on first-instance-per-hostId here would
+    // otherwise suppress the new address until the stale instance's TTL expired.)
+    if (cb) cb(MDNSDiscovery::Event::Added, peer);
 
     if (self.captureVector && self.captureMutex) {
         std::lock_guard<std::mutex> lock(*self.captureMutex);
@@ -544,6 +567,23 @@ void Stop() {
         s.liveByHostId.clear();
     }
     g_logger.log(__FUNCTION__, Logger::Level::Info, "DNS-SD discovery stopped.");
+}
+
+void Republish() {
+    auto& s = GlobalState();
+    ClippMDNSAppleCoordinator* coordinator = nil;
+    {
+        std::lock_guard<std::mutex> lock(s.mutex);
+        if (!s.started || !s.publishLocal) return;
+        coordinator = gContinuous;
+    }
+    if (coordinator && coordinator.thread) {
+        // Hop onto the run-loop thread; don't block the caller (the NetworkRuntime tick).
+        [coordinator performSelector:@selector(republishNow:)
+                            onThread:coordinator.thread
+                          withObject:nil
+                       waitUntilDone:NO];
+    }
 }
 
 bool HasHostIDCollisionWarning() {

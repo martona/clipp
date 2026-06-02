@@ -245,6 +245,7 @@ if (WIN32)
         dwrite       # device-type peer glyphs: load the embedded "Clipp Symbols"
         d2d1         # font from RCDATA and rasterize it (see win32/SymbolGlyphs.cpp).
         dnsapi
+        iphlpapi     # GetAdaptersAddresses for the interface-change fingerprint.
         dbghelp      # MiniDumpWriteDump for the on-crash handler.
     )
     if (MSVC)

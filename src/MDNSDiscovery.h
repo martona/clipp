@@ -45,6 +45,16 @@ bool Start(Callback callback, bool publishLocal = true, bool includeSelf = false
 // Stops browse + publish. Sends DNS-SD goodbye for the published instance.
 void Stop();
 
+// Re-announces the local published instance under a *fresh* instance name without
+// touching the browser or any existing peer connections. Neighbors observe a
+// goodbye for the old instance followed by an announce of the new one, which forces
+// them to re-resolve our address (NSNetService/dnsapi only resolve an instance once,
+// so a same-name address change is otherwise invisible to them). Used when a local
+// interface change may have altered the address we advertise. No-op if discovery is
+// not currently publishing (browse-only contexts, or no network key yet). Cheap
+// relative to a full NetworkRuntime::Restart(), which drops every peer.
+void Republish();
+
 // Host id collision warning is raised when we see another peer advertising our hostId.
 bool HasHostIDCollisionWarning();
 void ClearHostIDCollisionWarning();

@@ -280,13 +280,14 @@ void HandleResolved(const DNS_SERVICE_INSTANCE* instance) {
             it->second.deviceName = peer.deviceName;
         }
 
-        // hostId-level dedup: only fire Added on the empty→non-empty transition.
-        auto& instancesForHost = s.liveByHostId[peer.hostId];
-        const bool firstForHost = instancesForHost.empty();
-        instancesForHost.insert(instance->pszInstanceName);
-        if (!firstForHost) {
-            cb = nullptr;
-        }
+        // Track the instance under its hostId for the Removed-side dedup (fire Removed
+        // only when the hostId's last instance disappears). The Added side is no longer
+        // gated here: the NetworkRuntime reconciler owns hostId/endpoint dedup, and
+        // firing Added on every resolve is what lets a republish under a fresh instance
+        // name surface an address change even if the old instance's goodbye is delayed
+        // or lost -- gating on first-instance-per-hostId would otherwise suppress the new
+        // address until the stale instance's TTL expired.
+        s.liveByHostId[peer.hostId].insert(instance->pszInstanceName);
     }
 
     if (cb) cb(Event::Added, peer);
@@ -411,7 +412,11 @@ void WINAPI OnBrowseCallback(DWORD status, PVOID /*queryContext*/, PDNS_RECORD p
 // ============================================================================
 void WINAPI OnRegisterComplete(DWORD status, PVOID /*queryContext*/, PDNS_SERVICE_INSTANCE pInstance) {
     auto& s = GlobalState();
-    if (status != ERROR_SUCCESS) {
+    if (status == ERROR_CANCELLED || status == ERROR_OPERATION_ABORTED) {
+        // Expected: Stop()/Republish() cancelled the registration; this is the final
+        // callback the cancel delivers, not a real failure.
+        g_logger.log(__FUNCTION__, Logger::Level::Debug, "DNS-SD registration cancelled.");
+    } else if (status != ERROR_SUCCESS) {
         LogStatus(__FUNCTION__, status, "DnsServiceRegister");
     } else if (pInstance && pInstance->pszInstanceName) {
         std::wstring fullName = pInstance->pszInstanceName;
@@ -579,6 +584,47 @@ void Stop() {
     g_logger.log(__FUNCTION__, Logger::Level::Info, "DNS-SD discovery stopped.");
 }
 
+
+void Republish() {
+    auto& s = GlobalState();
+
+    // Stage the old registration's cancel handle + owned instance under the lock, then
+    // release before calling DnsServiceRegisterCancel -- exactly as Stop() does, because
+    // the cancel synchronously delivers a final OnRegisterComplete that re-locks s.mutex.
+    DNS_SERVICE_CANCEL oldCancel{};
+    DNS_SERVICE_INSTANCE* oldInstance = nullptr;
+    bool haveOld = false;
+    {
+        std::lock_guard<std::mutex> lock(s.mutex);
+        if (!s.started || !s.publishLocal) return;
+        if (s.registerActive) {
+            oldCancel = s.registerCancel;
+            oldInstance = s.registeredInstance;
+            s.registerActive = false;
+            s.registeredInstance = nullptr;
+            haveOld = true;
+            // Forget the old published name so the browse self-filter doesn't accidentally
+            // match (and skip) the new instance during the brief overlap.
+            s.publishedInstanceNameW.clear();
+            s.publishedInstanceNameUtf8.clear();
+        }
+    }
+
+    if (haveOld) {
+        DnsServiceRegisterCancel(&oldCancel);   // sends the goodbye for the old instance
+        if (oldInstance) DnsServiceFreeInstance(oldInstance);
+    }
+
+    // Re-register under a fresh instance name (PublishLocked calls MakeInstanceName).
+    {
+        std::lock_guard<std::mutex> lock(s.mutex);
+        if (s.started && s.publishLocal) {
+            PublishLocked(s);
+            g_logger.log(__FUNCTION__, Logger::Level::Info,
+                "DNS-SD re-announced under a fresh instance name.");
+        }
+    }
+}
 
 bool HasHostIDCollisionWarning() {
     return GlobalState().hostIDCollisionWarning.load();
