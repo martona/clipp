@@ -291,6 +291,9 @@ elseif (APPLE)
     # Cross-Apple discovery impl (used on macOS and iOS); add by name since the common glob is
     # restricted to *.cpp / *.h.
     list(APPEND CLIPP_MACOS_PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/MDNSDiscovery_Apple.mm")
+    # Event-driven network-change watch (nw_path_monitor); .mm because it needs ARC +
+    # Network.framework. Shared with the iOS target (add it there in the Xcode project).
+    list(APPEND CLIPP_MACOS_PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/NetworkChangeMonitor_Apple.mm")
     # Cross-Apple compound device-badge renderer (CoreText/CoreGraphics); shared
     # verbatim with the iOS target.
     list(APPEND CLIPP_MACOS_PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/ClippGlyphBadge.mm")
@@ -347,6 +350,7 @@ elseif (APPLE)
     find_library(SECURITY_FRAMEWORK Security REQUIRED)
     find_library(APPKIT_FRAMEWORK AppKit REQUIRED)
     find_library(SERVICEMANAGEMENT_FRAMEWORK ServiceManagement REQUIRED)
+    find_library(NETWORK_FRAMEWORK Network REQUIRED)   # nw_path_monitor (NetworkChangeMonitor)
 
     target_link_libraries(clipp PRIVATE
         ${COREFOUNDATION_FRAMEWORK}
@@ -354,6 +358,7 @@ elseif (APPLE)
         ${SECURITY_FRAMEWORK}
         ${APPKIT_FRAMEWORK}
         ${SERVICEMANAGEMENT_FRAMEWORK}
+        ${NETWORK_FRAMEWORK}
     )
 
     # CMake substitutes ${MACOSX_BUNDLE_*} target properties into Info.plist.in

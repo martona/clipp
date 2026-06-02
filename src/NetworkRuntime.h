@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -28,10 +29,15 @@ private:
     void ThreadProc();
     void OnClipboardReceived(std::shared_ptr<const ClipboardPayload> payload);
 
-    // Periodic work, driven by the runtime thread (~1s cadence): expire any deferred
-    // peer removals, and re-announce discovery if the local interface addresses changed.
-    void Tick(std::chrono::steady_clock::time_point now);
-    void MaybeRepublishForNetworkChange(std::chrono::steady_clock::time_point now);
+    // Event-driven runtime work. The thread sleeps until woken; nothing polls.
+    //  - SignalWake: wake the thread (from the network-change monitor, the reconciler's
+    //    deferred-removal path, or Stop). `interfacesChanged` means "re-hash interfaces".
+    //  - ComputeNextWake: the soonest deadline the thread must wake for (pending republish
+    //    cooldown, or a deferred peer removal); nullopt = sleep until explicitly woken.
+    //  - ProcessWake: re-hash if flagged, republish if pending+cooled-down, sweep removals.
+    void SignalWake(bool interfacesChanged);
+    std::optional<std::chrono::steady_clock::time_point> ComputeNextWake();
+    void ProcessWake(std::chrono::steady_clock::time_point now);
 
     static void OnDiscoveryEvent(MDNSDiscovery::Event event, const MDNSDiscovery::DiscoveredPeer& peer);
 
@@ -42,8 +48,15 @@ private:
     bool stopRequested_ = false;
     bool stopping_ = false;
 
+    // Wake coordination (guarded by mutex_). wakePending_ = "re-evaluate now";
+    // interfacesChanged_ = "the network-change monitor fired, re-hash".
+    bool wakePending_ = false;
+    bool interfacesChanged_ = false;
+
     // Touched only by the runtime thread (Stop() joins it before anyone else looks).
-    uint64_t lastAddrHash_ = 0;
+    uint64_t lastAddrHash_ = 0;       // fingerprint last acted on
+    uint64_t pendingHash_ = 0;        // latest fingerprint awaiting a (cooled-down) republish
+    bool republishPending_ = false;
     std::chrono::steady_clock::time_point lastRepublish_{};
 };
 

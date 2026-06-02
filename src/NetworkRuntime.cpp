@@ -1,12 +1,14 @@
 #include "NetworkRuntime.h"
 
 #include <chrono>
+#include <functional>
 #include <map>
-#include <vector>
+#include <optional>
 
 #include "HostId.h"
 #include "Logger.h"
 #include "MDNSDiscovery.h"
+#include "NetworkChangeMonitor.h"
 #include "NetworkInterfaces.h"
 #include "PeerManager.h"
 #include "Settings.h"
@@ -51,6 +53,10 @@ namespace {
 // here: discovery's liveByHostId collapse already swallows both events.
 constexpr auto kRemovalGrace = std::chrono::seconds(4);
 
+// Lower bound between successive re-announcements; coalesces interface flapping (DHCP,
+// link-local settling, IPv6 privacy-address rotation) into at most one republish/window.
+constexpr auto kMinRepublishInterval = std::chrono::seconds(10);
+
 class OutgoingReconciler {
 public:
     void OnEvent(MDNSDiscovery::Event event, const MDNSDiscovery::DiscoveredPeer& peer) {
@@ -58,44 +64,50 @@ public:
         // PeerManager when two resolves for the same hostId race (Win32 delivers resolve
         // callbacks on concurrent threads). AddPeer/RemoveOutgoingPeer never reach back
         // into the reconciler, so the lock order is strictly one-way.
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (event == MDNSDiscovery::Event::Removed) {
-            // Defer; Sweep() makes it real if no replacement shows up within the grace.
-            if (active_.count(peer.hostId)) {
-                pendingRemoval_[peer.hostId] = std::chrono::steady_clock::now() + kRemovalGrace;
-                g_logger.log("Reconciler", Logger::Level::Debug,
-                    "Peer '%s' departure reported; deferring removal up to %llds for a re-announce.",
-                    peer.deviceName.c_str(),
-                    static_cast<long long>(std::chrono::duration_cast<std::chrono::seconds>(kRemovalGrace).count()));
+        std::function<void()> wakeRuntime;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (event == MDNSDiscovery::Event::Removed) {
+                // Defer; Sweep() makes it real if no replacement shows up within the grace.
+                if (active_.count(peer.hostId)) {
+                    pendingRemoval_[peer.hostId] = std::chrono::steady_clock::now() + kRemovalGrace;
+                    g_logger.log("Reconciler", Logger::Level::Debug,
+                        "Peer '%s' departure reported; deferring removal up to %llds for a re-announce.",
+                        peer.deviceName.c_str(),
+                        static_cast<long long>(std::chrono::duration_cast<std::chrono::seconds>(kRemovalGrace).count()));
+                    // Wake the runtime thread so it re-arms its sleep to this grace deadline.
+                    wakeRuntime = wake_;
+                }
+            } else {
+                // Added: a (re)appearance cancels any pending removal for this hostId.
+                pendingRemoval_.erase(peer.hostId);
+                auto it = active_.find(peer.hostId);
+                if (it == active_.end()) {
+                    active_.emplace(peer.hostId, peer);
+                    g_logger.log("Reconciler", Logger::Level::Debug,
+                        "Peer '%s' discovered at %s:%hu; connecting.",
+                        peer.deviceName.c_str(), peer.ip.c_str(), peer.port);
+                    ForwardAddPeer(peer);
+                } else if (it->second.ip != peer.ip || it->second.port != peer.port) {
+                    // Endpoint moved: drop the stale connection and reconnect to the new
+                    // address (AddPeer alone dedups outgoing peers by hostId, can't update).
+                    g_logger.log("Reconciler", Logger::Level::Debug,
+                        "Peer '%s' endpoint changed %s:%hu -> %s:%hu; reconnecting.",
+                        peer.deviceName.c_str(), it->second.ip.c_str(), it->second.port,
+                        peer.ip.c_str(), peer.port);
+                    it->second = peer;
+                    g_peerManager.RemoveOutgoingPeer(peer.hostId);
+                    ForwardAddPeer(peer);
+                } else {
+                    // Pure republish (same hostId + endpoint): the whole point of the
+                    // reconciler is to NOT churn a healthy connection here.
+                    g_logger.log("Reconciler", Logger::Level::Debug,
+                        "Peer '%s' re-announced at unchanged endpoint %s:%hu; keeping live connection.",
+                        peer.deviceName.c_str(), peer.ip.c_str(), peer.port);
+                }
             }
-            return;
         }
-        // Added: a (re)appearance cancels any pending removal for this hostId.
-        pendingRemoval_.erase(peer.hostId);
-        auto it = active_.find(peer.hostId);
-        if (it == active_.end()) {
-            active_.emplace(peer.hostId, peer);
-            g_logger.log("Reconciler", Logger::Level::Debug,
-                "Peer '%s' discovered at %s:%hu; connecting.",
-                peer.deviceName.c_str(), peer.ip.c_str(), peer.port);
-            ForwardAddPeer(peer);
-        } else if (it->second.ip != peer.ip || it->second.port != peer.port) {
-            // Endpoint moved: drop the stale connection and reconnect to the new address
-            // (AddPeer alone dedups outgoing peers by hostId, so it can't update one).
-            g_logger.log("Reconciler", Logger::Level::Debug,
-                "Peer '%s' endpoint changed %s:%hu -> %s:%hu; reconnecting.",
-                peer.deviceName.c_str(), it->second.ip.c_str(), it->second.port,
-                peer.ip.c_str(), peer.port);
-            it->second = peer;
-            g_peerManager.RemoveOutgoingPeer(peer.hostId);
-            ForwardAddPeer(peer);
-        } else {
-            // Pure republish (same hostId + endpoint): the whole point of the reconciler
-            // is to NOT churn a healthy connection here.
-            g_logger.log("Reconciler", Logger::Level::Debug,
-                "Peer '%s' re-announced at unchanged endpoint %s:%hu; keeping live connection.",
-                peer.deviceName.c_str(), peer.ip.c_str(), peer.port);
-        }
+        if (wakeRuntime) wakeRuntime();
     }
 
     void Sweep(std::chrono::steady_clock::time_point now) {
@@ -122,6 +134,24 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         active_.clear();
         pendingRemoval_.clear();
+        wake_ = nullptr;
+    }
+
+    // Set by NetworkRuntime: invoked (outside our lock) when a removal is deferred, so the
+    // runtime thread can re-arm its sleep to the new grace deadline.
+    void SetWakeCallback(std::function<void()> wake) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        wake_ = std::move(wake);
+    }
+
+    // Soonest deferred-removal deadline, or nullopt if none pending.
+    std::optional<std::chrono::steady_clock::time_point> NextRemovalDeadline() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::optional<std::chrono::steady_clock::time_point> nearest;
+        for (const auto& entry : pendingRemoval_) {
+            if (!nearest || entry.second < *nearest) nearest = entry.second;
+        }
+        return nearest;
     }
 
 private:
@@ -136,6 +166,8 @@ private:
     std::map<HostId, MDNSDiscovery::DiscoveredPeer> active_;
     // hostId -> deadline after which a deferred Removed becomes real.
     std::map<HostId, std::chrono::steady_clock::time_point> pendingRemoval_;
+    // Wakes the runtime thread when a removal is deferred (set by NetworkRuntime).
+    std::function<void()> wake_;
 };
 
 OutgoingReconciler& Reconciler() {
@@ -198,6 +230,7 @@ bool NetworkRuntime::Restart() {
 
 void NetworkRuntime::ThreadProc() {
     Reconciler().Reset();  // no carryover from a previous run
+    Reconciler().SetWakeCallback([this]() { SignalWake(/*interfacesChanged=*/false); });
 
     bool mdnsStarted = false;
     bool listenerStarted = false;
@@ -219,22 +252,50 @@ void NetworkRuntime::ThreadProc() {
     }
 
     // Baseline the interface fingerprint so we only re-announce on *subsequent* changes,
-    // and arm the rate-limit clock so nothing republishes during startup settling.
+    // and arm the cooldown clock so nothing republishes during startup settling.
     lastAddrHash_ = clipp::HashLocalInterfaceAddresses();
+    pendingHash_ = lastAddrHash_;
+    republishPending_ = false;
     lastRepublish_ = std::chrono::steady_clock::now();
-    g_logger.log(__FUNCTION__, Logger::Level::Debug,
-        "Network change monitor armed (1s poll); interface fingerprint baseline %016llx.",
-        static_cast<unsigned long long>(lastAddrHash_));
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        wakePending_ = false;
+        interfacesChanged_ = false;
+    }
 
+    // Event-driven interface-change watch: the OS signals us instead of us polling.
+    clipp::NetworkChangeMonitor* monitor =
+        clipp::StartNetworkChangeMonitor([this]() { SignalWake(/*interfacesChanged=*/true); });
+    if (monitor) {
+        g_logger.log(__FUNCTION__, Logger::Level::Debug,
+            "Network change monitor armed (event-driven); interface fingerprint baseline %016llx.",
+            static_cast<unsigned long long>(lastAddrHash_));
+    } else {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning,
+            "Network change monitor unavailable; interface changes will not auto re-announce.");
+    }
+
+    // Sleep until something happens: a monitor event, the soonest pending deadline (a
+    // republish cooldown or a deferred peer removal), or stop. No polling when idle.
     for (;;) {
+        const std::optional<std::chrono::steady_clock::time_point> deadline = ComputeNextWake();
         {
             std::unique_lock<std::mutex> lock(mutex_);
+            if (!stopRequested_ && !wakePending_) {
+                if (deadline) {
+                    stopCV_.wait_until(lock, *deadline, [this]() { return stopRequested_ || wakePending_; });
+                } else {
+                    stopCV_.wait(lock, [this]() { return stopRequested_ || wakePending_; });
+                }
+            }
             if (stopRequested_) break;
-            stopCV_.wait_for(lock, std::chrono::seconds(1), [this]() { return stopRequested_; });
-            if (stopRequested_) break;
+            wakePending_ = false;
         }
-        // Periodic work runs with mutex_ released (it calls into PeerManager/MDNSDiscovery).
-        Tick(std::chrono::steady_clock::now());
+        ProcessWake(std::chrono::steady_clock::now());
+    }
+
+    if (monitor) {
+        clipp::StopNetworkChangeMonitor(monitor);  // blocks until no callback is in flight
     }
 
     if (listenerStarted) {
@@ -251,40 +312,75 @@ void NetworkRuntime::ThreadProc() {
     g_logger.log(__FUNCTION__, Logger::Level::Info, "Peer manager cleared.");
 }
 
-void NetworkRuntime::Tick(std::chrono::steady_clock::time_point now) {
-    Reconciler().Sweep(now);
-    MaybeRepublishForNetworkChange(now);
+void NetworkRuntime::SignalWake(bool interfacesChanged) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (interfacesChanged) interfacesChanged_ = true;
+        wakePending_ = true;
+    }
+    stopCV_.notify_one();
 }
 
-void NetworkRuntime::MaybeRepublishForNetworkChange(std::chrono::steady_clock::time_point now) {
-    const uint64_t hash = clipp::HashLocalInterfaceAddresses();
-    if (hash == 0 || hash == lastAddrHash_) {
-        return;  // enumeration failed (0 sentinel), or nothing changed
+std::optional<std::chrono::steady_clock::time_point> NetworkRuntime::ComputeNextWake() {
+    // republishPending_/lastRepublish_ are runtime-thread-only and this runs on that
+    // thread, so no lock; NextRemovalDeadline() locks the reconciler internally.
+    std::optional<std::chrono::steady_clock::time_point> deadline;
+    if (republishPending_) {
+        deadline = lastRepublish_ + kMinRepublishInterval;
     }
-    // The address set changed. Rate-limit re-announcements so a flapping/virtual
-    // interface -- or rotating IPv6 privacy addresses -- can't trigger a storm. Within
-    // the cooldown we leave lastAddrHash_ stale so the next tick re-evaluates and
-    // republishes once the window opens (coalescing to the latest state).
-    constexpr auto kMinRepublishInterval = std::chrono::seconds(10);
-    const auto sinceLast = now - lastRepublish_;
-    if (sinceLast < kMinRepublishInterval) {
-        // Re-evaluated every tick until the cooldown opens -> DDebug, not Debug.
-        g_logger.log(__FUNCTION__, Logger::Level::DDebug,
-            "Interface fingerprint changed (%016llx -> %016llx) but within republish cooldown "
-            "(%lld of %lld ms elapsed); deferring.",
-            static_cast<unsigned long long>(lastAddrHash_),
-            static_cast<unsigned long long>(hash),
-            static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(sinceLast).count()),
-            static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(kMinRepublishInterval).count()));
-        return;
+    if (auto removal = Reconciler().NextRemovalDeadline()) {
+        if (!deadline || *removal < *deadline) deadline = *removal;
     }
-    g_logger.log(__FUNCTION__, Logger::Level::Debug,
-        "Interface address set changed (fingerprint %016llx -> %016llx); re-announcing discovery.",
-        static_cast<unsigned long long>(lastAddrHash_),
-        static_cast<unsigned long long>(hash));
-    MDNSDiscovery::Republish();
-    lastAddrHash_ = hash;
-    lastRepublish_ = now;
+    return deadline;
+}
+
+void NetworkRuntime::ProcessWake(std::chrono::steady_clock::time_point now) {
+    bool rehash;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        rehash = interfacesChanged_;
+        interfacesChanged_ = false;
+    }
+
+    if (rehash) {
+        // A monitor event is a coarse "re-check" hint; the hash decides if the address set
+        // we advertise actually moved.
+        const uint64_t hash = clipp::HashLocalInterfaceAddresses();
+        if (hash != 0 && hash != lastAddrHash_) {
+            republishPending_ = true;
+            pendingHash_ = hash;
+            g_logger.log("MaybeRepublishForNetworkChange", Logger::Level::DDebug,
+                "Interface event: fingerprint %016llx -> %016llx; queuing re-announce.",
+                static_cast<unsigned long long>(lastAddrHash_), static_cast<unsigned long long>(hash));
+        } else if (hash != 0) {
+            g_logger.log("MaybeRepublishForNetworkChange", Logger::Level::DDebug,
+                "Interface event: no change to advertised address set (fingerprint %016llx).",
+                static_cast<unsigned long long>(hash));
+        }
+        // hash == 0 -> enumeration failed transiently; leave state, retry on next event.
+    }
+
+    if (republishPending_) {
+        const auto sinceLast = now - lastRepublish_;
+        if (sinceLast >= kMinRepublishInterval) {
+            g_logger.log("MaybeRepublishForNetworkChange", Logger::Level::Debug,
+                "Interface address set changed (fingerprint %016llx -> %016llx); re-announcing discovery.",
+                static_cast<unsigned long long>(lastAddrHash_), static_cast<unsigned long long>(pendingHash_));
+            MDNSDiscovery::Republish();
+            lastAddrHash_ = pendingHash_;
+            lastRepublish_ = now;
+            republishPending_ = false;
+        } else {
+            // Still cooling down; ComputeNextWake() will time us out at lastRepublish_ +
+            // cooldown to fire it. DDebug -- this can recur across wakes within the window.
+            g_logger.log("MaybeRepublishForNetworkChange", Logger::Level::DDebug,
+                "Re-announce within cooldown (%lld of %lld ms elapsed); deferring.",
+                static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(sinceLast).count()),
+                static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(kMinRepublishInterval).count()));
+        }
+    }
+
+    Reconciler().Sweep(now);
 }
 
 void NetworkRuntime::OnClipboardReceived(std::shared_ptr<const ClipboardPayload> payload) {

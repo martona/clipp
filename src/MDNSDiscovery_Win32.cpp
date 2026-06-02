@@ -442,6 +442,41 @@ void WINAPI OnRegisterComplete(DWORD status, PVOID /*queryContext*/, PDNS_SERVIC
     if (pInstance) DnsServiceFreeInstance(pInstance);
 }
 
+// ============================================================================
+// Deregister flow (graceful withdraw with an mDNS goodbye)
+// ============================================================================
+void WINAPI OnDeregisterComplete(DWORD status, PVOID queryContext, PDNS_SERVICE_INSTANCE pInstance) {
+    if (status != ERROR_SUCCESS) {
+        LogStatus(__FUNCTION__, status, "DnsServiceDeRegister");
+    }
+    // Free the API's callback copy plus the instance we submitted; guard against the two
+    // being the same pointer so we never double-free.
+    auto* submitted = static_cast<DNS_SERVICE_INSTANCE*>(queryContext);
+    if (pInstance) DnsServiceFreeInstance(pInstance);
+    if (submitted && submitted != pInstance) DnsServiceFreeInstance(submitted);
+}
+
+// Withdraw a published instance with a proper goodbye (TTL=0). DnsServiceRegisterCancel
+// only cancels the registration *operation*; it does not announce the goodbye, so the
+// records age out on their TTL and neighbors -- and our own browser -- keep resolving the
+// retired instance. DnsServiceDeRegister is async; the instance must stay alive until
+// OnDeregisterComplete frees it.
+void DeregisterInstanceAsync(DNS_SERVICE_INSTANCE* instance) {
+    if (!instance) return;
+    DNS_SERVICE_REGISTER_REQUEST req = {};
+    req.Version = DNS_QUERY_REQUEST_VERSION1;
+    req.InterfaceIndex = 0;
+    req.pServiceInstance = instance;
+    req.pRegisterCompletionCallback = OnDeregisterComplete;
+    req.pQueryContext = instance;
+    DNS_SERVICE_CANCEL cancel{};
+    const DNS_STATUS status = DnsServiceDeRegister(&req, &cancel);
+    if (status != DNS_REQUEST_PENDING && status != ERROR_SUCCESS) {
+        LogStatus(__FUNCTION__, status, "DnsServiceDeRegister");
+        DnsServiceFreeInstance(instance);  // never started; free now
+    }
+}
+
 bool PublishLocked(State& s) {
     HostId hostId;
     if (!g_settings.getHostID(hostId)) {
@@ -538,27 +573,23 @@ bool Start(Callback callback, bool publishLocal, bool includeSelf) {
 void Stop() {
     auto& s = GlobalState();
 
-    // Tear down all soft state under the lock, but stage the DNS_SERVICE_CANCEL
-    // handles and the owned DNS_SERVICE_INSTANCE so we can invoke the actual
-    // cancel APIs AFTER releasing the lock. DnsServiceBrowseCancel /
-    // DnsServiceRegisterCancel synchronously deliver one final completion
-    // callback on the calling thread, and those callbacks re-acquire s.mutex.
-    // Holding the mutex across cancel recursively locks the non-recursive
-    // std::mutex; MSVC throws system_error(EDEADLK), the exception unwinds
-    // through the dnsapi C callback boundary, and terminate() fires.
+    // Tear down soft state under the lock, but stage the browse DNS_SERVICE_CANCEL and the
+    // owned DNS_SERVICE_INSTANCE so the actual API calls run AFTER releasing the lock.
+    // DnsServiceBrowseCancel synchronously delivers one final completion callback on the
+    // calling thread, and that callback re-acquires s.mutex -- holding the mutex across it
+    // recursively locks the non-recursive std::mutex (MSVC throws EDEADLK, which unwinds
+    // through the dnsapi C callback boundary and terminate()s). The register teardown uses
+    // DnsServiceDeRegister, whose completion is async (a dnsapi thread, touching no shared
+    // state), so it has no such constraint.
     DNS_SERVICE_CANCEL browseCancel{};
-    DNS_SERVICE_CANCEL registerCancel{};
-    DNS_SERVICE_INSTANCE* instanceToFree = nullptr;
+    DNS_SERVICE_INSTANCE* instanceToDeregister = nullptr;
     bool wasBrowseActive = false;
-    bool wasRegisterActive = false;
     {
         std::lock_guard<std::mutex> lock(s.mutex);
         if (!s.started) return;
 
-        wasRegisterActive = s.registerActive;
-        registerCancel = s.registerCancel;
         s.registerActive = false;
-        instanceToFree = s.registeredInstance;
+        instanceToDeregister = s.registeredInstance;
         s.registeredInstance = nullptr;
         s.publishedInstanceNameW.clear();
         s.publishedInstanceNameUtf8.clear();
@@ -569,17 +600,17 @@ void Stop() {
         s.liveInstances.clear();
         s.liveByHostId.clear();
 
-        // Clear started + callback BEFORE the cancel calls so the synchronous
-        // final callback that DnsServiceBrowseCancel/RegisterCancel delivers
-        // sees the discovery layer as stopped and bails (see the !s.started
-        // guards in OnBrowseCallback / HandleResolved / OnRegisterComplete).
+        // Clear started + callback BEFORE the cancel call so the synchronous final
+        // callback that DnsServiceBrowseCancel delivers sees the discovery layer as
+        // stopped and bails (see the !s.started guards in OnBrowseCallback / HandleResolved).
         s.callback = nullptr;
         s.started = false;
     }
 
-    if (wasRegisterActive) DnsServiceRegisterCancel(&registerCancel);
-    if (instanceToFree)    DnsServiceFreeInstance(instanceToFree);
-    if (wasBrowseActive)   DnsServiceBrowseCancel(&browseCancel);
+    // Graceful withdraw with an mDNS goodbye (TTL=0) so neighbors evict us promptly instead
+    // of waiting out the record TTL; frees the instance on completion.
+    if (instanceToDeregister) DeregisterInstanceAsync(instanceToDeregister);
+    if (wasBrowseActive)      DnsServiceBrowseCancel(&browseCancel);
 
     g_logger.log(__FUNCTION__, Logger::Level::Info, "DNS-SD discovery stopped.");
 }
@@ -588,21 +619,16 @@ void Stop() {
 void Republish() {
     auto& s = GlobalState();
 
-    // Stage the old registration's cancel handle + owned instance under the lock, then
-    // release before calling DnsServiceRegisterCancel -- exactly as Stop() does, because
-    // the cancel synchronously delivers a final OnRegisterComplete that re-locks s.mutex.
-    DNS_SERVICE_CANCEL oldCancel{};
+    // Stage the old registration's owned instance under the lock, then release before the
+    // (async) deregister.
     DNS_SERVICE_INSTANCE* oldInstance = nullptr;
-    bool haveOld = false;
     {
         std::lock_guard<std::mutex> lock(s.mutex);
         if (!s.started || !s.publishLocal) return;
         if (s.registerActive) {
-            oldCancel = s.registerCancel;
             oldInstance = s.registeredInstance;
-            s.registerActive = false;
             s.registeredInstance = nullptr;
-            haveOld = true;
+            s.registerActive = false;
             // Forget the old published name so the browse self-filter doesn't accidentally
             // match (and skip) the new instance during the brief overlap.
             s.publishedInstanceNameW.clear();
@@ -610,10 +636,9 @@ void Republish() {
         }
     }
 
-    if (haveOld) {
-        DnsServiceRegisterCancel(&oldCancel);   // sends the goodbye for the old instance
-        if (oldInstance) DnsServiceFreeInstance(oldInstance);
-    }
+    // Gracefully withdraw the old instance (mDNS goodbye, TTL=0) so neighbors and our own
+    // browser evict it promptly instead of resolving the retired name off a cached record.
+    if (oldInstance) DeregisterInstanceAsync(oldInstance);
 
     // Re-register under a fresh instance name (PublishLocked calls MakeInstanceName).
     {
