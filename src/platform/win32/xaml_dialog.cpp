@@ -449,7 +449,7 @@ private:
 
         const MenuItemDefinition menuItems[] = {
             { L"\xE77F", CLP_W(CLP_UI_APP_NAME) },
-            { L"\xE968", CLP_W(CLP_UI_SYNC_GROUP) },
+            { L"\xE968", CLP_W(CLP_UI_NETWORK) },
             { L"\xE713", CLP_W(CLP_UI_SETTINGS) },
             { L"\xE946", CLP_W(CLP_UI_ABOUT) },
         };

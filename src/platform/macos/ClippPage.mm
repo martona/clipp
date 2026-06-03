@@ -405,7 +405,7 @@ void MacOSClippPage::BuildView() {
     activityEmptyMessage_ = MakeActivityLabel(@"", 14.0, [NSColor secondaryLabelColor]);
     activityEmptyMessage_.alignment = NSTextAlignmentCenter;
 
-    activityEmptyNetworkButton_ = [NSButton buttonWithTitle:CLP_NS(CLP_UI_SYNC_GROUP)
+    activityEmptyNetworkButton_ = [NSButton buttonWithTitle:CLP_NS(CLP_UI_NETWORK)
                                                      target:actionTarget_
                                                      action:@selector(showNetworkPage:)];
     activityEmptyNetworkButton_.translatesAutoresizingMaskIntoConstraints = NO;

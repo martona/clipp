@@ -11,7 +11,6 @@
 
 #define CLP_UI_APP_NAME "Clipp"
 #define CLP_UI_NETWORK "Network"
-#define CLP_UI_SYNC_GROUP "Sync group"
 #define CLP_UI_SETTINGS "Settings"
 #define CLP_UI_LOGS "Logs"
 #define CLP_UI_DIAGNOSTICS "Diagnostics"
@@ -19,12 +18,12 @@
 #define CLP_UI_OPEN_CLIPP "Open Clipp"
 #define CLP_UI_ABOUT_CLIPP "About Clipp"
 #define CLP_UI_EXIT_CLIPP "Exit Clipp"
-#define CLP_UI_STATUS_TOOLTIP "Clipp Network Sync"
+#define CLP_UI_STATUS_TOOLTIP "Clipp"
 
 #define CLP_UI_NAME "Group name"
 #define CLP_UI_SECRET "Passphrase"
 #define CLP_UI_NETWORK_KEY "Group key"
-#define CLP_UI_NETWORK_KEY_FINGERPRINT "Group fingerprint - shown only here so you can confirm two devices match. Not itself a secret."
+#define CLP_UI_NETWORK_KEY_FINGERPRINT "Group key fingerprint for confirmation. Not itself a secret."
 #define CLP_UI_ENTER_NETWORK_SECRET "Enter a group name and passphrase to pair this device with your others."
 #define CLP_UI_SECRET_TOO_SHORT "Passphrase must be at least 8 characters."
 #define CLP_UI_WORKING "... working ..."

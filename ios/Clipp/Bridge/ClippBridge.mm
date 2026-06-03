@@ -492,7 +492,7 @@ CLPNetworkKeyStatus* LoadNetworkKeyStatus(NSError** error) {
         if (fingerprintText.empty()) {
             AssignError(error,
                         kClippNetworkKeyErrorBase + 2,
-                        ToNSString("Unable to read group fingerprint: " + keyError));
+                        ToNSString("Unable to read group key fingerprint: " + keyError));
             return nil;
         }
         fingerprint = ToNSString(fingerprintText);

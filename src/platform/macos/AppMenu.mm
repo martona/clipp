@@ -316,7 +316,7 @@ void RequestMacOSShowMainWindow(bool showNetworkPage) {
 
     NSArray<NSString*>* titles = @[
         CLP_NS(CLP_UI_APP_NAME),
-        CLP_NS(CLP_UI_SYNC_GROUP),
+        CLP_NS(CLP_UI_NETWORK),
         CLP_NS(CLP_UI_SETTINGS),
         CLP_NS(CLP_UI_ABOUT)
     ];

@@ -286,7 +286,7 @@ void MacOSNetworkPage::BuildView() {
     contentStack.spacing = 16.0;
     contentStack.detachesHiddenViews = YES;
 
-    NSTextField* heading = [NSTextField labelWithString:CLP_NS(CLP_UI_SYNC_GROUP)];
+    NSTextField* heading = [NSTextField labelWithString:CLP_NS(CLP_UI_NETWORK)];
     heading.translatesAutoresizingMaskIntoConstraints = NO;
     heading.font = [NSFont systemFontOfSize:28 weight:NSFontWeightSemibold];
     heading.textColor = [NSColor labelColor];
@@ -499,7 +499,7 @@ void MacOSNetworkPage::OnDerivedKey(const KeyManager::NetworkKey& key) {
     if (!g_keyManager.SetNetworkKey(key, &errorMessage)) {
         passwordStatusPanel_.hidden = YES;
         passwordInfoPanel_.hidden = NO;
-        MacOSSetFieldText(passwordInfoText_, MacOSToNSString("Unable to store network key: " + errorMessage));
+        MacOSSetFieldText(passwordInfoText_, MacOSToNSString("Unable to store group key: " + errorMessage));
         return;
     }
 

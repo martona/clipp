@@ -22,7 +22,7 @@ enum AppPanel: String, Identifiable {
     var title: String {
         switch self {
         case .network:
-            CLP_UI_SYNC_GROUP
+            CLP_UI_NETWORK
         case .settings:
             CLP_UI_SETTINGS
         case .about:
@@ -122,7 +122,7 @@ private struct NetworkPanelView: View {
             } message: {
                 Text("Devices using the old key stop syncing until you set the same group name and passphrase on them.")
             }
-            .confirmationDialog("Delete sync group?", isPresented: $confirmingDelete, titleVisibility: .visible) {
+            .confirmationDialog("Delete group key?", isPresented: $confirmingDelete, titleVisibility: .visible) {
                 Button("Delete", role: .destructive) {
                     model.clearKey()
                     didCompleteWelcome = false
@@ -274,13 +274,13 @@ private final class NetworkKeyViewModel: ObservableObject {
     @Published var fingerprint: String?
     @Published var hasNetworkKey = false
     @Published var isWorking = false
-    @Published var statusMessage = "Loading sync group status..."
+    @Published var statusMessage = "Loading group key status..."
     @Published var statusIsError = false
 
     private var storedNetworkName = ""
 
     var actionTitle: String {
-        hasNetworkKey ? "Replace group key" : "Create sync group"
+        hasNetworkKey ? "Replace group key" : "Create group key"
     }
 
     var canCreateKey: Bool {
@@ -368,7 +368,7 @@ private final class NetworkKeyViewModel: ObservableObject {
             statusMessage = CLP_UI_SECRET_TOO_SHORT
         } else if !secret.isEmpty {
             statusIsError = false
-            statusMessage = "Ready to create your sync group."
+            statusMessage = "Ready to create your group key."
         } else if hasNetworkKey && networkName != storedNetworkName {
             statusIsError = false
             statusMessage = "Enter the passphrase again after changing the group name."
@@ -414,7 +414,7 @@ private struct NetworkKeyStatusCard: View {
                             Label("Copy fingerprint", systemImage: "doc.on.doc")
                         }
                         Button(role: .destructive, action: onDelete) {
-                            Label("Delete sync group", systemImage: "trash")
+                            Label("Delete group key", systemImage: "trash")
                         }
                     } label: {
                         HStack(spacing: 6) {
@@ -426,7 +426,7 @@ private struct NetworkKeyStatusCard: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    .accessibilityLabel("Group fingerprint actions")
+                    .accessibilityLabel("Group key actions")
                 }
 
                 Text(model.statusMessage)

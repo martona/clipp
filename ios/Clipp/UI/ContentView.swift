@@ -76,7 +76,7 @@ struct ContentView: View {
                         )
                     }
                     .foregroundStyle(.secondary)
-                    .accessibilityLabel(CLP_UI_SYNC_GROUP)
+                    .accessibilityLabel(CLP_UI_NETWORK)
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {

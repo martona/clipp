@@ -64,7 +64,7 @@ void NetworkPage::BuildView() {
     content.Spacing(16);
 
     TextBlock heading;
-    heading.Text(CLP_W(CLP_UI_SYNC_GROUP));
+    heading.Text(CLP_W(CLP_UI_NETWORK));
     heading.FontSize(28);
     heading.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
     heading.TextWrapping(TextWrapping::Wrap);

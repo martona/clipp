@@ -2,9 +2,9 @@
 
 Clipp is designed for a specific trust model: your own devices, on a local network or VPN. It is not meant to be an open pairing protocol for strangers on the same Wi-Fi, and it is not a cloud account system with remote device management.
 
-## Joining a sync group
+## Joining a group
 
-Devices join a Clipp sync group by using the same group name and passphrase. Clipp derives a master key from that input, stores it in platform-protected storage, and shows a fingerprint so you can verify that devices are configured with the same key. The fingerprint is not a secret; it is just a way to detect mismatched setup. Discovery, handshakes, fingerprints, and encrypted streams use separate keys derived from that master key.
+Devices join a Clipp group by using the same group name and passphrase. Clipp derives a master key from that input, stores it in platform-protected storage, and shows a fingerprint so you can verify that devices are configured with the same key. The fingerprint is not a secret; it is just a way to detect mismatched setup. Discovery, handshakes, fingerprints, and encrypted streams use separate keys derived from that master key.
 
 ## Discovery
 
