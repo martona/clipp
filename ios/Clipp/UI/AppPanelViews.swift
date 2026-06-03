@@ -85,6 +85,8 @@ private struct NetworkPanelView: View {
     @StateObject private var model = NetworkKeyViewModel()
     @StateObject private var peerModel = NetworkPeerListViewModel()
     @State private var confirmingReplacement = false
+    @State private var confirmingDelete = false
+    @AppStorage("clipp.didCompleteWelcome") private var didCompleteWelcome = false
 
     var body: some View {
         Form {
@@ -107,7 +109,9 @@ private struct NetworkPanelView: View {
                         Label(model.actionTitle, systemImage: "key")
                     }
                 } else {
-                    NetworkKeyStatusCard(model: model)
+                    NetworkKeyStatusCard(model: model) {
+                        confirmingDelete = true
+                    }
                 }
             }
             .alert("Replace group key?", isPresented: $confirmingReplacement) {
@@ -117,6 +121,15 @@ private struct NetworkPanelView: View {
                 }
             } message: {
                 Text("Devices using the old key stop syncing until you set the same group name and passphrase on them.")
+            }
+            .confirmationDialog("Delete sync group?", isPresented: $confirmingDelete, titleVisibility: .visible) {
+                Button("Delete", role: .destructive) {
+                    model.clearKey()
+                    didCompleteWelcome = false
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This device stops syncing until you pair it again with a group name and passphrase.")
             }
             .onChange(of: model.secret) {
                 model.updateStatusMessage()
@@ -302,6 +315,17 @@ private final class NetworkKeyViewModel: ObservableObject {
         }
     }
 
+    func clearKey() {
+        do {
+            try NetworkKeyBridge.clearNetworkKey()
+            secret = ""
+            loadStatus()
+        } catch {
+            statusIsError = true
+            statusMessage = error.localizedDescription
+        }
+    }
+
     func deriveAndStoreKey() {
         guard canCreateKey else {
             updateStatusMessage()
@@ -373,6 +397,7 @@ private final class NetworkKeyViewModel: ObservableObject {
 
 private struct NetworkKeyStatusCard: View {
     @ObservedObject var model: NetworkKeyViewModel
+    let onDelete: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -382,9 +407,26 @@ private struct NetworkKeyStatusCard: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 if model.shouldShowFingerprint, let fingerprint = model.fingerprint {
-                    Text(fingerprint)
-                        .font(.system(.subheadline, design: .monospaced).weight(.semibold))
-                        .textSelection(.enabled)
+                    Menu {
+                        Button {
+                            UIPasteboard.general.string = fingerprint
+                        } label: {
+                            Label("Copy fingerprint", systemImage: "doc.on.doc")
+                        }
+                        Button(role: .destructive, action: onDelete) {
+                            Label("Delete sync group", systemImage: "trash")
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(fingerprint)
+                                .font(.system(.subheadline, design: .monospaced).weight(.semibold))
+                                .foregroundStyle(.primary)
+                            Image(systemName: "ellipsis.circle")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .accessibilityLabel("Group fingerprint actions")
                 }
 
                 Text(model.statusMessage)

@@ -1021,9 +1021,9 @@ private struct WelcomeView: View {
 
             VStack(alignment: .leading, spacing: 20) {
                 WelcomeBullet(
-                    symbol: "wifi",
-                    title: "Local network only",
-                    detail: "Your devices find each other on the same Wi-Fi and send clipboard items straight to one another."
+                    symbol: "person.2",
+                    title: "Only your devices",
+                    detail: "Pair your devices with a shared group name and passphrase. Only devices you set up can connect."
                 )
                 WelcomeBullet(
                     symbol: "lock.shield",
@@ -1031,9 +1031,9 @@ private struct WelcomeView: View {
                     detail: "Nothing is uploaded to a server. Clipp has no account and collects no personal data."
                 )
                 WelcomeBullet(
-                    symbol: "person.2",
-                    title: "Only your devices",
-                    detail: "Pair your devices with a shared group name and passphrase. Only devices you set up can connect."
+                    symbol: "wifi",
+                    title: "Local network only",
+                    detail: "Your devices find each other on the same Wi-Fi and send clipboard items straight to one another."
                 )
             }
             .padding(.horizontal, 28)
