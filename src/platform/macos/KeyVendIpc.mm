@@ -379,14 +379,14 @@ bool RequestNetworkKeyOverSocket(KeyManager::NetworkKey& outKey, std::string* er
         return false;
     }
     if (status != kStatusOk) {
-        if (errorMessage) *errorMessage = "The running clipp has no network key configured.";
+        if (errorMessage) *errorMessage = "The running Clipp has no group key configured.";
         close(fd);
         return false;
     }
 
     unsigned char keyBytes[KeyManager::NetworkKeySize]{};
     if (!ReadAll(fd, keyBytes, sizeof(keyBytes))) {
-        if (errorMessage) *errorMessage = "Failed to read the network key from the key-vend response.";
+        if (errorMessage) *errorMessage = "Failed to read the group key from the key-vend response.";
         sodium_memzero(keyBytes, sizeof(keyBytes));
         close(fd);
         return false;

@@ -18,7 +18,7 @@ Clipp's threat model is documented in the [Security Model](docs/SECURITY-MODEL.m
 
 Reports against the following are very welcome:
 
-- Weaknesses in the discovery, handshake, or transport protocols that allow a device without the network secret to read clipboard data, produce valid traffic, or impersonate a peer.
+- Weaknesses in the discovery, handshake, or transport protocols that allow a device without the passphrase to read clipboard data, produce valid traffic, or impersonate a peer.
 - Memory safety bugs, crashes, or denial-of-service triggerable by an untrusted peer (or by an on-network attacker without the secret).
 - Flaws in key derivation, fingerprint computation, or master-key handling.
 - Logic flaws that allow a trusted peer to perform actions outside the documented behavior (for example, executing code on a peer rather than only transferring clipboard data).
@@ -31,7 +31,7 @@ The following are not considered vulnerabilities, because they fall outside the 
 - Other software on the same machine (clipboard managers, malware, remote-desktop tools, the OS itself) reading the local clipboard.
 - The user choosing a weak shared secret — Clipp does not attempt to enforce secret strength.
 - The user installing Clipp on a device they do not actually trust.
-- Other code running in the user's security context decrypting the network key — this is a property of the platform's user-scoped secret store (DPAPI on Windows, Keychain on macOS), not a Clipp implementation choice. There is no available primitive on either platform that restricts decrypt access to a specific binary against same-user attackers.
+- Other code running in the user's security context decrypting the group key — this is a property of the platform's user-scoped secret store (DPAPI on Windows, Keychain on macOS), not a Clipp implementation choice. There is no available primitive on either platform that restricts decrypt access to a specific binary against same-user attackers.
 
 ## Disclosure Process
 

@@ -46,7 +46,7 @@ Clipp moves clipboard history between your own devices without a cloud service i
 
 Devices pair with a shared group name + passphrase; Clipp derives a master key and shows a non-secret fingerprint so you can confirm two devices match. Connections are mutually authenticated from that key, then each session negotiates fresh ephemeral Diffie-Hellman keys for encryption - all built on libsodium primitives, no homegrown crypto. Clipboard data moves directly between peers over the LAN, never through a cloud service.
 
-Clipp's trust model is deliberately narrow - your own devices, on a local or overlay network - and it does not defend against software that can already read your local clipboard, a weak or mishandled secret, or a device you shouldn't have trusted. The full trust model, key hierarchy, transport details, and caveats live in the [Security Model](docs/SECURITY-MODEL.md); to report a vulnerability, see [SECURITY.md](SECURITY.md).
+Clipp's trust model is deliberately narrow - your own devices, on a local or overlay network - and it does not defend against software that can already read your local clipboard, a weak or mishandled passphrase, or a device you shouldn't have trusted. The full trust model, key hierarchy, transport details, and caveats live in the [Security Model](docs/SECURITY-MODEL.md); to report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Platform Status
 
@@ -119,7 +119,7 @@ sudo pacman -U ./clipp-linux-<arch>.pkg.tar.zst
 
 The package installs `clipp` to `/usr/bin` and pulls in `libavahi-client`; it *recommends* `avahi-daemon`, which `apt`/`dnf` install by default (discovery needs it running). If you used `dpkg -i` / `rpm -i` on the downloaded file directly, those don't process recommends — enable the daemon yourself: `sudo systemctl enable --now avahi-daemon`. A raw static binary ([amd64][lin-amd64-bin] / [arm64][lin-arm64-bin]) is also published for distros without a matching package; `chmod +x` it and drop it anywhere on your `PATH`.
 
-Set up the network from the terminal with `clipp key set` (it prompts for the network name and secret, exactly like the GUI's Network tab), then `clipp copy` / `clipp paste`. See [Command line](#command-line) below. Note that with no GUI, the Linux client relies on at least one desktop peer being reachable on the network to relay through.
+Set up your group from the terminal with `clipp key set` (it prompts for the group name and passphrase, exactly like the GUI's Network tab), then `clipp copy` / `clipp paste`. See [Command line](#command-line) below. Note that with no GUI, the Linux client relies on at least one desktop peer being reachable on the network to relay through.
 
 ### Verifying downloads
 
@@ -152,14 +152,14 @@ codesign -dvvv Clipp.app
 
 When you launch Clipp on a new device, open the **Network** tab and choose:
 
-- A **network name** — a label for your set of devices. Not a secret, but should be entered in exactly the same way on all your devices.
-- A **secret** — the shared password that makes one of your devices indistinguishable from another to Clipp. Treat this with the care you'd give any password.
+- A **group name** — a label for your set of devices. Not a secret, but should be entered in exactly the same way on all your devices.
+- A **passphrase** — the shared secret that makes one of your devices indistinguishable from another to Clipp. Treat this with the care you'd give any password.
 
-Clipp derives a master key from those two inputs and shows a fingerprint. Repeat the setup on every device you want to sync, using exactly the same name and secret. If the inputs match, the fingerprint matches and the devices will connect immediately; if a device shows a different fingerprint, one of the inputs is wrong on one device, and they won't sync until you fix it.
+Clipp derives a master key from those two inputs and shows a fingerprint. Repeat the setup on every device you want to sync, using exactly the same group name and passphrase. If the inputs match, the fingerprint matches and the devices will connect immediately; if a device shows a different fingerprint, one of the inputs is wrong on one device, and they won't sync until you fix it.
 
 ### Day-to-day
 
-Once two or more devices show the same fingerprint, they discover each other on the local network within a few seconds and appear in the **Peers** list.
+Once two or more devices show the same fingerprint, they discover each other on the local network within a few seconds and appear in the **Paired devices** list.
 
 The simple flow: copy something (text or image) on device A, paste it on device B. You can ignore the UI entirely if that's all you need.
 
@@ -187,11 +187,11 @@ clipp paste                          # print the newest network clipboard item
 clipp p > notes.txt                  # `p` aliases paste; `c` aliases copy
 ```
 
-Transfers are text-only and add no trailing newline, so they pipe cleanly. Delivery goes through whatever peers are already running on the network, so the desktop app doesn't need to be open on *this* machine — just reachable somewhere. You can also set a device's network name and secret from the terminal with `clipp key set`; run `clipp --help` for the rest (`key`, `hostid`).
+Transfers are text-only and add no trailing newline, so they pipe cleanly. Delivery goes through whatever peers are already running on the network, so the desktop app doesn't need to be open on *this* machine — just reachable somewhere. You can also set a device's group name and passphrase from the terminal with `clipp key set`; run `clipp --help` for the rest (`key`, `hostid`).
 
 On Windows, pipe through `clipp.com` (the console shim from [Installation](#windows)) — `clipp.exe` is the GUI and carries no stdio. On macOS the binary lives inside the bundle at `Clipp.app/Contents/MacOS/clipp`, if it's not on your `PATH`.
 
-A note on macOS and using Clipp via SSH on a Mac host: Apps in an SSH session are blind to the keychain. Using Clipp this way requires you to have the GUI app running on the same machine so the process in the SSH session can query it for the network key.
+A note on macOS and using Clipp via SSH on a Mac host: Apps in an SSH session are blind to the keychain. Using Clipp this way requires you to have the GUI app running on the same machine so the process in the SSH session can query it for the group key.
 
 ## Troubleshooting
 
@@ -218,7 +218,7 @@ avahi-browse -rt _clipp._tcp
 
 If `avahi-browse` shows nothing while another device's Clipp GUI is up, the problem is below Clipp (firewall, daemon, or multicast not reaching this host) — Clipp can only resolve what Avahi surfaces.
 
-**Fingerprints don't match between devices.** The two devices have different inputs. Most often this is whitespace, case, or autocorrect on the network name or secret — the inputs are compared byte-for-byte. Re-enter both on the device with the mismatched fingerprint, being careful with mobile autocomplete and spell-correct.
+**Fingerprints don't match between devices.** The two devices have different inputs. Most often this is whitespace, case, or autocorrect on the group name or passphrase — the inputs are compared byte-for-byte. Re-enter both on the device with the mismatched fingerprint, being careful with mobile autocomplete and spell-correct.
 
 **Clipboard sync works one direction but not the other.** Almost always a firewall issue on the device that *receives* but doesn't *send*. Connections are established outbound from sender to receiver; if the receiver's firewall blocks the inbound TCP connection, the link is broken. Check both devices' firewall settings.
 
@@ -244,9 +244,9 @@ No, and that's intentional. Clipp discovers peers via local multicast and isn't 
 
 No. There is no telemetry, no analytics, no crash reporting. Clipp's only network traffic is local discovery and direct peer-to-peer transfers between your own devices.
 
-**I forgot the network secret. Can I recover it?**
+**I forgot the passphrase. Can I recover it?**
 
-No. The secret is part of the key - there's no recovery channel. If you forget it, set up a fresh network with a new name and secret on every device. The fingerprint will change; that's expected.
+No. The passphrase is part of the key - there's no recovery channel. If you forget it, set up a fresh group with a new name and passphrase on every device. The fingerprint will change; that's expected.
 
 ## Building From Source
 

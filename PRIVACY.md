@@ -12,8 +12,8 @@
 
 ## What stays on your device
 
-- **Network credentials.** The network name and the cryptographic key derived from your shared secret are stored in your operating system's secure credential store — Keychain on iOS and macOS, Credential Manager / DPAPI on Windows. Credentials never leave your device unless you intentionally copy them to another of your own devices to pair it.
-- **Preferences.** Your settings are stored in your operating system's preferences storage (`UserDefaults` on Apple platforms, the Windows registry on Windows). These contain feature toggles and your chosen network name.
+- **Network credentials.** The group name and the cryptographic key derived from your shared passphrase are stored in your operating system's secure credential store — Keychain on iOS and macOS, Credential Manager / DPAPI on Windows. Credentials never leave your device unless you intentionally copy them to another of your own devices to pair it.
+- **Preferences.** Your settings are stored in your operating system's preferences storage (`UserDefaults` on Apple platforms, the Windows registry on Windows). These contain feature toggles and your chosen group name.
 - **Activity history.** Recent clipboard items received from peers are kept in memory only and discarded when Clipp quits. Clipp does not write clipboard content to disk.
 
 ## What goes over the network

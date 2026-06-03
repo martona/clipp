@@ -248,7 +248,7 @@ std::wstring PeerLabel(const MDNSDiscovery::DiscoveredPeer& peer, const HostId& 
 
 int RunKeySet(const std::string* nameOverride) {
     if (!StdinIsInteractive()) {
-        ErrLine(L"`key set` needs an interactive console to read the secret.");
+        ErrLine(L"`key set` needs an interactive console to read the passphrase.");
         return 1;
     }
 
@@ -256,23 +256,23 @@ int RunKeySet(const std::string* nameOverride) {
     if (nameOverride != nullptr) {
         networkName = *nameOverride;
     } else {
-        networkName = ReadLineVisible(L"Enter network name: ");
+        networkName = ReadLineVisible(L"Enter group name: ");
     }
     if (networkName.empty()) {
-        ErrLine(L"No network name provided.");
+        ErrLine(L"No group name provided.");
         return 1;
     }
 
-    std::string secret = ReadHiddenLine(L"Enter a password to derive the network key from: ");
+    std::string secret = ReadHiddenLine(L"Enter a passphrase to derive the group key from: ");
     if (secret.empty()) {
-        ErrLine(L"No password provided.");
+        ErrLine(L"No passphrase provided.");
         return 1;
     }
 
     // Persist the raw name (canonicalization is derivation-only), matching the GUI.
     if (!g_settings.set_networkName(networkName)) {
         sodium_memzero(secret.data(), secret.capacity());
-        ErrLine(L"Failed to store network name.");
+        ErrLine(L"Failed to store group name.");
         return 1;
     }
 
@@ -283,14 +283,14 @@ int RunKeySet(const std::string* nameOverride) {
     const bool derived = g_keyManager.DeriveNetworkKey(keyInput, networkKey);
     sodium_memzero(keyInput.data(), keyInput.capacity());
     if (!derived) {
-        ErrLine(L"Failed to derive network key from password.");
+        ErrLine(L"Failed to derive group key from passphrase.");
         return 1;
     }
 
     std::string errorMessage;
     if (!g_keyManager.SetNetworkKey(networkKey, &errorMessage)) {
         sodium_memzero(networkKey.data(), networkKey.size());
-        std::wstring message = L"Failed to store network key.";
+        std::wstring message = L"Failed to store group key.";
         if (!errorMessage.empty()) {
             message += L" ";
             message += ToWide(errorMessage);
@@ -303,13 +303,13 @@ int RunKeySet(const std::string* nameOverride) {
     sodium_memzero(networkKey.data(), networkKey.size());
 
     OutLine(L"fingerprint: " + fingerprint);
-    ErrLine(L"Network key saved.");
+    ErrLine(L"Group key saved.");
     return 0;
 }
 
 int RunKeyErase() {
     g_keyManager.ClearNetworkKey();
-    ErrLine(L"Network key erased.");
+    ErrLine(L"Group key erased.");
     return 0;
 }
 
@@ -330,7 +330,7 @@ int RunKeyShow() {
         // be read (keychain unavailable over SSH and the app isn't running to vend
         // it). Surface it loudly rather than implying there's no key. An empty
         // reason is the benign "no key configured" case -> exit 0.
-        ErrLine(L"could not read the network key: " + ToWide(errorMessage));
+        ErrLine(L"could not read the group key: " + ToWide(errorMessage));
         return 1;
     }
     return 0;
@@ -367,7 +367,7 @@ int RunHostIdReset() {
 // synced mesh, so one push reaches everyone. No GUI required on this machine.
 int RunCopy() {
     if (!g_keyManager.HaveNetworkKey()) {
-        ErrLine(L"No network key configured. Run `clipp key set` first.");
+        ErrLine(L"No group key configured. Run `clipp key set` first.");
         return 1;
     }
 
@@ -480,7 +480,7 @@ FetchResult FetchRecent(OneShotPeer& connection) {
 // so there's no reason to wait for the full peer set. Text-only.
 int RunPaste() {
     if (!g_keyManager.HaveNetworkKey()) {
-        ErrLine(L"No network key configured. Run `clipp key set` first.");
+        ErrLine(L"No group key configured. Run `clipp key set` first.");
         return 1;
     }
 
@@ -578,18 +578,18 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
     pasteCommand->alias("p");
     pasteCommand->callback([&]() { action = Action::Paste; });
 
-    CLI::App* keyCommand = app.add_subcommand("key", "Network key management");
+    CLI::App* keyCommand = app.add_subcommand("key", "Group key management");
     keyCommand->require_subcommand(1);
 
     std::string keySetName;
-    CLI::App* keySet = keyCommand->add_subcommand("set", "Set the network name and derive the key from a secret");
-    CLI::Option* keySetNameOption = keySet->add_option("--name", keySetName, "Network name (prompted if omitted)");
+    CLI::App* keySet = keyCommand->add_subcommand("set", "Set the group name and derive the key from a passphrase");
+    CLI::Option* keySetNameOption = keySet->add_option("--name", keySetName, "Group name (prompted if omitted)");
     keySet->callback([&]() { action = Action::KeySet; });
 
-    CLI::App* keyErase = keyCommand->add_subcommand("erase", "Erase the stored network key");
+    CLI::App* keyErase = keyCommand->add_subcommand("erase", "Erase the stored group key");
     keyErase->callback([&]() { action = Action::KeyErase; });
 
-    CLI::App* keyShow = keyCommand->add_subcommand("show", "Show the network name and key fingerprint");
+    CLI::App* keyShow = keyCommand->add_subcommand("show", "Show the group name and key fingerprint");
     keyShow->callback([&]() { action = Action::KeyShow; });
 
     CLI::App* hostIdCommand = app.add_subcommand("hostid", "This device's host identity");
