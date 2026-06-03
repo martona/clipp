@@ -16,6 +16,8 @@ struct ContentView: View {
     @State private var activePanel: AppPanel?
     @State private var inspectedItem: ClipboardStreamItem?
     @State private var didCheckInitialNetworkKey = false
+    @AppStorage("clipp.didCompleteWelcome") private var didCompleteWelcome = false
+    @State private var showWelcome = false
     @State private var networkIndicatorMode: NetworkIndicatorMode = .ok
     @State private var networkTrafficState = NetworkTrafficState()
 
@@ -74,7 +76,7 @@ struct ContentView: View {
                         )
                     }
                     .foregroundStyle(.secondary)
-                    .accessibilityLabel(CLP_UI_NETWORK)
+                    .accessibilityLabel(CLP_UI_SYNC_GROUP)
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
@@ -101,6 +103,16 @@ struct ContentView: View {
             .sheet(item: $inspectedItem) { item in
                 ClipboardInspectSheet(item: item) {
                     clipboardStream.copy(item)
+                }
+            }
+            .fullScreenCover(isPresented: $showWelcome, onDismiss: {
+                if didCompleteWelcome {
+                    activePanel = .network
+                }
+            }) {
+                WelcomeView {
+                    didCompleteWelcome = true
+                    showWelcome = false
                 }
             }
             .alert("Unable to Copy", isPresented: clipboardStream.copyErrorIsPresented) {
@@ -146,16 +158,28 @@ struct ContentView: View {
                 try NetworkKeyBridge.loadStatus()
             }.value
 
-            if !status.hasNetworkKey && activePanel == nil {
-                activePanel = .network
+            if !status.hasNetworkKey && activePanel == nil && !showWelcome {
+                presentInitialSetup()
             }
         } catch {
-            if activePanel == nil {
-                activePanel = .network
+            if activePanel == nil && !showWelcome {
+                presentInitialSetup()
             }
         }
 
         await refreshNetworkIndicator()
+    }
+
+    // First launch with no key: show the explainer, then hand off to the pairing
+    // panel once it's dismissed. After the user has seen it once, go straight to
+    // the panel. Splitting the hand-off into onDismiss avoids presenting the sheet
+    // while the cover is still animating out.
+    private func presentInitialSetup() {
+        if didCompleteWelcome {
+            activePanel = .network
+        } else {
+            showWelcome = true
+        }
     }
 
     private func pollNetworkIndicator() async {
@@ -966,6 +990,91 @@ private struct ClipboardInspectPayloadView: View {
                 Label("Image preview unavailable", systemImage: "photo")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+private struct WelcomeView: View {
+    let onContinue: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Spacer()
+
+            Image("ClippAboutArtwork")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 96, height: 96)
+                .accessibilityHidden(true)
+
+            Text("Clipp")
+                .font(.largeTitle.weight(.bold))
+                .padding(.top, 16)
+
+            Text("Sync your clipboard across your own devices.")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.top, 4)
+                .padding(.horizontal, 28)
+
+            VStack(alignment: .leading, spacing: 20) {
+                WelcomeBullet(
+                    symbol: "wifi",
+                    title: "Local network only",
+                    detail: "Your devices find each other on the same Wi-Fi and send clipboard items straight to one another."
+                )
+                WelcomeBullet(
+                    symbol: "lock.shield",
+                    title: "No account, no cloud",
+                    detail: "Nothing is uploaded to a server. Clipp has no account and collects no personal data."
+                )
+                WelcomeBullet(
+                    symbol: "person.2",
+                    title: "Only your devices",
+                    detail: "Pair your devices with a shared group name and passphrase. Only devices you set up can connect."
+                )
+            }
+            .padding(.horizontal, 28)
+            .padding(.top, 36)
+
+            Spacer()
+
+            Button(action: onContinue) {
+                Text("Set Up Clipp")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 50)
+                    .background(Capsule(style: .continuous).fill(Color.clippInk))
+            }
+            .padding(.horizontal, 28)
+            .padding(.bottom, 28)
+        }
+        .background(Color(.systemGroupedBackground))
+    }
+}
+
+private struct WelcomeBullet: View {
+    let symbol: String
+    let title: String
+    let detail: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: symbol)
+                .font(.title2)
+                .frame(width: 30)
+                .foregroundStyle(Color.accentColor)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.headline)
+                Text(detail)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

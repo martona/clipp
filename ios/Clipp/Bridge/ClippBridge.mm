@@ -492,7 +492,7 @@ CLPNetworkKeyStatus* LoadNetworkKeyStatus(NSError** error) {
         if (fingerprintText.empty()) {
             AssignError(error,
                         kClippNetworkKeyErrorBase + 2,
-                        ToNSString("Unable to read network key fingerprint: " + keyError));
+                        ToNSString("Unable to read group fingerprint: " + keyError));
             return nil;
         }
         fingerprint = ToNSString(fingerprintText);
@@ -739,7 +739,7 @@ void CLPIOSReceiveClipboardPayload(std::shared_ptr<const ClipboardPayload> paylo
     }
 
     if (!g_keyManager.HaveNetworkKey()) {
-        AssignError(error, kClippOutgoingClipboardErrorBase + 4, @"No network key configured.");
+        AssignError(error, kClippOutgoingClipboardErrorBase + 4, @"Not paired yet.");
         return nil;
     }
 
@@ -947,14 +947,14 @@ void CLPIOSReceiveClipboardPayload(std::shared_ptr<const ClipboardPayload> paylo
 
     const std::string newNetworkName = ToStdString(networkName);
     if (newNetworkName.empty()) {
-        AssignError(error, kClippNetworkKeyErrorBase + 3, @"Network name cannot be empty.");
+        AssignError(error, kClippNetworkKeyErrorBase + 3, @"Group name cannot be empty.");
         return nil;
     }
 
     const std::string currentNetworkName = g_settings.networkName();
     if (newNetworkName != currentNetworkName) {
         if (!g_settings.set_networkName(newNetworkName)) {
-            AssignError(error, kClippNetworkKeyErrorBase + 5, @"Unable to store network name.");
+            AssignError(error, kClippNetworkKeyErrorBase + 5, @"Unable to store group name.");
             return nil;
         }
 
@@ -982,7 +982,7 @@ void CLPIOSReceiveClipboardPayload(std::shared_ptr<const ClipboardPayload> paylo
     std::string secretUtf8 = ToStdString(secret);
 
     if (networkNameUtf8.empty()) {
-        AssignError(error, kClippNetworkKeyErrorBase + 3, @"Network name cannot be empty.");
+        AssignError(error, kClippNetworkKeyErrorBase + 3, @"Group name cannot be empty.");
         return nil;
     }
 
@@ -993,7 +993,7 @@ void CLPIOSReceiveClipboardPayload(std::shared_ptr<const ClipboardPayload> paylo
     }
 
     if (!g_settings.set_networkName(networkNameUtf8)) {
-        AssignError(error, kClippNetworkKeyErrorBase + 5, @"Unable to store network name.");
+        AssignError(error, kClippNetworkKeyErrorBase + 5, @"Unable to store group name.");
         sodium_memzero(secretUtf8.data(), secretUtf8.capacity());
         return nil;
     }
@@ -1006,7 +1006,7 @@ void CLPIOSReceiveClipboardPayload(std::shared_ptr<const ClipboardPayload> paylo
     sodium_memzero(keyInput.data(), keyInput.capacity());
 
     if (!derived) {
-        AssignError(error, kClippNetworkKeyErrorBase + 6, @"Unable to derive network key.");
+        AssignError(error, kClippNetworkKeyErrorBase + 6, @"Unable to derive group key.");
         return nil;
     }
 
@@ -1017,7 +1017,7 @@ void CLPIOSReceiveClipboardPayload(std::shared_ptr<const ClipboardPayload> paylo
     if (!stored) {
         AssignError(error,
                     kClippNetworkKeyErrorBase + 7,
-                    ToNSString("Unable to store network key: " + storageError));
+                    ToNSString("Unable to store group key: " + storageError));
         return nil;
     }
 

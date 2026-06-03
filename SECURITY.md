@@ -10,8 +10,8 @@ Please include enough detail for the maintainer to reproduce the issue: affected
 
 Clipp's threat model is documented in the [Security Model](docs/SECURITY-MODEL.md). In short, Clipp assumes:
 
-- Devices configured with the same network name and secret are mutually trusted.
-- The network or VPN that Clipp runs over is itself trusted (LAN, Tailscale, etc.).
+- Devices configured with the same group name and passphrase are mutually trusted.
+- The local or overlay network that Clipp runs over is itself trusted (LAN, Tailscale, etc.).
 - The operating system, other installed software, and the user are not adversaries.
 
 ### In scope

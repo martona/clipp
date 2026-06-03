@@ -197,7 +197,7 @@ bool PayloadFromSharePayload(CLPSharePayload* sharePayload, ClipboardPayload& pa
     signal(SIGPIPE, SIG_IGN);
 
     if (!g_keyManager.HaveNetworkKey()) {
-        AssignError(error, kClippShareErrorBase + 3, @"No network key is configured. Open Clipp to finish setup.");
+        AssignError(error, kClippShareErrorBase + 3, @"Not paired yet. Open Clipp to finish setup.");
         return nil;
     }
 

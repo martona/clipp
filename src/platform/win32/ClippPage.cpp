@@ -189,7 +189,7 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivitySection() {
     activityEmptyMessage_.HorizontalAlignment(HorizontalAlignment::Center);
 
     activityEmptyNetworkButton_ = Button();
-    activityEmptyNetworkButton_.Content(winrt::box_value(winrt::hstring{ CLP_W(CLP_UI_NETWORK) }));
+    activityEmptyNetworkButton_.Content(winrt::box_value(winrt::hstring{ CLP_W(CLP_UI_SYNC_GROUP) }));
     activityEmptyNetworkButton_.HorizontalAlignment(HorizontalAlignment::Center);
     activityEmptyNetworkButton_.Padding(ThicknessHelper::FromLengths(16, 6, 16, 6));
     activityEmptyNetworkButton_.Click([this](auto const&, auto const&) {

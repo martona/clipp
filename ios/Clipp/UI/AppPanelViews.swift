@@ -22,7 +22,7 @@ enum AppPanel: String, Identifiable {
     var title: String {
         switch self {
         case .network:
-            CLP_UI_NETWORK
+            CLP_UI_SYNC_GROUP
         case .settings:
             CLP_UI_SETTINGS
         case .about:
@@ -89,7 +89,7 @@ private struct NetworkPanelView: View {
     var body: some View {
         Form {
             Section(CLP_UI_NETWORK_KEY) {
-                TextField("Network Name", text: $model.networkName)
+                TextField("Group name", text: $model.networkName)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
 
@@ -110,13 +110,13 @@ private struct NetworkPanelView: View {
                     NetworkKeyStatusCard(model: model)
                 }
             }
-            .alert("Recreate Network Key?", isPresented: $confirmingReplacement) {
+            .alert("Replace group key?", isPresented: $confirmingReplacement) {
                 Button("Cancel", role: .cancel) {}
-                Button("Recreate", role: .destructive) {
+                Button("Replace", role: .destructive) {
                     model.deriveAndStoreKey()
                 }
             } message: {
-                Text("Peers using the old network key will stop connecting until they are updated with the same network name and secret.")
+                Text("Devices using the old key stop syncing until you set the same group name and passphrase on them.")
             }
             .onChange(of: model.secret) {
                 model.updateStatusMessage()
@@ -140,10 +140,10 @@ private struct NetworkPanelView: View {
             } else {
                 Section {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("No network key configured")
+                        Text("Not paired yet")
                             .font(.subheadline.weight(.semibold))
 
-                        Text("Create one here to connect this iPhone with your other Clipp devices.")
+                        Text("Pair this device with your other Clipp devices to start syncing.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -261,13 +261,13 @@ private final class NetworkKeyViewModel: ObservableObject {
     @Published var fingerprint: String?
     @Published var hasNetworkKey = false
     @Published var isWorking = false
-    @Published var statusMessage = "Loading network key status..."
+    @Published var statusMessage = "Loading sync group status..."
     @Published var statusIsError = false
 
     private var storedNetworkName = ""
 
     var actionTitle: String {
-        hasNetworkKey ? "Recreate Network Key" : "Create Network Key"
+        hasNetworkKey ? "Replace group key" : "Create sync group"
     }
 
     var canCreateKey: Bool {
@@ -338,16 +338,16 @@ private final class NetworkKeyViewModel: ObservableObject {
             statusMessage = CLP_UI_WORKING
         } else if networkName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             statusIsError = true
-            statusMessage = "Network name cannot be empty."
+            statusMessage = "Group name cannot be empty."
         } else if !secret.isEmpty && secret.count < 8 {
             statusIsError = true
             statusMessage = CLP_UI_SECRET_TOO_SHORT
         } else if !secret.isEmpty {
             statusIsError = false
-            statusMessage = "Ready to derive and store a network key."
+            statusMessage = "Ready to create your sync group."
         } else if hasNetworkKey && networkName != storedNetworkName {
             statusIsError = false
-            statusMessage = "Enter the network secret again after changing the network name."
+            statusMessage = "Enter the passphrase again after changing the group name."
         } else if hasNetworkKey {
             statusIsError = false
             statusMessage = CLP_UI_NETWORK_KEY_FINGERPRINT

@@ -286,7 +286,7 @@ void MacOSNetworkPage::BuildView() {
     contentStack.spacing = 16.0;
     contentStack.detachesHiddenViews = YES;
 
-    NSTextField* heading = [NSTextField labelWithString:CLP_NS(CLP_UI_NETWORK)];
+    NSTextField* heading = [NSTextField labelWithString:CLP_NS(CLP_UI_SYNC_GROUP)];
     heading.translatesAutoresizingMaskIntoConstraints = NO;
     heading.font = [NSFont systemFontOfSize:28 weight:NSFontWeightSemibold];
     heading.textColor = [NSColor labelColor];

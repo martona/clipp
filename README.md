@@ -11,7 +11,7 @@ Clipp is a free, open source, peer-to-peer clipboard sync utility for Windows, m
 
 I wrote Clipp because I needed this exact thing, and the usual options kept failing one or more basic tests: not open source, cloud-dependent, not free, or folded into a larger kitchen-sink app whose job was no longer just clipboard sync. Clipp tries to stay lean: discover nearby peers, verify device trust, move clipboard data directly, and otherwise stay out of the way.
 
-Clipp is LAN-only by design. If you want the same workflow across networks, use an overlay such as Tailscale or NostrVPN and let Clipp keep doing the simple peer-to-peer part.
+Clipp is LAN-only by design. If you want the same workflow across networks, use an overlay network such as Tailscale or ZeroTier and let Clipp keep doing the simple peer-to-peer part.
 
 ## Screenshots
 
@@ -39,14 +39,14 @@ Clipp moves clipboard history between your own devices without a cloud service i
 - Discovers peers on the local network automatically.
 - Sends clipboard data directly between devices.
 - Shows recent clipboard activity so you can copy an earlier item again.
-- Works over trusted VPN or mesh networks when you want the same setup away from your LAN.
+- Works over trusted mesh or overlay networks when you want the same setup away from your LAN.
 - Pipes clipboard text to and from the network from the command line (`clipp copy` / `clipp paste`), including over SSH.
 
 ## Security Model
 
-Devices join with a shared network name + secret; Clipp derives a master key and shows a non-secret fingerprint so you can confirm two devices match. Connections are mutually authenticated from that key, then each session negotiates fresh ephemeral Diffie-Hellman keys for encryption - all built on libsodium primitives, no homegrown crypto. Clipboard data moves directly between peers over the LAN, never through a cloud service.
+Devices pair with a shared group name + passphrase; Clipp derives a master key and shows a non-secret fingerprint so you can confirm two devices match. Connections are mutually authenticated from that key, then each session negotiates fresh ephemeral Diffie-Hellman keys for encryption - all built on libsodium primitives, no homegrown crypto. Clipboard data moves directly between peers over the LAN, never through a cloud service.
 
-Clipp's trust model is deliberately narrow - your own devices, on a network or VPN you already trust - and it does not defend against software that can already read your local clipboard, a weak or mishandled secret, or a device you shouldn't have trusted. The full trust model, key hierarchy, transport details, and caveats live in the [Security Model](docs/SECURITY-MODEL.md); to report a vulnerability, see [SECURITY.md](SECURITY.md).
+Clipp's trust model is deliberately narrow - your own devices, on a local or overlay network - and it does not defend against software that can already read your local clipboard, a weak or mishandled secret, or a device you shouldn't have trusted. The full trust model, key hierarchy, transport details, and caveats live in the [Security Model](docs/SECURITY-MODEL.md); to report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Platform Status
 
@@ -236,9 +236,9 @@ No catch. Clipp is open source under the MIT license - read it, build it, and ru
 
 Linux ships as a **terminal-only** client - `clipp copy` / `clipp paste` - with no GUI, tray, or local-clipboard reading. That's a deliberate fit for the place a headless Clipp is most useful: servers, containers, and SSH sessions, where it joins the encrypted network and relays clipboard text through your desktop peers. A full Linux *desktop* GUI isn't planned — clipboard semantics vary widely across X11/Wayland and desktop environments, which is a much larger investment than the headless client was. Android isn't in scope either (it isn't in my life). If you have a strong use case for either, open an issue.
 
-**Can I sync over the internet without a VPN?**
+**Can I sync between devices on different networks?**
 
-No, and that's intentional. Clipp discovers peers via local multicast and isn't designed to be exposed directly to the internet. To use it between devices on different networks, put them on a mesh or overlay network you trust (Tailscale, ZeroTier, NostrVPN, WireGuard, etc.) - multicast works on most of those, and Clipp's discovery picks up as usual.
+No, and that's intentional. Clipp discovers peers via local multicast and isn't designed to be exposed directly to the internet. To use it between devices on different networks, put them on a VPN (Tailscale, ZeroTier, WireGuard, etc.) - multicast works on most of those, and Clipp's discovery picks up as usual.
 
 **Does Clipp upload anything to a server?**
 

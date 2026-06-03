@@ -11,6 +11,7 @@
 
 #define CLP_UI_APP_NAME "Clipp"
 #define CLP_UI_NETWORK "Network"
+#define CLP_UI_SYNC_GROUP "Sync group"
 #define CLP_UI_SETTINGS "Settings"
 #define CLP_UI_LOGS "Logs"
 #define CLP_UI_DIAGNOSTICS "Diagnostics"
@@ -20,17 +21,17 @@
 #define CLP_UI_EXIT_CLIPP "Exit Clipp"
 #define CLP_UI_STATUS_TOOLTIP "Clipp Network Sync"
 
-#define CLP_UI_NAME "Name"
-#define CLP_UI_SECRET "Secret"
-#define CLP_UI_NETWORK_KEY "Network key"
-#define CLP_UI_NETWORK_KEY_FINGERPRINT "Network key fingerprint. Used only on this screen; not in itself a secret."
-#define CLP_UI_ENTER_NETWORK_SECRET "Enter network secret to create or join a network."
-#define CLP_UI_SECRET_TOO_SHORT "Secret must be at least 8 characters."
+#define CLP_UI_NAME "Group name"
+#define CLP_UI_SECRET "Passphrase"
+#define CLP_UI_NETWORK_KEY "Group key"
+#define CLP_UI_NETWORK_KEY_FINGERPRINT "Group fingerprint - shown only here so you can confirm two devices match. Not itself a secret."
+#define CLP_UI_ENTER_NETWORK_SECRET "Enter a group name and passphrase to pair this device with your others."
+#define CLP_UI_SECRET_TOO_SHORT "Passphrase must be at least 8 characters."
 #define CLP_UI_WORKING "... working ..."
 
 #define CLP_UI_CLIPBOARD "Clipboard"
 #define CLP_UI_CLIPBOARD_EMPTY "Your clipboard syncs automatically. Recent text and images will appear here for reference."
-#define CLP_UI_NO_NETWORK_KEY_CONFIGURED "No network key configured"
+#define CLP_UI_NO_NETWORK_KEY_CONFIGURED "Not paired yet"
 #define CLP_UI_THIS_DEVICE "This device"
 #define CLP_UI_COPY "Copy"
 #define CLP_UI_LINK "Link"
@@ -52,8 +53,8 @@
 #define CLP_UI_CLI_BANNER_COPIED "Copied"
 #define CLP_UI_CLI_BANNER_DISMISS "Dismiss"
 
-#define CLP_UI_PEERS "Peers"
-#define CLP_UI_NO_PEERS_HELP "Your devices will appear here when they're on the same network and running Clipp. Make sure they are are using the exact same network name and secret. Both are case-sensitive."
+#define CLP_UI_PEERS "Paired devices"
+#define CLP_UI_NO_PEERS_HELP "Your other devices appear here once they're paired and on the same local network. Use the exact same group name and passphrase on each device - both are case-sensitive."
 #define CLP_UI_UNKNOWN_HOST "(unknown host)"
 #define CLP_UI_CONNECTED "Connected"
 #define CLP_UI_NOT_CONNECTED "Not connected"
@@ -95,7 +96,7 @@
 // site using the platform's version source (CLIPP_VERSION_STRING_3PART from
 // version.h for Windows/macOS, Bundle.main for iOS).
 #define CLP_UI_ABOUT_TITLE "Clipp"
-#define CLP_UI_TAGLINE "Secure cross-platform clipboard sync for trusted devices."
+#define CLP_UI_TAGLINE "Cross-platform clipboard sync for trusted devices."
 #define CLP_UI_PROJECT "Project"
 #define CLP_UI_COPYRIGHT "Copyright (C) 2026 Marton Anka"
 #define CLP_UI_MIT_LICENSE "Released under the MIT License."

@@ -1,10 +1,10 @@
 # Security Model
 
-Clipp is designed for a specific trust model: your own devices, on a network or VPN you already trust. It is not meant to be an open pairing protocol for strangers on the same Wi-Fi, and it is not a cloud account system with remote device management.
+Clipp is designed for a specific trust model: your own devices, on a local network or VPN. It is not meant to be an open pairing protocol for strangers on the same Wi-Fi, and it is not a cloud account system with remote device management.
 
-## Joining a network
+## Joining a sync group
 
-Devices join a Clipp network by using the same network name and secret. Clipp derives a master key from that input, stores it in platform-protected storage, and shows a fingerprint so you can verify that devices are configured with the same key. The fingerprint is not a secret; it is just a way to detect mismatched setup. Discovery, handshakes, fingerprints, and encrypted streams use separate keys derived from that master key.
+Devices join a Clipp sync group by using the same group name and passphrase. Clipp derives a master key from that input, stores it in platform-protected storage, and shows a fingerprint so you can verify that devices are configured with the same key. The fingerprint is not a secret; it is just a way to detect mismatched setup. Discovery, handshakes, fingerprints, and encrypted streams use separate keys derived from that master key.
 
 ## Discovery
 
@@ -28,7 +28,7 @@ Single-line text that does not contain whitespace is assumed to be a password an
 
 ## Network boundary
 
-Clipp is LAN-only. If you want to use it across networks, put the devices on a trusted VPN or mesh network and keep the Clipp listener off the public internet. The master key is still required, but the intended outer boundary is a private network you control.
+Clipp is LAN-only. If you want to use it across networks, put the devices on a VPN and keep the Clipp listener off the public internet. The master key is still required, but the intended outer boundary is a private network you control.
 
 ## Reporting a vulnerability
 
