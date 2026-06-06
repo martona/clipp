@@ -4,7 +4,7 @@ Clipp is designed for a specific trust model: your own devices, on a local netwo
 
 ## Joining a group
 
-Devices join a Clipp group by using the same group name and passphrase. Clipp derives a master key from that input, stores it in platform-protected storage, and shows a fingerprint so you can verify that devices are configured with the same key. The fingerprint is not a secret; it is just a way to detect mismatched setup. Discovery, handshakes, fingerprints, and encrypted streams use separate keys derived from that master key.
+Devices join a Clipp group by using the same group name and passphrase. Clipp derives a master key from that input, stores it in platform-protected storage where available (keychain on macOS/iOS, DPAPI on Windows), and shows a fingerprint so you can verify that devices are configured with the same key. The fingerprint is not a secret; it is just a way to detect mismatched setup. Discovery, handshakes, fingerprints, and encrypted streams use separate keys derived from that master key.
 
 ## Discovery
 
@@ -12,7 +12,7 @@ Local discovery is encrypted and authenticated. Devices that do not know the key
 
 ## Transport
 
-Clipboard transfers are sent directly between peers over TCP. The connection handshake is authenticated with keys derived from the master key, then each connection uses fresh ephemeral Diffie-Hellman session keys for encrypted clipboard messages. Clipp uses libsodium primitives for this rather than trying to invent its own cryptography.
+Clipboard transfers are sent directly between peers over TCP. The connection handshake is authenticated with keys derived from the master key, then each connection uses fresh ephemeral Diffie-Hellman session keys. Clipp uses libsodium primitives for this rather than trying to invent its own cryptography.
 
 ## What Clipp does not protect against
 
