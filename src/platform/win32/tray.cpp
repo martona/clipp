@@ -30,6 +30,9 @@
 static constexpr wchar_t kTrayWindowClassName[] = L"ClippHiddenTrayWindow";
 static constexpr wchar_t kShowMainWindowMessageName[] = L"ClippShowMainWindow";
 static const UINT g_showMainWindowMessage = RegisterWindowMessageW(kShowMainWindowMessageName);
+// Broadcast by the shell to all top-level windows when the taskbar / notification area is
+// (re)created -- e.g. after Explorer crashes or is restarted, which drops all tray icons.
+static const UINT g_taskbarCreatedMessage = RegisterWindowMessageW(L"TaskbarCreated");
 
 // Global handle for cleanup
 static NOTIFYICONDATAW g_nid = {};
@@ -39,6 +42,15 @@ static HWND g_trayWindow = NULL;
 LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (g_showMainWindowMessage != 0 && msg == g_showMainWindowMessage) {
         ShowClippMainDialog(hwnd);
+        return 0;
+    }
+
+    if (g_taskbarCreatedMessage != 0 && msg == g_taskbarCreatedMessage) {
+        // Explorer restarted and recreated the notification area, dropping our icon.
+        // Re-add it (g_nid is fully populated once TrayIconMessageLoop ran the initial NIM_ADD).
+        if (g_nid.hWnd != nullptr) {
+            Shell_NotifyIconW(NIM_ADD, &g_nid);
+        }
         return 0;
     }
 
@@ -135,7 +147,11 @@ void TrayIconMessageLoop(bool showNetworkPageOnStartup) {
     wc.lpszClassName = kTrayWindowClassName;
     RegisterClassW(&wc);
 
-    g_trayWindow = CreateWindowW(wc.lpszClassName, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, hInstance, NULL);
+    // Top-level (not HWND_MESSAGE) so it receives the "TaskbarCreated" broadcast (and
+    // WM_SETTINGCHANGE) -- message-only windows get neither. WS_EX_TOOLWINDOW + never being
+    // shown keeps it out of the taskbar and Alt+Tab.
+    g_trayWindow = CreateWindowExW(WS_EX_TOOLWINDOW, wc.lpszClassName, L"", WS_POPUP,
+        0, 0, 0, 0, nullptr, nullptr, hInstance, nullptr);
 
     g_nid.cbSize = sizeof(NOTIFYICONDATAW);
     g_nid.hWnd = g_trayWindow;
