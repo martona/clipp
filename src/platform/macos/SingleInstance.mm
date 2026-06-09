@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <cerrno>
+#include <climits>
 #include <cstring>
 #include <string>
 #include <thread>
@@ -23,6 +24,15 @@ std::atomic_int g_controlServerSocket{ -1 };
 }
 
 static std::string MacOSControlSocketPath() {
+    // _CS_DARWIN_USER_TEMP_DIR is the sandbox-safe temp dir: the per-app container's 
+    // temp when sandboxed, the per-user /var/folders temp otherwise.
+    char tempDir[PATH_MAX];
+    const size_t len = confstr(_CS_DARWIN_USER_TEMP_DIR, tempDir, sizeof(tempDir));
+    if (len > 0 && len <= sizeof(tempDir)) {
+        std::string path(tempDir);  // confstr returns a trailing slash
+        path += "clipp." + std::to_string(static_cast<long long>(geteuid())) + ".ctl.sock";
+        return path;
+    }
     return "/tmp/net.clipp.ios." + std::to_string(static_cast<long long>(geteuid())) + ".sock";
 }
 
