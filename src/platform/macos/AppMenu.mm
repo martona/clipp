@@ -20,6 +20,7 @@
 #import <dispatch/dispatch.h>
 
 #include <atomic>
+#include <cstdlib>
 #include <memory>
 #include <mutex>
 
@@ -126,6 +127,22 @@ static NSString* MacOSServiceErrorDescription(NSError* error) {
         return [NSString stringWithFormat:@"%@ (%@)", error.localizedDescription, reason];
     }
     return error.localizedDescription;
+}
+
+bool IsMacAppStoreBuild() {
+    // There is no compile-time MAS flag (build_macos_mas.sh builds the identical
+    // binary and only signs it differently), but MAS is the only flavor signed
+    // with the app-sandbox entitlement -- detect the sandbox the same way
+    // KeyVendIpc detects the container.
+    return getenv("APP_SANDBOX_CONTAINER_ID") != nullptr;
+}
+
+bool IsClippAutoStartEnabled() {
+    return SMAppService.mainAppService.status == SMAppServiceStatusEnabled;
+}
+
+void OpenClippLoginItemsSettings() {
+    [SMAppService openSystemSettingsLoginItems];
 }
 
 bool RegisterClippAutoStart() {
@@ -1017,7 +1034,9 @@ static void LogReflectorCallback(const std::wstring& line) {
 @end
 
 static void StopMacOSAppOnMainThread(bool unregisterAutoStart) {
-    if (unregisterAutoStart) {
+    // MAS: the Settings toggle owns login-item state; quitting the app must not
+    // silently revoke the user's opt-in.
+    if (unregisterAutoStart && !IsMacAppStoreBuild()) {
         UnregisterClippAutoStart();
     }
 

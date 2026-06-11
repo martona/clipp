@@ -88,6 +88,11 @@
 #define CLP_UI_HONOR_PRIVACY_MARKERS_HELP "When other apps mark clipboard items as private (passwords from Chrome, password managers, etc.), Clipp will not sync the content to your other devices."
 #define CLP_UI_PRIVACY_SETTINGS_APPLIED "Privacy settings applied."
 
+// Mac App Store flavor only (guideline 2.4.5(iii)): login items there require
+// explicit consent, so the MAS build swaps autostart-by-default for this toggle.
+#define CLP_UI_STARTUP "Startup"
+#define CLP_UI_LAUNCH_AT_LOGIN "Launch Clipp at login"
+
 #define CLP_UI_LIVE_DIAGNOSTIC_OUTPUT "Live diagnostic output from Clipp."
 #define CLP_UI_COPY_LOG_LINES_FORMAT "Copy %d lines"
 

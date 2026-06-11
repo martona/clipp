@@ -321,7 +321,13 @@ int main(int argc, char* argv[]) {
         return exitCode;
     };
 
-    RegisterClippAutoStart();
+    // The Mac App Store flavor must not register a login item without explicit
+    // user consent (guideline 2.4.5(iii)); it gets an opt-in toggle on the
+    // Settings page instead. Every other flavor keeps autostart-by-default,
+    // undone on manual exit.
+    if (!IsMacAppStoreBuild()) {
+        RegisterClippAutoStart();
+    }
 
     #ifdef _WIN32
         WSADATA wsaData;

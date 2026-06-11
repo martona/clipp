@@ -24,6 +24,7 @@ public:
     void OnHistorySliderChanged();
     void OnResetHostID();
     void OnHonorPrivacyMarkersChanged();
+    void OnLaunchAtLoginChanged();
 
 private:
     void BuildView();
@@ -41,6 +42,8 @@ private:
     void ApplyClipboardHistorySettingChange();
     void RefreshPrivacyControls();
     void ApplyPrivacySettingChange();
+    void RefreshLaunchAtLoginControls();
+    void ApplyLaunchAtLoginChange();
 
     NSView* root_ = nullptr;
     NSView* statusContainer_ = nullptr;
@@ -57,6 +60,7 @@ private:
     NSTextField* hostIDWarningText_ = nullptr;
     NSButton* resetHostIDButton_ = nullptr;
     NSButton* honorPrivacyMarkersCheckbox_ = nullptr;
+    NSButton* launchAtLoginCheckbox_ = nullptr;
     NSTextField* statusMessage_ = nullptr;
     MacOSSettingsPageFieldDelegate* fieldDelegate_ = nullptr;
     bool loadingSettings_ = false;

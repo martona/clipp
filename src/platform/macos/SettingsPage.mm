@@ -30,6 +30,7 @@ extern ClipboardActivityStore g_clipboardActivityStore;
 - (void)historySliderChanged:(id)sender;
 - (void)resetHostID:(id)sender;
 - (void)honorPrivacyMarkersChanged:(id)sender;
+- (void)launchAtLoginChanged:(id)sender;
 @end
 
 @implementation MacOSSettingsPageFieldDelegate
@@ -68,6 +69,13 @@ extern ClipboardActivityStore g_clipboardActivityStore;
     (void)sender;
     if (owner_ != nullptr) {
         owner_->OnHonorPrivacyMarkersChanged();
+    }
+}
+
+- (void)launchAtLoginChanged:(id)sender {
+    (void)sender;
+    if (owner_ != nullptr) {
+        owner_->OnLaunchAtLoginChanged();
     }
 }
 
@@ -348,6 +356,10 @@ void MacOSSettingsPage::OnHonorPrivacyMarkersChanged() {
     ApplyPrivacySettingChange();
 }
 
+void MacOSSettingsPage::OnLaunchAtLoginChanged() {
+    ApplyLaunchAtLoginChange();
+}
+
 void MacOSSettingsPage::BuildView() {
     NSScrollView* scrollView = [[NSScrollView alloc] initWithFrame:NSZeroRect];
     scrollView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -368,6 +380,33 @@ void MacOSSettingsPage::BuildView() {
     heading.textColor = [NSColor labelColor];
 
     fieldDelegate_ = [[MacOSSettingsPageFieldDelegate alloc] initWithOwner:this];
+
+    // MAS guideline 2.4.5(iii): the App Store flavor must not register a login
+    // item without explicit consent, so it gets an opt-in toggle here. Every
+    // other flavor autostarts by default and omits the section entirely.
+    NSTextField* startupHeader = nil;
+    NSBox* startupSection = nil;
+    NSMutableArray<NSLayoutConstraint*>* startupConstraints = [NSMutableArray array];
+    if (IsMacAppStoreBuild()) {
+        startupHeader = [NSTextField labelWithString:CLP_NS(CLP_UI_STARTUP)];
+        startupHeader.translatesAutoresizingMaskIntoConstraints = NO;
+        startupHeader.font = [NSFont systemFontOfSize:16 weight:NSFontWeightSemibold];
+        startupHeader.textColor = [NSColor labelColor];
+
+        startupSection = MacOSMakeGroupBox();
+        launchAtLoginCheckbox_ = [NSButton checkboxWithTitle:CLP_NS(CLP_UI_LAUNCH_AT_LOGIN)
+                                                      target:fieldDelegate_
+                                                      action:@selector(launchAtLoginChanged:)];
+        launchAtLoginCheckbox_.translatesAutoresizingMaskIntoConstraints = NO;
+        [startupSection addSubview:launchAtLoginCheckbox_];
+
+        [startupConstraints addObjectsFromArray:@[
+            [launchAtLoginCheckbox_.leadingAnchor constraintEqualToAnchor:startupSection.leadingAnchor constant:kSectionInsetX],
+            [launchAtLoginCheckbox_.trailingAnchor constraintLessThanOrEqualToAnchor:startupSection.trailingAnchor constant:-kSectionInsetX],
+            [launchAtLoginCheckbox_.topAnchor constraintEqualToAnchor:startupSection.topAnchor constant:kSectionInsetY],
+            [launchAtLoginCheckbox_.bottomAnchor constraintEqualToAnchor:startupSection.bottomAnchor constant:-kSectionInsetY],
+        ]];
+    }
 
     NSTextField* historyHeader = [NSTextField labelWithString:CLP_NS(CLP_UI_CLIPBOARD_HISTORY)];
     historyHeader.translatesAutoresizingMaskIntoConstraints = NO;
@@ -456,6 +495,10 @@ void MacOSSettingsPage::BuildView() {
     [hostIDWarningContainer_ addSubview:hostIDWarningText_];
 
     [contentRoot addSubview:heading];
+    if (startupSection != nil) {
+        [contentRoot addSubview:startupHeader];
+        [contentRoot addSubview:startupSection];
+    }
     [contentRoot addSubview:historyHeader];
     [contentRoot addSubview:historySection];
     [contentRoot addSubview:privacyHeader];
@@ -474,6 +517,22 @@ void MacOSSettingsPage::BuildView() {
     [statusContainer_ addSubview:statusMessage_];
     [contentRoot addSubview:statusContainer_];
 
+    NSView* historyTopAnchorView = heading;
+    CGFloat historyTopSpacing = 16.0;
+    if (startupSection != nil) {
+        [startupConstraints addObjectsFromArray:@[
+            [startupHeader.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
+            [startupHeader.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
+            [startupHeader.topAnchor constraintEqualToAnchor:heading.bottomAnchor constant:16.0],
+
+            [startupSection.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
+            [startupSection.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
+            [startupSection.topAnchor constraintEqualToAnchor:startupHeader.bottomAnchor constant:16.0],
+        ]];
+        historyTopAnchorView = startupSection;
+        historyTopSpacing = 18.0;
+    }
+
     [NSLayoutConstraint activateConstraints:@[
         [contentRoot.widthAnchor constraintEqualToAnchor:scrollView.contentView.widthAnchor],
 
@@ -483,7 +542,7 @@ void MacOSSettingsPage::BuildView() {
 
         [historyHeader.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
         [historyHeader.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
-        [historyHeader.topAnchor constraintEqualToAnchor:heading.bottomAnchor constant:16.0],
+        [historyHeader.topAnchor constraintEqualToAnchor:historyTopAnchorView.bottomAnchor constant:historyTopSpacing],
 
         [historySection.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
         [historySection.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
@@ -532,6 +591,7 @@ void MacOSSettingsPage::BuildView() {
         [statusMessage_.topAnchor constraintEqualToAnchor:statusContainer_.topAnchor],
         [statusMessage_.bottomAnchor constraintEqualToAnchor:statusContainer_.bottomAnchor],
     ]];
+    [NSLayoutConstraint activateConstraints:startupConstraints];
     [NSLayoutConstraint activateConstraints:historyConstraints];
     [NSLayoutConstraint activateConstraints:rowConstraints];
     [NSLayoutConstraint activateConstraints:privacyConstraints];
@@ -548,6 +608,7 @@ void MacOSSettingsPage::LoadSettingsIntoFields() {
     MacOSSetFieldText(listenerIpField_, g_settings.listenerIp());
     RefreshClipboardHistoryControls();
     RefreshPrivacyControls();
+    RefreshLaunchAtLoginControls();
     loadingSettings_ = false;
 
     RefreshHostIDDisplay();
@@ -714,6 +775,44 @@ void MacOSSettingsPage::ApplyPrivacySettingChange() {
 
     MacOSSetFieldText(statusMessage_, CLP_NS(CLP_UI_PRIVACY_SETTINGS_APPLIED));
     ShowStatusMessage();
+}
+
+void MacOSSettingsPage::RefreshLaunchAtLoginControls() {
+    if (launchAtLoginCheckbox_ == nil) {
+        return;
+    }
+
+    // SMAppService is the source of truth (no Settings key): it persists across
+    // launches and stays honest when the user flips the login item in System
+    // Settings instead of here.
+    launchAtLoginCheckbox_.state = IsClippAutoStartEnabled()
+        ? NSControlStateValueOn
+        : NSControlStateValueOff;
+}
+
+void MacOSSettingsPage::ApplyLaunchAtLoginChange() {
+    if (loadingSettings_ || launchAtLoginCheckbox_ == nil) {
+        return;
+    }
+
+    const bool desired = launchAtLoginCheckbox_.state == NSControlStateValueOn;
+    if (desired == IsClippAutoStartEnabled()) {
+        return;
+    }
+
+    if (desired) {
+        if (!RegisterClippAutoStart()) {
+            // Registered but disabled by the user in System Settings ("requires
+            // approval"): apps cannot programmatically re-enable it, so send the
+            // user to the Login Items pane to flip it themselves.
+            OpenClippLoginItemsSettings();
+        }
+    } else {
+        UnregisterClippAutoStart();
+    }
+
+    // Reflect what actually happened rather than what was asked for.
+    RefreshLaunchAtLoginControls();
 }
 
 #endif

@@ -613,9 +613,22 @@ bool RegisterClippAutoStart();
 bool UnregisterClippAutoStart();
 
 #if defined(__APPLE__)
+// True when running as the Mac App Store flavor. There is no compile-time MAS
+// flag (build_macos_mas.sh builds the identical binary and only signs it
+// differently), but MAS is the only flavor signed with the app-sandbox
+// entitlement, so detecting the sandbox at runtime is equivalent.
+bool IsMacAppStoreBuild();
+// Login-item state for the MAS consent toggle (guideline 2.4.5(iii)): the MAS
+// flavor must not register a login item without explicit consent, so its
+// Settings page drives state through these instead of the
+// register-on-start/unregister-on-exit default.
+bool IsClippAutoStartEnabled();
+void OpenClippLoginItemsSettings();
 void RequestMacOSShowMainWindow(bool showNetworkPage = false);
 void RunMacOSStatusMenu(bool showNetworkPageOnStartup = false);
 void RequestMacOSAppShutdown(bool unregisterAutoStart = false);
+#else
+inline bool IsMacAppStoreBuild() { return false; }
 #endif
 
 #ifndef NDEBUG
