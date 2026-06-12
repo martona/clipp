@@ -99,7 +99,13 @@ extern KeyManager g_keyManager;
          revealedText:(NSString*)revealedText;
 - (void)copyActivityItem:(id)sender;
 - (void)togglePeek:(id)sender;
+- (void)clearHover;
 @end
+
+// The most recently entered row owns the hover affordances. mouseExited is
+// unreliable once rows scroll under a stationary cursor, so entering a row
+// evicts the previous owner instead of trusting exit events to have fired.
+static __weak MacOSActivityRowView* g_hoveredActivityRow = nil;
 
 @implementation MacOSActivityRowView
 
@@ -202,12 +208,25 @@ extern KeyManager g_keyManager;
 
 - (void)mouseEntered:(NSEvent*)event {
     (void)event;
+    MacOSActivityRowView* previous = g_hoveredActivityRow;
+    if (previous != nil && previous != self) {
+        [previous clearHover];
+    }
+    g_hoveredActivityRow = self;
     mouseInside_ = YES;
     [self updateCopyButtonVisibility];
 }
 
 - (void)mouseExited:(NSEvent*)event {
     (void)event;
+    if (g_hoveredActivityRow == self) {
+        g_hoveredActivityRow = nil;
+    }
+    mouseInside_ = NO;
+    [self updateCopyButtonVisibility];
+}
+
+- (void)clearHover {
     mouseInside_ = NO;
     [self updateCopyButtonVisibility];
 }
