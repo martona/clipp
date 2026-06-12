@@ -4,6 +4,7 @@
 
 #include "Clipboard.h"
 #include "KeyManager.h"
+#include "platform/uiClippPage.h"
 #include "platform/uistrings.h"
 #include "UiHelpers.h"
 
@@ -68,7 +69,7 @@ extern KeyManager g_keyManager;
 
 @end
 
-@interface MacOSActivityRowView : NSView {
+@interface MacOSActivityRowView : NSView <NSGestureRecognizerDelegate> {
 @private
     NSTrackingArea* trackingArea_;
     NSButton* copyButton_;
@@ -81,9 +82,23 @@ extern KeyManager g_keyManager;
     BOOL mouseInside_;
     BOOL copiedFeedbackVisible_;
     NSUInteger copiedFeedbackGeneration_;
+    NSButton* peekButton_;
+    NSTextField* peekPreviewLabel_;
+    NSImage* peekImage_;
+    NSImage* peekActiveImage_;
+    NSString* peekMaskedText_;
+    NSString* peekRevealedText_;
+    uint64_t peekItemID_;
+    BOOL peekRevealed_;
 }
 - (void)setCopyButton:(NSButton*)button target:(id)target action:(SEL)action bubble:(NSBox*)bubble normalFillColor:(NSColor*)normalFillColor;
+- (void)setPeekButton:(NSButton*)button
+         previewLabel:(NSTextField*)previewLabel
+               itemID:(uint64_t)itemID
+           maskedText:(NSString*)maskedText
+         revealedText:(NSString*)revealedText;
 - (void)copyActivityItem:(id)sender;
+- (void)togglePeek:(id)sender;
 @end
 
 @implementation MacOSActivityRowView
@@ -97,6 +112,63 @@ extern KeyManager g_keyManager;
     copyTarget_ = target;
     copyAction_ = action;
     [self updateCopyButtonVisibility];
+}
+
+- (void)setPeekButton:(NSButton*)button
+         previewLabel:(NSTextField*)previewLabel
+               itemID:(uint64_t)itemID
+           maskedText:(NSString*)maskedText
+         revealedText:(NSString*)revealedText {
+    peekButton_ = button;
+    peekPreviewLabel_ = previewLabel;
+    peekItemID_ = itemID;
+    peekMaskedText_ = [maskedText copy];
+    peekRevealedText_ = [revealedText copy];
+    peekImage_ = [button.image copy];
+    peekActiveImage_ = [MacOSMakeSymbolImage(@"eye.slash", CLP_NS(CLP_UI_PEEK_HIDE), 13.0, [NSColor secondaryLabelColor]) copy];
+    peekRevealed_ = uiClippPage::IsItemPeeked(itemID) ? YES : NO;
+    [self applyPeekState];
+}
+
+- (void)togglePeek:(id)sender {
+    (void)sender;
+    if (peekButton_ == nil) {
+        return;
+    }
+
+    peekRevealed_ = uiClippPage::ToggleItemPeeked(peekItemID_) ? YES : NO;
+    [self applyPeekState];
+}
+
+- (void)applyPeekState {
+    if (peekButton_ == nil) {
+        return;
+    }
+
+    peekButton_.image = peekRevealed_ && peekActiveImage_ != nil ? peekActiveImage_ : peekImage_;
+    peekButton_.toolTip = peekRevealed_ ? CLP_NS(CLP_UI_PEEK_HIDE) : CLP_NS(CLP_UI_PEEK);
+    if (peekPreviewLabel_ != nil) {
+        peekPreviewLabel_.stringValue = peekRevealed_ ? peekRevealedText_ : peekMaskedText_;
+    }
+    [self updateCopyButtonVisibility];
+}
+
+// The row-wide click recognizer means "copy". Clicks that the action buttons
+// handle themselves must not also trigger it — peeking an item must never
+// copy it.
+- (BOOL)gestureRecognizer:(NSGestureRecognizer*)gestureRecognizer shouldAttemptToRecognizeWithEvent:(NSEvent*)event {
+    (void)gestureRecognizer;
+    NSView* const buttons[] = { copyButton_, peekButton_ };
+    for (NSView* button : buttons) {
+        if (button == nil || button.hidden || button.alphaValue < 0.01) {
+            continue;
+        }
+        const NSPoint local = [button convertPoint:event.locationInWindow fromView:nil];
+        if ([button mouse:local inRect:button.bounds]) {
+            return NO;
+        }
+    }
+    return YES;
 }
 
 - (BOOL)acceptsFirstResponder {
@@ -165,6 +237,14 @@ extern KeyManager g_keyManager;
                                                keyEquivalent:@""];
     copyItem.target = self;
     [menu addItem:copyItem];
+
+    if (peekButton_ != nil) {
+        NSMenuItem* peekItem = [[NSMenuItem alloc] initWithTitle:(peekRevealed_ ? CLP_NS(CLP_UI_PEEK_HIDE) : CLP_NS(CLP_UI_PEEK))
+                                                          action:@selector(togglePeek:)
+                                                   keyEquivalent:@""];
+        peekItem.target = self;
+        [menu addItem:peekItem];
+    }
     return menu;
 }
 
@@ -215,6 +295,13 @@ extern KeyManager g_keyManager;
     const BOOL visible = copiedFeedbackVisible_ || mouseInside_ || self.window.firstResponder == self;
     copyButton_.alphaValue = visible ? 1.0 : 0.0;
     copyButton_.enabled = visible;
+    if (peekButton_ != nil) {
+        // An active peek keeps its toggle visible so the revealed state is
+        // never ambiguous.
+        const BOOL peekVisible = visible || peekRevealed_;
+        peekButton_.alphaValue = peekVisible ? 1.0 : 0.0;
+        peekButton_.enabled = peekVisible;
+    }
 }
 
 @end
@@ -450,6 +537,11 @@ NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
     const bool isPrivatePlaceholder =
         display->kind == ClipboardActivityPayloadKind::PrivatePlaceholder;
     const bool showCopyAction = !isPrivatePlaceholder;
+    // Masked private text with content present gets a peek toggle; placeholder
+    // rows carry no bytes, so there is nothing to reveal.
+    const bool showPeekAction =
+        display->kind == ClipboardActivityPayloadKind::PrivateText
+        && !display->revealedPreviewText.empty();
 
     MacOSActivityRowView* row = [[MacOSActivityRowView alloc] initWithFrame:NSZeroRect];
     row.translatesAutoresizingMaskIntoConstraints = NO;
@@ -462,12 +554,21 @@ NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
     bubble.fillColor = bubbleFillColor;
     bubble.cornerRadius = 8.0;
 
+    // content | action-icon rail, so the peek toggle can sit directly below
+    // the copy button.
+    NSStackView* outer = [[NSStackView alloc] initWithFrame:NSZeroRect];
+    outer.translatesAutoresizingMaskIntoConstraints = NO;
+    outer.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    outer.alignment = NSLayoutAttributeTop;
+    outer.spacing = 8.0;
+
     NSStackView* content = [[NSStackView alloc] initWithFrame:NSZeroRect];
     content.translatesAutoresizingMaskIntoConstraints = NO;
     content.orientation = NSUserInterfaceLayoutOrientationVertical;
     content.alignment = NSLayoutAttributeWidth;
     content.distribution = NSStackViewDistributionFill;
     content.spacing = 7.0;
+    [outer addArrangedSubview:content];
 
     const std::wstring& deviceName = display->deviceName;
 
@@ -476,6 +577,8 @@ NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
     if (showCopyAction) {
         NSClickGestureRecognizer* copyGesture = [[NSClickGestureRecognizer alloc] initWithTarget:row
                                                                                            action:@selector(copyActivityItem:)];
+        // Lets the row decline clicks the action buttons handle themselves.
+        copyGesture.delegate = row;
         [row addGestureRecognizer:copyGesture];
     }
 
@@ -483,27 +586,9 @@ NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
         MacOSToNSString(deviceName),
         FormatActivityTime(display->header.timestamp)];
     NSTextField* meta = MakeActivityLabel(metaText, 12.0, [NSColor secondaryLabelColor]);
+    [content addArrangedSubview:meta];
 
-    NSStackView* header = [[NSStackView alloc] initWithFrame:NSZeroRect];
-    header.translatesAutoresizingMaskIntoConstraints = NO;
-    header.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    header.alignment = NSLayoutAttributeCenterY;
-    header.spacing = 8.0;
-
-    [header addArrangedSubview:meta];
-    [meta setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
-
-    if (showCopyAction) {
-        NSButton* copyButton = MacOSMakeIconButton(@"doc.on.doc", CLP_NS(CLP_UI_COPY), row, @selector(copyActivityItem:));
-        copyButton.alphaValue = 0.0;
-        copyButton.enabled = NO;
-        copyButton.refusesFirstResponder = YES;
-        [row setCopyButton:copyButton target:target action:@selector(copyActivityItem:) bubble:bubble normalFillColor:bubbleFillColor];
-
-        [header addArrangedSubview:copyButton];
-        [copyButton setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
-    }
-    [content addArrangedSubview:header];
+    NSTextField* previewLabel = nil;
 
     if (display->kind == ClipboardActivityPayloadKind::Image && display->imageData && !display->imageData->empty()) {
         NSImage* image = ThumbnailImageFromBytes(display->imageData);
@@ -554,14 +639,45 @@ NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
             NSString* previewText = display->previewText.empty()
                 ? PayloadKindLabel(display->kind)
                 : MacOSToNSString(display->previewText);
-            NSTextField* preview = MakeActivityPreviewLabel(
+            previewLabel = MakeActivityPreviewLabel(
                 previewText,
                 false);
-            [content addArrangedSubview:preview];
+            [content addArrangedSubview:previewLabel];
         }
     }
 
-    [bubble addSubview:content];
+    if (showCopyAction) {
+        NSStackView* actionRail = [[NSStackView alloc] initWithFrame:NSZeroRect];
+        actionRail.translatesAutoresizingMaskIntoConstraints = NO;
+        actionRail.orientation = NSUserInterfaceLayoutOrientationVertical;
+        actionRail.alignment = NSLayoutAttributeCenterX;
+        actionRail.spacing = 4.0;
+        [actionRail setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+        NSButton* copyButton = MacOSMakeIconButton(@"doc.on.doc", CLP_NS(CLP_UI_COPY), row, @selector(copyActivityItem:));
+        copyButton.alphaValue = 0.0;
+        copyButton.enabled = NO;
+        copyButton.refusesFirstResponder = YES;
+        [row setCopyButton:copyButton target:target action:@selector(copyActivityItem:) bubble:bubble normalFillColor:bubbleFillColor];
+        [actionRail addArrangedSubview:copyButton];
+
+        if (showPeekAction && previewLabel != nil) {
+            NSButton* peekButton = MacOSMakeIconButton(@"eye", CLP_NS(CLP_UI_PEEK), row, @selector(togglePeek:));
+            peekButton.alphaValue = 0.0;
+            peekButton.enabled = NO;
+            peekButton.refusesFirstResponder = YES;
+            [actionRail addArrangedSubview:peekButton];
+            [row setPeekButton:peekButton
+                  previewLabel:previewLabel
+                        itemID:itemID
+                    maskedText:MacOSToNSString(display->previewText)
+                  revealedText:MacOSToNSString(display->revealedPreviewText)];
+        }
+
+        [outer addArrangedSubview:actionRail];
+    }
+
+    [bubble addSubview:outer];
     [row addSubview:bubble];
 
     [NSLayoutConstraint activateConstraints:@[
@@ -572,10 +688,10 @@ NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
             ? [bubble.trailingAnchor constraintEqualToAnchor:row.trailingAnchor]
             : [bubble.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
 
-        [content.leadingAnchor constraintEqualToAnchor:bubble.leadingAnchor constant:12.0],
-        [content.trailingAnchor constraintEqualToAnchor:bubble.trailingAnchor constant:-12.0],
-        [content.topAnchor constraintEqualToAnchor:bubble.topAnchor constant:10.0],
-        [content.bottomAnchor constraintEqualToAnchor:bubble.bottomAnchor constant:-10.0],
+        [outer.leadingAnchor constraintEqualToAnchor:bubble.leadingAnchor constant:12.0],
+        [outer.trailingAnchor constraintEqualToAnchor:bubble.trailingAnchor constant:-12.0],
+        [outer.topAnchor constraintEqualToAnchor:bubble.topAnchor constant:10.0],
+        [outer.bottomAnchor constraintEqualToAnchor:bubble.bottomAnchor constant:-10.0],
     ]];
 
     return row;
@@ -631,6 +747,7 @@ void MacOSClippPage::AddActivityItem(uint64_t itemID) {
 }
 
 void MacOSClippPage::RemoveActivityItem(uint64_t itemID) {
+    uiClippPage::ForgetPeekedItem(itemID);
     if (activityItemsPanel_ == nil) {
         return;
     }
@@ -655,6 +772,7 @@ void MacOSClippPage::RemoveActivityItem(uint64_t itemID) {
 }
 
 void MacOSClippPage::ClearActivityItems() {
+    uiClippPage::ForgetAllPeekedItems();
     if (activityItemsPanel_ == nil) {
         return;
     }

@@ -2,12 +2,14 @@
 
 #include "Clipboard.h"
 #include "KeyManager.h"
+#include "platform/uiClippPage.h"
 #include "platform/uistrings.h"
 #include "utils.h"
 
 #include <algorithm>
 #include <cwchar>
 #include <ctime>
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -221,20 +223,36 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t it
     const bool isPrivatePlaceholder =
         display->kind == ClipboardActivityPayloadKind::PrivatePlaceholder;
     const bool showCopyAction = !isPrivatePlaceholder;
+    // Masked private text with content present gets a peek toggle; placeholder
+    // rows carry no bytes, so there is nothing to reveal.
+    const bool showPeekAction =
+        display->kind == ClipboardActivityPayloadKind::PrivateText
+        && !display->revealedPreviewText.empty();
 
     Grid row;
     row.HorizontalAlignment(HorizontalAlignment::Stretch);
 
+    // The bubble splits into text content and a right-hand action rail so the
+    // peek toggle can sit directly below the copy glyph.
     Grid bubble;
     bubble.MaxWidth(kActivityBubbleMaxWidth);
     bubble.HorizontalAlignment(isOutgoing ? HorizontalAlignment::Right : HorizontalAlignment::Left);
     bubble.CornerRadius(CornerRadius{ 8 });
     bubble.Padding(ThicknessHelper::FromLengths(12, 10, 12, 10));
     bubble.Background(isOutgoing ? MakeBrush(34, 0, 120, 215) : MakeBrush(24, 127, 127, 127));
+    bubble.ColumnSpacing(8);
+
+    ColumnDefinition contentColumn;
+    contentColumn.Width(GridLength{ 1, GridUnitType::Star });
+    ColumnDefinition railColumn;
+    railColumn.Width(GridLength{ 1, GridUnitType::Auto });
+    bubble.ColumnDefinitions().Append(contentColumn);
+    bubble.ColumnDefinitions().Append(railColumn);
 
     StackPanel content;
     content.Orientation(Orientation::Vertical);
     content.Spacing(7);
+    Grid::SetColumn(content, 0);
 
     TextBlock meta;
     const std::wstring metaText = display->deviceName + L" - " + FormatActivityTime(display->header.timestamp);
@@ -242,6 +260,7 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t it
     meta.FontSize(12);
     meta.Opacity(0.68);
     meta.TextWrapping(TextWrapping::WrapWholeWords);
+    content.Children().Append(meta);
 
     FontIcon copyIcon;
     copyIcon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
@@ -256,18 +275,35 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t it
     // Placeholder rows have no copyable content; suppress the hover affordance.
     copyIcon.Visibility(showCopyAction ? Visibility::Visible : Visibility::Collapsed);
 
-    Grid header;
-    ColumnDefinition metaColumn;
-    metaColumn.Width(GridLength{ 1, GridUnitType::Star });
-    ColumnDefinition actionColumn;
-    actionColumn.Width(GridLength{ 1, GridUnitType::Auto });
-    header.ColumnDefinitions().Append(metaColumn);
-    header.ColumnDefinitions().Append(actionColumn);
-    Grid::SetColumn(meta, 0);
-    Grid::SetColumn(copyIcon, 1);
-    header.Children().Append(meta);
-    header.Children().Append(copyIcon);
-    content.Children().Append(header);
+    StackPanel actionRail;
+    actionRail.Orientation(Orientation::Vertical);
+    actionRail.Spacing(4);
+    actionRail.VerticalAlignment(VerticalAlignment::Top);
+    Grid::SetColumn(actionRail, 1);
+    actionRail.Children().Append(copyIcon);
+
+    Button peekButton{ nullptr };
+    FontIcon peekIcon{ nullptr };
+    if (showPeekAction) {
+        peekIcon = FontIcon();
+        peekIcon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
+        peekIcon.FontSize(13);
+
+        peekButton = Button();
+        peekButton.Content(peekIcon);
+        peekButton.Width(28);
+        peekButton.Height(28);
+        peekButton.MinWidth(0);
+        peekButton.MinHeight(0);
+        peekButton.Padding(ThicknessHelper::FromLengths(0, 0, 0, 0));
+        peekButton.BorderThickness(ThicknessHelper::FromLengths(0, 0, 0, 0));
+        peekButton.Background(MakeBrush(0, 0, 0, 0));
+        peekButton.Opacity(0.0);
+        peekButton.IsHitTestVisible(false);
+        actionRail.Children().Append(peekButton);
+    }
+
+    TextBlock preview{ nullptr };
 
     if (display->kind == ClipboardActivityPayloadKind::Image && display->imageData && !display->imageData->empty()) {
         Image image;
@@ -335,9 +371,11 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t it
             detail.TextWrapping(TextWrapping::WrapWholeWords);
             content.Children().Append(detail);
         } else {
-            TextBlock preview;
+            preview = TextBlock();
             preview.Text(display->previewText.empty() ? PayloadKindLabel(display->kind) : display->previewText);
-            preview.TextWrapping(TextWrapping::WrapWholeWords);
+            // Private strings are whitespace-free, so WrapWholeWords would peek
+            // a single truncated line; allow mid-word breaks for those rows.
+            preview.TextWrapping(showPeekAction ? TextWrapping::Wrap : TextWrapping::WrapWholeWords);
             preview.IsTextSelectionEnabled(false);
             preview.MaxLines(8);
             preview.TextTrimming(TextTrimming::WordEllipsis);
@@ -345,8 +383,19 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t it
         }
     }
 
-    const auto setCopyIconVisible = [copyIcon](bool visible) {
-        copyIcon.Opacity(visible ? 1.0 : 0.0);
+    // Hover/focus state shared by the row and the nested peek button. The rail
+    // icons follow it, except that an active peek stays visible so its toggled
+    // state is never ambiguous.
+    auto pointerOverRow = std::make_shared<bool>(false);
+    const auto updateActionIcons = [copyIcon, peekButton, itemID, pointerOverRow]() {
+        copyIcon.Opacity(*pointerOverRow ? 1.0 : 0.0);
+        if (peekButton) {
+            const bool show = *pointerOverRow || uiClippPage::IsItemPeeked(itemID);
+            peekButton.Opacity(show ? 1.0 : 0.0);
+            // While invisible it must not be a surprise click target (a row
+            // click means copy); keyboard focus still reaches it via tab.
+            peekButton.IsHitTestVisible(show);
+        }
     };
 
     Button rowButton;
@@ -363,17 +412,21 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t it
         rowButton.Click([this, itemID](auto const&, auto const&) {
             CopyActivityItem(itemID);
         });
-        rowButton.PointerEntered([setCopyIconVisible](auto const&, auto const&) {
-            setCopyIconVisible(true);
+        rowButton.PointerEntered([updateActionIcons, pointerOverRow](auto const&, auto const&) {
+            *pointerOverRow = true;
+            updateActionIcons();
         });
-        rowButton.PointerExited([setCopyIconVisible](auto const&, auto const&) {
-            setCopyIconVisible(false);
+        rowButton.PointerExited([updateActionIcons, pointerOverRow](auto const&, auto const&) {
+            *pointerOverRow = false;
+            updateActionIcons();
         });
-        rowButton.GotFocus([setCopyIconVisible](auto const&, auto const&) {
-            setCopyIconVisible(true);
+        rowButton.GotFocus([updateActionIcons, pointerOverRow](auto const&, auto const&) {
+            *pointerOverRow = true;
+            updateActionIcons();
         });
-        rowButton.LostFocus([setCopyIconVisible](auto const&, auto const&) {
-            setCopyIconVisible(false);
+        rowButton.LostFocus([updateActionIcons, pointerOverRow](auto const&, auto const&) {
+            *pointerOverRow = false;
+            updateActionIcons();
         });
 
         MenuFlyout contextMenu;
@@ -383,6 +436,47 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t it
             CopyActivityItem(itemID);
         });
         contextMenu.Items().Append(copyMenuItem);
+
+        if (showPeekAction && preview) {
+            MenuFlyoutItem peekMenuItem;
+            const std::wstring maskedText = display->previewText;
+            const std::wstring revealedText = display->revealedPreviewText;
+            const auto applyPeekState =
+                [preview, peekIcon, peekButton, peekMenuItem, maskedText, revealedText](bool revealed) {
+                    preview.Text(revealed ? revealedText : maskedText);
+                    // Segoe MDL2 "RedEye" / "Hide".
+                    peekIcon.Glyph(revealed ? L"\xED1A" : L"\xE7B3");
+                    const winrt::hstring label{ revealed ? CLP_W(CLP_UI_PEEK_HIDE) : CLP_W(CLP_UI_PEEK) };
+                    ToolTipService::SetToolTip(peekButton, winrt::box_value(label));
+                    Automation::AutomationProperties::SetName(peekButton, label);
+                    peekMenuItem.Text(label);
+                };
+            const auto togglePeek = [itemID, applyPeekState, updateActionIcons]() {
+                applyPeekState(uiClippPage::ToggleItemPeeked(itemID));
+                updateActionIcons();
+            };
+
+            peekButton.Click([togglePeek](auto const&, auto const&) {
+                togglePeek();
+            });
+            peekButton.GotFocus([updateActionIcons, pointerOverRow](auto const&, auto const&) {
+                *pointerOverRow = true;
+                updateActionIcons();
+            });
+            peekButton.LostFocus([updateActionIcons, pointerOverRow](auto const&, auto const&) {
+                *pointerOverRow = false;
+                updateActionIcons();
+            });
+
+            peekMenuItem.Click([togglePeek](auto const&, auto const&) {
+                togglePeek();
+            });
+            contextMenu.Items().Append(peekMenuItem);
+
+            applyPeekState(uiClippPage::IsItemPeeked(itemID));
+            updateActionIcons();
+        }
+
         rowButton.ContextFlyout(contextMenu);
         ToolTipService::SetToolTip(rowButton, winrt::box_value(winrt::hstring{ CLP_W(CLP_UI_COPY) }));
         Automation::AutomationProperties::SetName(rowButton, winrt::hstring{ metaText });
@@ -394,6 +488,7 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t it
     }
 
     bubble.Children().Append(content);
+    bubble.Children().Append(actionRail);
     row.Children().Append(rowButton);
     return row;
 }
@@ -444,6 +539,7 @@ void ClippPage::AddActivityItem(uint64_t itemID) {
 }
 
 void ClippPage::RemoveActivityItem(uint64_t itemID) {
+    uiClippPage::ForgetPeekedItem(itemID);
     if (!activityItemsPanel_) {
         return;
     }
@@ -460,6 +556,7 @@ void ClippPage::RemoveActivityItem(uint64_t itemID) {
 }
 
 void ClippPage::ClearActivityItems() {
+    uiClippPage::ForgetAllPeekedItems();
     if (!activityItemsPanel_) {
         return;
     }

@@ -301,6 +301,7 @@ std::optional<ClipboardActivityDisplayItem> ClipboardActivityStore::BuildDisplay
             display.kind = ClipboardActivityPayloadKind::PrivateText;
             display.sourceMarked = true;
             display.previewText = L"••••••••";
+            display.revealedPreviewText = PreviewText(*text);
         } else if (LooksLikeUrl(trimmed)) {
             display.kind = ClipboardActivityPayloadKind::Link;
             display.previewText = PreviewText(trimmed);
@@ -308,6 +309,7 @@ std::optional<ClipboardActivityDisplayItem> ClipboardActivityStore::BuildDisplay
         } else if (LooksPrivateText(trimmed)) {
             display.kind = ClipboardActivityPayloadKind::PrivateText;
             display.previewText = L"••••••••";
+            display.revealedPreviewText = PreviewText(*text);
         } else {
             display.kind = ClipboardActivityPayloadKind::Text;
             display.previewText = PreviewText(*text);

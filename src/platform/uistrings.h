@@ -38,6 +38,8 @@
 #define CLP_UI_IMAGE "Image"
 #define CLP_UI_PRIVATE_TEXT "Private text"
 #define CLP_UI_PRIVATE_BADGE "private"
+#define CLP_UI_PEEK "Peek"
+#define CLP_UI_PEEK_HIDE "Hide"
 #define CLP_UI_PRIVATE_PLACEHOLDER_TITLE "Marked private"
 #define CLP_UI_PRIVATE_PLACEHOLDER_DETAIL "The source app asked Clipp not to sync this clipboard item."
 #define CLP_UI_UNSUPPORTED_CLIPBOARD_ITEM "Unsupported clipboard item"

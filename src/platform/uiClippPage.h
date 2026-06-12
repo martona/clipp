@@ -19,11 +19,46 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 
 #include <sodium.h>
 
 namespace uiClippPage {
+// Activity items whose masked private text the user has chosen to peek.
+// Process-wide (not page state) so the choice survives the page being torn
+// down and rebuilt with the window; item IDs are unique for the life of the
+// process and the activity store is in-memory, so entries can never attach to
+// the wrong item. UI thread only.
+inline std::unordered_set<uint64_t>& PeekedItemIDs() {
+    static std::unordered_set<uint64_t> itemIDs;
+    return itemIDs;
+}
+
+inline bool IsItemPeeked(uint64_t itemID) {
+    return PeekedItemIDs().count(itemID) != 0;
+}
+
+// Returns the new state: true when the item is now peeked.
+inline bool ToggleItemPeeked(uint64_t itemID) {
+    auto& itemIDs = PeekedItemIDs();
+    const auto found = itemIDs.find(itemID);
+    if (found != itemIDs.end()) {
+        itemIDs.erase(found);
+        return false;
+    }
+    itemIDs.insert(itemID);
+    return true;
+}
+
+inline void ForgetPeekedItem(uint64_t itemID) {
+    PeekedItemIDs().erase(itemID);
+}
+
+inline void ForgetAllPeekedItems() {
+    PeekedItemIDs().clear();
+}
+
 inline constexpr uint64_t kMaxByteCounter = 999'999'999'999;
 
 inline std::string FormatByteCounter(uint64_t bytes) {

@@ -50,6 +50,10 @@ struct ClipboardActivityDisplayItem {
     // marker propagated" from "we guessed" — e.g. by attaching a small badge.
     bool sourceMarked{ false };
     std::wstring previewText;
+    // For PrivateText: the preview the item would have shown had it not been
+    // masked. The UI's peek toggle swaps previewText for this. Empty for all
+    // other kinds.
+    std::wstring revealedPreviewText;
     std::wstring detailText;
     std::wstring linkHost;
     uint32_t imageFormatId{ CLIPP_FORMAT_NONE };
