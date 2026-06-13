@@ -21,6 +21,16 @@ public:
     // persist on every flush. A crash loses at most this many numbers; the next
     // session resumes above them, avoiding any collision with the prior session.
     static constexpr uint64_t OriginSequenceBatchSize = 500;
+    // Named-register policy. Stored-only (no GUI in v1): read from storage if a
+    // power user set them, else these defaults. TTL is the idle expiry; the cap is
+    // a write-time refusal at origin.
+    static constexpr uint64_t DefaultRegisterTtlSeconds = 90ull * 24 * 60 * 60;  // 90 days
+    static constexpr uint64_t DefaultRegisterMaxCount = 1024;
+    // The register HLC floor is persisted reserved-ahead by this many ms (the
+    // analogue of OriginSequenceBatchSize): a Settings write happens at most once
+    // per this much wall-time progress, and a restart resumes strictly above the
+    // last emission. See noteRegisterHlcWallMs.
+    static constexpr uint64_t RegisterHlcFloorBatchMs = 60ull * 1000;  // 1 minute
     // Default for honorExternalPrivacyMarkers: respect "don't sync" markers
     // set by other apps (e.g. Chrome / password managers) on the OS clipboard.
     static constexpr bool DefaultHonorExternalPrivacyMarkers = true;
@@ -54,6 +64,16 @@ public:
     // next session. Counter is per-origin (this device), monotonic across restarts.
     uint64_t nextOriginSequenceNumber();
 
+    // Named-register settings (stored-only). TTL in seconds; cap in records.
+    uint64_t registerTtlSeconds() const;
+    uint64_t registerMaxCount() const;
+    // Persisted HLC high-water (wall ms) so the register clock never regresses
+    // across restarts — the mesh is the durable store, so a regressed local clock
+    // could otherwise let a fresh write silently lose the LWW compare. Reserved-
+    // ahead and batched, mirroring nextOriginSequenceNumber's floor discipline.
+    uint64_t registerHlcFloorMs() const;
+    void noteRegisterHlcWallMs(uint64_t wallMs);
+
     bool setNetworkKey(const std::vector<unsigned char>& value);
     bool getNetworkKey(std::vector<unsigned char>& value) const;
     bool ensureHostID(HostId& value);
@@ -86,6 +106,10 @@ private:
     // are safe to mint without a write. When counter reaches this, we bump the
     // floor by OriginSequenceBatchSize and persist.
     uint64_t originSequencePersistedFloor_{ 0 };
+    uint64_t registerTtlSeconds_;
+    uint64_t registerMaxCount_;
+    // Reserved-ahead persisted HLC wall-ms floor for the register clock.
+    uint64_t registerHlcFloorMs_{ 0 };
     mutable std::mutex mutex_;
 };
 

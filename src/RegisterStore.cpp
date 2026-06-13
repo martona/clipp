@@ -59,6 +59,22 @@ RegisterStore::RegisterStore(HostId localHost, uint64_t ttlMs, size_t maxCount,
       maxValueBytes_(maxValueBytes),
       nowMs_(std::move(nowMs)) {}
 
+RegisterStore::RegisterStore()
+    : RegisterStore(HostId{}, kDefaultTtlMs, kDefaultMaxCount, kDefaultMaxValueBytes,
+                    &HlcClock::SystemNowMs) {}
+
+void RegisterStore::SetLocalHost(const HostId& host) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    localHost_ = host;
+}
+
+void RegisterStore::SetLimits(uint64_t ttlMs, size_t maxCount, size_t maxValueBytes) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ttlMs_ = ttlMs;
+    maxCount_ = maxCount;
+    maxValueBytes_ = maxValueBytes;
+}
+
 void RegisterStore::PruneExpiredLocked() {
     const uint64_t now = nowMs_();
     for (auto it = records_.begin(); it != records_.end();) {
@@ -74,6 +90,7 @@ size_t RegisterStore::LiveCountLocked() const {
     const uint64_t now = nowMs_();
     size_t n = 0;
     for (const auto& [name, r] : records_) {
+        if (name.empty()) continue;  // the "" mirror never counts against the user cap
         if (!r.IsTombstone() && !IsExpired(r, now, ttlMs_)) {
             ++n;
         }
@@ -84,8 +101,9 @@ size_t RegisterStore::LiveCountLocked() const {
 RegisterStore::WriteResult RegisterStore::Upsert(const std::string& name, std::string value,
                                                  bool isPrivate) {
     std::lock_guard<std::mutex> lock(mutex_);
-    // "" is the reserved internal mirror key; every other name must validate.
-    if (!name.empty() && !IsValidRegisterName(name)) {
+    // "" is the reserved mirror key, written only via MirrorDefault — reject it
+    // (and any invalid name) from the user-write path.
+    if (!IsValidRegisterName(name)) {
         return WriteResult::InvalidName;
     }
     if (value.size() > maxValueBytes_) {
@@ -159,6 +177,20 @@ RegisterStore::DeleteResult RegisterStore::Delete(const std::string& name) {
     return DeleteResult::Deleted;
 }
 
+void RegisterStore::MirrorDefault(std::string value) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // Observational only: overwrite the "" record with the current clipboard text.
+    // No cap, no validation; the replication and cap surfaces all skip "".
+    const Hlc ts = clock_.Now();
+    RegisterRecord r;
+    r.value = std::move(value);
+    r.written = ts;
+    r.touched = ts;
+    r.originHostId = localHost_;
+    r.flags = 0;
+    records_.insert_or_assign(std::string(), std::move(r));
+}
+
 std::vector<std::string> RegisterStore::ListNames() {
     std::lock_guard<std::mutex> lock(mutex_);
     PruneExpiredLocked();
@@ -191,6 +223,7 @@ std::vector<RegisterDigestEntry> RegisterStore::Digest() {
     std::vector<RegisterDigestEntry> out;
     out.reserve(records_.size());
     for (const auto& [name, r] : records_) {
+        if (name.empty()) continue;  // mirror is local-only, never advertised
         out.push_back(RegisterDigestEntry{ name, r.written, r.touched });
     }
     return out;
@@ -202,6 +235,7 @@ std::vector<RegisterRecord> RegisterStore::SnapshotForSync() {
     std::vector<RegisterRecord> out;
     out.reserve(records_.size());
     for (const auto& [name, r] : records_) {
+        if (name.empty()) continue;  // mirror is local-only, never replicated
         out.push_back(r);
     }
     return out;
@@ -220,6 +254,7 @@ std::vector<std::string> RegisterStore::PlanPush(
 
     std::vector<std::string> toPush;
     for (const auto& [name, r] : records_) {
+        if (name.empty()) continue;  // mirror is local-only, never pushed
         const auto found = remote.find(name);
         if (found == remote.end()) {
             toPush.push_back(name);  // peer lacks it entirely
@@ -237,6 +272,9 @@ std::vector<std::string> RegisterStore::PlanPush(
 
 bool RegisterStore::ApplyRemote(RegisterRecord incoming) {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (incoming.name.empty()) {
+        return false;  // "" is the local-only mirror; a peer can never inject it
+    }
     clock_.Witness(incoming.written);
     clock_.Witness(incoming.touched);
 

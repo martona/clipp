@@ -82,6 +82,11 @@ public:
     enum class WriteResult { Ok, InvalidName, ValueTooLarge, CapExceeded };
     enum class DeleteResult { Deleted, NotFound };
 
+    // Default-constructed for the daemon global; configure with SetLocalHost +
+    // SetLimits at startup (mirrors ClipboardActivityStore's default-construct +
+    // SetLimits pattern). Uses the real wall clock.
+    RegisterStore();
+
     explicit RegisterStore(HostId localHost,
                            uint64_t ttlMs = kDefaultTtlMs,
                            size_t maxCount = kDefaultMaxCount,
@@ -103,6 +108,12 @@ public:
     // Tombstone a live register. Returns NotFound (writing nothing) when there is
     // no live value to delete — the CLI turns that into "no such register".
     DeleteResult Delete(const std::string& name);
+
+    // Observational default-register mirror: reflect the live OS clipboard under
+    // the reserved "" key so `ls` can show it. Local-only — never replicated (the
+    // existing CLIP sync already moves the unnamed clipboard) and never counted
+    // against the register cap. Text-only in v1.
+    void MirrorDefault(std::string value);
 
     // --- Inspection (does NOT refresh `touched`) ---
 
@@ -134,6 +145,8 @@ public:
 
     // --- Lifecycle / introspection ---
 
+    void SetLocalHost(const HostId& host);                          // origin for local writes (LWW tiebreak)
+    void SetLimits(uint64_t ttlMs, size_t maxCount, size_t maxValueBytes);
     void SeedClockFloor(const Hlc& floor);   // startup: lift the clock to the persisted floor
     Hlc ClockHighWater() const;              // for floor persistence (Phase 2)
     size_t LiveCount() const;                // live values (excludes tombstones, expired)
@@ -152,3 +165,7 @@ private:
     size_t maxValueBytes_;
     std::function<uint64_t()> nowMs_;
 };
+
+// Daemon-global instance (defined in main.cpp for desktop, ClippBridge.mm for
+// iOS). Absent from the headless Linux CLI build, which runs no register daemon.
+extern RegisterStore g_registerStore;

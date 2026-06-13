@@ -26,6 +26,8 @@
 #include "Clipboard.h"
 #include "ClipboardActivityStore.h"
 #include "ClipboardWire.h"
+#include "ClipboardFormat.h"
+#include "RegisterStore.h"
 #include "CryptoChannel.h"
 #include "LocalPeerName.h"
 #include "platform/uistrings.h"
@@ -55,6 +57,22 @@ PeerDisplay g_peerDisplay;
 PeerManager g_peerManager;
 NetworkRuntime g_networkRuntime;
 ClipboardActivityStore g_clipboardActivityStore;
+RegisterStore g_registerStore;
+
+// Reflect a text clipboard payload into the default ("") register so `ls` can show
+// the live clipboard. Observational, local-only, text-only — a no-op for images or
+// undecodable payloads. Also advances the persisted HLC floor (batched).
+static void MirrorClipboardToDefaultRegister(const std::shared_ptr<const ClipboardPayload>& payload) {
+    if (!payload || !IsClippTextFormat(payload->meta.formatId)) {
+        return;
+    }
+    const std::vector<unsigned char>* bytes = payload->TryGetUncompressedBytes();
+    if (bytes == nullptr) {
+        return;
+    }
+    g_registerStore.MirrorDefault(std::string(bytes->begin(), bytes->end()));
+    g_settings.noteRegisterHlcWallMs(g_registerStore.ClockHighWater().wallMs);
+}
 #endif
 
 #ifdef _WIN32
@@ -269,6 +287,7 @@ void OnClipboardNotification(PlatformWindowHandle hwnd) {
     clipboardData.StampOrigin(localHostId, localHostName.c_str(), g_settings.nextOriginSequenceNumber());
     auto payload = std::make_shared<const ClipboardPayload>(std::move(clipboardData));
     g_clipboardActivityStore.Add(payload);
+    MirrorClipboardToDefaultRegister(payload);
     g_peerManager.BroadcastClipboard(payload);
     g_logger.log(__FUNCTION__, Logger::Level::Debug, "Broadcast clipboard data to peers (format: %s, ID: %u, encoded size: %zu bytes, uncompressed size: %llu bytes)",
         ClippClipboardFormatName(payload->meta.formatId),
@@ -360,6 +379,15 @@ int main(int argc, char* argv[]) {
         g_settings.clipboardHistoryMemoryLimitBytes(),
         g_settings.clipboardHistoryMaxAgeSeconds(),
         g_settings.clipboardHistoryMaxItems());
+
+    // Named-register store: configure origin + policy, and seed the HLC clock from
+    // the persisted floor so a regressed wall clock can't make a fresh local write
+    // lose the LWW compare against mesh state. Register data itself is ephemeral.
+    g_registerStore.SetLocalHost(hostID);
+    g_registerStore.SetLimits(g_settings.registerTtlSeconds() * 1000ull,
+                              static_cast<size_t>(g_settings.registerMaxCount()),
+                              RegisterStore::kDefaultMaxValueBytes);
+    g_registerStore.SeedClockFloor(Hlc{ g_settings.registerHlcFloorMs(), 0 });
 
 #ifdef __APPLE__
     // Start the key-vend socket before our own first key load, so the server flag

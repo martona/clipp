@@ -93,7 +93,7 @@ TEST_CASE("name validation") {
     auto t = std::make_shared<FakeTime>(FakeTime{ kEpoch });
     auto s = MakeStore(1, t);
     CHECK(s->Upsert("Bad Name", "x") == WriteResult::InvalidName);
-    CHECK(s->Upsert("", "mirror") == WriteResult::Ok);   // "" is the reserved internal mirror key
+    CHECK(s->Upsert("", "mirror") == WriteResult::InvalidName);  // "" reserved; written only via MirrorDefault
 }
 
 TEST_CASE("value size cap") {
@@ -332,4 +332,58 @@ TEST_CASE("PlanPush selects exactly what a peer is missing or stale on") {
     t2->ms += 10;
     REQUIRE(C->Read("k").has_value());                      // bumps C's touched only
     CHECK(C->PlanPush(D->Digest()) == std::vector<std::string>{ "k" });
+}
+
+TEST_CASE("default-constructed store configures via SetLocalHost / SetLimits") {
+    RegisterStore s;                       // daemon-style default ctor (real wall clock)
+    s.SetLocalHost(MakeHost(7));
+    s.SetLimits(RegisterStore::kDefaultTtlMs, /*maxCount*/ 2,
+                RegisterStore::kDefaultMaxValueBytes);
+    CHECK(s.Upsert("a", "1") == WriteResult::Ok);
+    CHECK(s.Upsert("b", "1") == WriteResult::Ok);
+    CHECK(s.Upsert("c", "1") == WriteResult::CapExceeded);
+    CHECK(s.LiveCount() == 2);
+}
+
+TEST_CASE("Upsert rejects the reserved empty name") {
+    auto t = std::make_shared<FakeTime>(FakeTime{ kEpoch });
+    auto s = MakeStore(1, t);
+    CHECK(s->Upsert("", "x") == WriteResult::InvalidName);   // "" is mirror-only
+}
+
+TEST_CASE("default-register mirror is visible in List but never replicated or capped") {
+    auto t = std::make_shared<FakeTime>(FakeTime{ kEpoch });
+    auto s = MakeStore(1, t, RegisterStore::kDefaultTtlMs, /*maxCount*/ 1);
+
+    s->MirrorDefault("live clipboard");
+    CHECK(s->Upsert("real", "v") == WriteResult::Ok);   // mirror does NOT consume the cap=1 slot
+    CHECK(s->LiveCount() == 1);                          // cap counts user registers only
+
+    // List shows both the mirror ("") and the user register.
+    const auto list = s->List();
+    REQUIRE(list.size() == 2);
+    bool sawMirror = false;
+    bool sawReal = false;
+    for (const auto& r : list) {
+        if (r.name.empty()) {
+            sawMirror = true;
+            CHECK(r.value == "live clipboard");
+        } else if (r.name == "real") {
+            sawReal = true;
+        }
+    }
+    CHECK(sawMirror);
+    CHECK(sawReal);
+
+    // Replication surfaces exclude the mirror entirely.
+    CHECK(s->Digest().size() == 1);
+    CHECK(s->SnapshotForSync().size() == 1);
+    for (const auto& e : s->Digest()) {
+        CHECK_FALSE(e.name.empty());
+    }
+
+    // A peer can never inject the mirror key.
+    const RegisterRecord injected =
+        MakeRecord("", "evil", Hlc{ kEpoch, 9 }, Hlc{ kEpoch, 9 }, MakeHost(2));
+    CHECK_FALSE(s->ApplyRemote(injected));
 }
