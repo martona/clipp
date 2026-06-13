@@ -7,8 +7,10 @@ add_executable(clipp-tests
     test_main.cpp
     test_hlc.cpp
     test_register_store.cpp
+    test_register_wire.cpp
     "${CMAKE_SOURCE_DIR}/src/Hlc.cpp"
     "${CMAKE_SOURCE_DIR}/src/RegisterStore.cpp"
+    "${CMAKE_SOURCE_DIR}/src/RegisterWire.cpp"
 )
 target_include_directories(clipp-tests PRIVATE "${CMAKE_SOURCE_DIR}/src")
 target_link_libraries(clipp-tests PRIVATE doctest::doctest)
