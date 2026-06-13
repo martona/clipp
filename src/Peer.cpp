@@ -22,6 +22,9 @@
 #include "utils.h"
 #include "utils_socket.h"
 #include "PeerManager.h"
+#include "RegisterConfig.h"
+#include "RegisterStore.h"
+#include "RegisterWire.h"
 
 #if defined(__APPLE__)
 #include <fcntl.h>
@@ -333,6 +336,86 @@ bool Peer::DrainOutboundMessages(CryptoChannel& channel, const SocketIoContext& 
 	}
 }
 
+bool Peer::HandleRegisterFrame(CryptoChannel& channel, const SocketIoContext& io, const std::vector<unsigned char>& frame) {
+#if CLIPP_REGISTERS_DAEMON
+	// frame = 4-byte tag + body; slice the body once for the decoders.
+	const std::vector<unsigned char> body(frame.begin() + 4, frame.end());
+
+	if (std::memcmp(frame.data(), "REGW", 4) == 0) {
+		RegisterRecord rec;
+		uint8_t transport = 0;
+		if (RegisterWire::TryDecodeRecord(body, rec, transport) && IsValidRegisterName(rec.name)) {
+			g_registerStore.ApplyRemote(std::move(rec));
+		} else {
+			log(__FUNCTION__, Logger::Level::Warning, L"Peer: malformed or invalid REGW; ignoring.");
+		}
+		return true;
+	}
+	if (std::memcmp(frame.data(), "RSYN", 4) == 0) {
+		std::vector<RegisterDigestEntry> theirDigest;
+		if (!RegisterWire::TryDecodeDigest(body, theirDigest)) {
+			log(__FUNCTION__, Logger::Level::Warning, L"Peer: malformed RSYN; ignoring.");
+			return true;
+		}
+		const auto toPush = g_registerStore.RecordsToPush(theirDigest);
+		for (const auto& rec : toPush) {
+			const auto regw = RegisterWire::EncodeRecord(rec, 0);
+			if (!channel.SendFrame(io, "REGW", regw.data(), static_cast<uint32_t>(regw.size()))) {
+				log(__FUNCTION__, Logger::Level::Debug, L"Peer: REGW send failed during anti-entropy.");
+				return true;
+			}
+		}
+		channel.SendFrame(io, "REOS");
+		log(__FUNCTION__, Logger::Level::Debug, L"Answered RSYN: pushed %zu register record(s).", toPush.size());
+		return true;
+	}
+	if (std::memcmp(frame.data(), "REOS", 4) == 0) {
+		log(__FUNCTION__, Logger::Level::Debug, L"Register anti-entropy from this peer complete.");
+		return true;
+	}
+	if (std::memcmp(frame.data(), "RGET", 4) == 0) {
+		std::string name;
+		std::optional<RegisterRecord> rec;
+		if (RegisterWire::TryDecodeName(body, name) && IsValidRegisterName(name)) {
+			rec = g_registerStore.Read(name);  // touch side effect at the serving peer
+		}
+		if (rec.has_value()) {
+			const auto regw = RegisterWire::EncodeRecord(*rec, 0);
+			channel.SendFrame(io, "REGW", regw.data(), static_cast<uint32_t>(regw.size()));
+		} else {
+			channel.SendFrame(io, "NONE");
+		}
+		return true;
+	}
+	if (std::memcmp(frame.data(), "RLST", 4) == 0) {
+		const auto digestBody = RegisterWire::EncodeDigest(g_registerStore.Digest());
+		channel.SendFrame(io, "RLST", digestBody.data(), static_cast<uint32_t>(digestBody.size()));
+		return true;
+	}
+	return false;
+#else
+	(void)channel;
+	(void)io;
+	(void)frame;
+	return false;
+#endif
+}
+
+void Peer::SendRegisterSyncOnConnect(CryptoChannel& channel, const SocketIoContext& io) {
+#if CLIPP_REGISTERS_DAEMON
+	const auto digest = g_registerStore.Digest();
+	const auto body = RegisterWire::EncodeDigest(digest);
+	if (channel.SendFrame(io, "RSYN", body.data(), static_cast<uint32_t>(body.size()))) {
+		log(__FUNCTION__, Logger::Level::Debug, L"Sent register digest (%zu entries) for anti-entropy.", digest.size());
+	} else {
+		log(__FUNCTION__, Logger::Level::Debug, L"Peer: failed to send register RSYN.");
+	}
+#else
+	(void)channel;
+	(void)io;
+#endif
+}
+
 void Peer::ThreadProcSend() {
 	size_t backoffIdx = 0;
 	auto goBackoff = [&]() {
@@ -401,6 +484,8 @@ void Peer::ThreadProcSend() {
 		log(__FUNCTION__, Logger::Level::Info, L"Peer connected and authenticated.");
 		backoffIdx = 0;
 		g_peerDisplay.NotifyPeerConnState(hostName(), hostID(), PeerConnState::Connected);
+		// Register anti-entropy: offer our digest; the peer pushes back what we lack.
+		SendRegisterSyncOnConnect(channel, io);
 		auto nextPingTime = std::chrono::steady_clock::now();
 		std::vector<unsigned char> frame;
 		while (!stopRequested_.load()) {
@@ -521,6 +606,8 @@ void Peer::ThreadProcSend() {
 					// outgoing-direction peer; the requester is on the incoming
 					// side). Tolerate it without breaking the connection.
 					log(__FUNCTION__, Logger::Level::Debug, L"Unexpected EOSY received on outgoing connection; ignoring.");
+				} else if (HandleRegisterFrame(channel, io, frame)) {
+					// Register-protocol frame handled inline.
 				} else {
 					// Forward-compat: unknown tags from a peer with caps we don't recognize
 					// are logged and ignored rather than treated as fatal.
@@ -585,6 +672,10 @@ void Peer::ThreadProcRecv() {
 				log(__FUNCTION__, Logger::Level::Debug, L"Peer: failed to send initial SYNC request.");
 			}
 		}
+
+		// Register anti-entropy with this incoming peer (per-connection, not gated on
+		// firstIncoming): offer our digest so it pushes back anything we lack.
+		SendRegisterSyncOnConnect(channel, io);
 
 		// Idle deadline: if no traffic arrives for this long, assume the peer is gone (e.g.,
 		// iOS backgrounded the app — the kernel keeps the TCP state alive but the process
@@ -706,6 +797,10 @@ void Peer::ThreadProcRecv() {
 				} else if (!channel.SendFrame(io, "NONE")) {
 					break;
 				}
+				continue;
+			}
+
+			if (HandleRegisterFrame(channel, io, frame)) {
 				continue;
 			}
 

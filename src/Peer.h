@@ -63,6 +63,11 @@ private:
 	void CloseSocket();
 	bool SendClipboardData(CryptoChannel& channel, const SocketIoContext& io, const ClipboardPayload& payload);
 	bool DrainOutboundMessages(CryptoChannel& channel, const SocketIoContext& io);
+	// Register-protocol anti-entropy, handled inline in the recv loops (no send
+	// queue involved). HandleRegisterFrame returns true if the frame was a register
+	// tag it consumed. Both are no-ops on builds that don't run the register daemon.
+	bool HandleRegisterFrame(CryptoChannel& channel, const SocketIoContext& io, const std::vector<unsigned char>& frame);
+	void SendRegisterSyncOnConnect(CryptoChannel& channel, const SocketIoContext& io);
 	void ReportTraffic(uint64_t bytesSent, uint64_t bytesReceived);
 	SOCKET CurrentSocket() const;
 	void SetSocket(SOCKET socket);

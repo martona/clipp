@@ -387,3 +387,42 @@ TEST_CASE("default-register mirror is visible in List but never replicated or ca
         MakeRecord("", "evil", Hlc{ kEpoch, 9 }, Hlc{ kEpoch, 9 }, MakeHost(2));
     CHECK_FALSE(s->ApplyRemote(injected));
 }
+
+TEST_CASE("RecordsToPush returns the full records (incl tombstones) a peer needs") {
+    auto t = std::make_shared<FakeTime>(FakeTime{ kEpoch });
+    auto A = MakeStore(1, t);
+    auto B = MakeStore(2, t);
+
+    CHECK(A->Upsert("keep", "v1") == WriteResult::Ok);
+    CHECK(A->Upsert("del", "x") == WriteResult::Ok);
+    for (auto& r : A->SnapshotForSync()) B->ApplyRemote(r);   // B now matches A
+
+    // A diverges: update one, delete one, add one.
+    CHECK(A->Upsert("keep", "v2") == WriteResult::Ok);
+    CHECK(A->Delete("del") == DeleteResult::Deleted);
+    CHECK(A->Upsert("fresh", "new") == WriteResult::Ok);
+
+    const auto push = A->RecordsToPush(B->Digest());
+    REQUIRE(push.size() == 3);
+    bool sawKeep = false;
+    bool sawDelTomb = false;
+    bool sawFresh = false;
+    for (const auto& r : push) {
+        if (r.name == "keep") { sawKeep = true; CHECK(r.value == "v2"); }
+        else if (r.name == "del") { sawDelTomb = true; CHECK(r.IsTombstone()); }
+        else if (r.name == "fresh") { sawFresh = true; }
+    }
+    CHECK(sawKeep);
+    CHECK(sawDelTomb);   // a delete must replicate as a tombstone, not vanish
+    CHECK(sawFresh);
+
+    // Applying the pushed records converges B onto A.
+    for (const auto& r : push) B->ApplyRemote(r);
+    CHECK(B->Read("keep")->value == "v2");
+    CHECK_FALSE(B->Read("del").has_value());
+    CHECK(B->Read("fresh")->value == "new");
+
+    // The names-only view agrees.
+    auto names = A->PlanPush(B->Digest());   // B already converged -> nothing left to push
+    CHECK(names.empty());
+}

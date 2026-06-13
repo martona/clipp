@@ -241,7 +241,7 @@ std::vector<RegisterRecord> RegisterStore::SnapshotForSync() {
     return out;
 }
 
-std::vector<std::string> RegisterStore::PlanPush(
+std::vector<RegisterRecord> RegisterStore::RecordsToPush(
     const std::vector<RegisterDigestEntry>& remoteDigest) {
     std::lock_guard<std::mutex> lock(mutex_);
     PruneExpiredLocked();
@@ -252,22 +252,31 @@ std::vector<std::string> RegisterStore::PlanPush(
         remote.emplace(e.name, &e);
     }
 
-    std::vector<std::string> toPush;
+    std::vector<RegisterRecord> out;
     for (const auto& [name, r] : records_) {
         if (name.empty()) continue;  // mirror is local-only, never pushed
         const auto found = remote.find(name);
         if (found == remote.end()) {
-            toPush.push_back(name);  // peer lacks it entirely
+            out.push_back(r);  // peer lacks it entirely (value or tombstone)
             continue;
         }
         const RegisterDigestEntry& their = *found->second;
-        if (r.written > their.written) {
-            toPush.push_back(name);  // we hold a newer value
-        } else if (r.written == their.written && r.touched > their.touched) {
-            toPush.push_back(name);  // same value, fresher touch (touch-only update)
+        if (r.written > their.written ||
+            (r.written == their.written && r.touched > their.touched)) {
+            out.push_back(r);  // we hold a newer value, or the same value with a fresher touch
         }
     }
-    return toPush;
+    return out;
+}
+
+std::vector<std::string> RegisterStore::PlanPush(
+    const std::vector<RegisterDigestEntry>& remoteDigest) {
+    // Names-only view; delegates (no lock here — RecordsToPush takes it).
+    std::vector<std::string> names;
+    for (const auto& r : RecordsToPush(remoteDigest)) {
+        names.push_back(r.name);
+    }
+    return names;
 }
 
 bool RegisterStore::ApplyRemote(RegisterRecord incoming) {

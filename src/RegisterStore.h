@@ -131,9 +131,11 @@ public:
     // sticky). Prunes expired on the way out.
     std::vector<RegisterRecord> SnapshotForSync();
 
-    // Names this store should push (as REGW) given a peer's digest: records the
-    // peer lacks, or for which it holds a staler (written, touched). Pure planning
-    // step for the Phase 3 wire protocol; exercised in-process by the tests.
+    // Full records (values AND tombstones) this store should push to a peer given
+    // its digest: records the peer lacks, or for which it holds a staler
+    // (written, touched). The anti-entropy responder sends each as a REGW.
+    std::vector<RegisterRecord> RecordsToPush(const std::vector<RegisterDigestEntry>& remoteDigest);
+    // Names-only view of RecordsToPush, for the CLI and the tests.
     std::vector<std::string> PlanPush(const std::vector<RegisterDigestEntry>& remoteDigest);
 
     // Merge a record received from a peer. Witnesses both HLCs, ignores a record
