@@ -98,9 +98,8 @@ size_t RegisterStore::LiveCountLocked() const {
     return n;
 }
 
-RegisterStore::WriteResult RegisterStore::Upsert(const std::string& name, std::string value,
-                                                 bool isPrivate) {
-    std::lock_guard<std::mutex> lock(mutex_);
+RegisterStore::WriteResult RegisterStore::UpsertLocked(const std::string& name, std::string value,
+                                                      bool isPrivate, const HostId& origin) {
     // "" is the reserved mirror key, written only via MirrorDefault — reject it
     // (and any invalid name) from the user-write path.
     if (!IsValidRegisterName(name)) {
@@ -126,10 +125,22 @@ RegisterStore::WriteResult RegisterStore::Upsert(const std::string& name, std::s
     r.value = std::move(value);
     r.written = ts;
     r.touched = ts;
-    r.originHostId = localHost_;
+    r.originHostId = origin;
     r.flags = isPrivate ? RegisterFlags::Private : 0;
     records_.insert_or_assign(name, std::move(r));
     return WriteResult::Ok;
+}
+
+RegisterStore::WriteResult RegisterStore::Upsert(const std::string& name, std::string value,
+                                                 bool isPrivate) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return UpsertLocked(name, std::move(value), isPrivate, localHost_);
+}
+
+RegisterStore::WriteResult RegisterStore::Upsert(const std::string& name, std::string value,
+                                                 bool isPrivate, const HostId& origin) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return UpsertLocked(name, std::move(value), isPrivate, origin);
 }
 
 std::optional<RegisterRecord> RegisterStore::Read(const std::string& name) {
@@ -149,8 +160,7 @@ std::optional<RegisterRecord> RegisterStore::Read(const std::string& name) {
     return it->second;
 }
 
-RegisterStore::DeleteResult RegisterStore::Delete(const std::string& name) {
-    std::lock_guard<std::mutex> lock(mutex_);
+RegisterStore::DeleteResult RegisterStore::DeleteLocked(const std::string& name, const HostId& origin) {
     const auto it = records_.find(name);
     if (it == records_.end()) {
         return DeleteResult::NotFound;
@@ -172,9 +182,19 @@ RegisterStore::DeleteResult RegisterStore::Delete(const std::string& name) {
     r.value.clear();
     r.written = ts;
     r.touched = ts;
-    r.originHostId = localHost_;
+    r.originHostId = origin;
     r.flags = RegisterFlags::Tombstone;
     return DeleteResult::Deleted;
+}
+
+RegisterStore::DeleteResult RegisterStore::Delete(const std::string& name) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return DeleteLocked(name, localHost_);
+}
+
+RegisterStore::DeleteResult RegisterStore::Delete(const std::string& name, const HostId& origin) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return DeleteLocked(name, origin);
 }
 
 void RegisterStore::MirrorDefault(std::string value) {
@@ -239,6 +259,19 @@ std::vector<RegisterRecord> RegisterStore::SnapshotForSync() {
         out.push_back(r);
     }
     return out;
+}
+
+std::optional<RegisterRecord> RegisterStore::GetForBroadcast(const std::string& name) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = records_.find(name);
+    if (it == records_.end()) {
+        return std::nullopt;
+    }
+    if (IsExpired(it->second, nowMs_(), ttlMs_)) {
+        records_.erase(it);  // drop-on-access
+        return std::nullopt;
+    }
+    return it->second;  // value or tombstone, no touch
 }
 
 std::vector<RegisterRecord> RegisterStore::RecordsToPush(

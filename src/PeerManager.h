@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <memory>
 #include <mutex>
@@ -20,6 +21,9 @@ public:
 	void CullPeers();
 	void ClearPeers();
 	void BroadcastClipboard(std::shared_ptr<const ClipboardPayload> payload);
+	// Send a pre-encoded register frame to every connected peer advertising
+	// CAP0_SERVES_REGISTERS — rebroadcasts a re-stamped relay write to the mesh.
+	void BroadcastRegisterFrame(const std::array<char, 4>& tag, const std::vector<unsigned char>& body);
 
 	// Tracks how many incoming peers have completed their handshake.
 	// OnIncomingPeerEstablished returns true exactly on the 0→1 transition —

@@ -100,6 +100,11 @@ public:
     // cap (overwriting an existing live one is always allowed). `isPrivate` sets
     // the PRIVATE flag.
     WriteResult Upsert(const std::string& name, std::string value, bool isPrivate = false);
+    // Gateway re-stamp: same as Upsert but records `origin` (the originating CLI's
+    // HostId) instead of this device, while still minting the HLC from THIS store's
+    // authoritative clock. Lets a gateway perform a one-shot client's write without
+    // the client needing the live clock, yet keep the true origin for `ls -v`/LWW.
+    WriteResult Upsert(const std::string& name, std::string value, bool isPrivate, const HostId& origin);
 
     // `paste`: returns the record and refreshes `touched` (LRU). nullopt if absent,
     // tombstoned, or expired.
@@ -108,6 +113,9 @@ public:
     // Tombstone a live register. Returns NotFound (writing nothing) when there is
     // no live value to delete — the CLI turns that into "no such register".
     DeleteResult Delete(const std::string& name);
+    // Gateway re-stamp variant: tombstone carries `origin` (the CLI's HostId) with
+    // an HLC from this store's clock.
+    DeleteResult Delete(const std::string& name, const HostId& origin);
 
     // Observational default-register mirror: reflect the live OS clipboard under
     // the reserved "" key so `ls` can show it. Local-only — never replicated (the
@@ -130,6 +138,12 @@ public:
     // a peer pulls during anti-entropy (tombstones must replicate to keep deletes
     // sticky). Prunes expired on the way out.
     std::vector<RegisterRecord> SnapshotForSync();
+
+    // Non-touching fetch of a single record by name (value OR tombstone), nullopt
+    // if absent/expired. The gateway uses it to grab the record it just re-stamped
+    // so it can rebroadcast it to the mesh. Unlike Read it doesn't refresh `touched`
+    // and doesn't hide tombstones.
+    std::optional<RegisterRecord> GetForBroadcast(const std::string& name);
 
     // Full records (values AND tombstones) this store should push to a peer given
     // its digest: records the peer lacks, or for which it holds a staler
@@ -157,6 +171,8 @@ public:
 private:
     void PruneExpiredLocked();
     size_t LiveCountLocked() const;
+    WriteResult UpsertLocked(const std::string& name, std::string value, bool isPrivate, const HostId& origin);
+    DeleteResult DeleteLocked(const std::string& name, const HostId& origin);
 
     mutable std::mutex mutex_;
     HlcClock clock_;

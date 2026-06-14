@@ -426,3 +426,31 @@ TEST_CASE("RecordsToPush returns the full records (incl tombstones) a peer needs
     auto names = A->PlanPush(B->Digest());   // B already converged -> nothing left to push
     CHECK(names.empty());
 }
+
+TEST_CASE("gateway re-stamp: Upsert/Delete with explicit origin keep the CLI's HostId") {
+    auto t = std::make_shared<FakeTime>(FakeTime{ kEpoch });
+    auto gw = MakeStore(/*gateway host*/ 9, t);
+    const HostId cliOrigin = MakeHost(3);
+
+    // Gateway performs a one-shot client's write: HLC from the gateway clock, but
+    // the record's origin is the CLI device, not the gateway (9).
+    CHECK(gw->Upsert("foo", "bar", false, cliOrigin) == WriteResult::Ok);
+    auto rec = gw->GetForBroadcast("foo");
+    REQUIRE(rec.has_value());
+    CHECK(rec->value == "bar");
+    CHECK(rec->originHostId == cliOrigin);
+    CHECK(rec->written.wallMs == kEpoch);   // minted by this store's clock
+
+    // Delete-with-origin yields a tombstone carrying the CLI origin.
+    CHECK(gw->Delete("foo", cliOrigin) == DeleteResult::Deleted);
+    auto tomb = gw->GetForBroadcast("foo");
+    REQUIRE(tomb.has_value());
+    CHECK(tomb->IsTombstone());
+    CHECK(tomb->originHostId == cliOrigin);
+    CHECK_FALSE(gw->Read("foo").has_value());   // GetForBroadcast surfaces tombstones; Read hides them
+
+    // The no-origin overloads still stamp the local host.
+    auto local = MakeStore(5, t);
+    CHECK(local->Upsert("k", "v") == WriteResult::Ok);
+    CHECK(local->GetForBroadcast("k")->originHostId == MakeHost(5));
+}

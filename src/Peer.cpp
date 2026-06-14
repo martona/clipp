@@ -11,6 +11,7 @@
 #include <optional>
 #include <thread>
 #include <utility>
+#include <variant>
 
 #include "Settings.h"
 #include "ClipboardActivityStore.h"
@@ -191,7 +192,12 @@ std::chrono::steady_clock::time_point Peer::createdAt() const {
 }
 
 void Peer::PushMessage(std::shared_ptr<const ClipboardPayload> payload) {
-	messageQueue_.Push(std::move(payload));
+	messageQueue_.Push(OutboundMessage{ std::move(payload) });
+	wakeEvent_.Signal();
+}
+
+void Peer::PushRawFrame(std::array<char, 4> tag, std::vector<unsigned char> body) {
+	messageQueue_.Push(OutboundMessage{ OutboundRawFrame{ tag, std::move(body) } });
 	wakeEvent_.Signal();
 }
 
@@ -318,20 +324,33 @@ bool Peer::SendClipboardData(CryptoChannel& channel, const SocketIoContext& io, 
 
 bool Peer::DrainOutboundMessages(CryptoChannel& channel, const SocketIoContext& io) {
 	for (;;) {
-		std::optional<std::shared_ptr<const ClipboardPayload>> msg = messageQueue_.TryPop();
+		std::optional<OutboundMessage> msg = messageQueue_.TryPop();
 		if (!msg.has_value()) {
 			return true;
 		}
 
-		const std::shared_ptr<const ClipboardPayload>& payload = msg.value();
-		log(__FUNCTION__, Logger::Level::Debug, L"Clipboard payload to be sent: format %ls (%u), payload size %zu bytes, uncompressed size %llu bytes",
-			ClippClipboardFormatNameW(payload->meta.formatId),
-			payload->meta.formatId,
-			payload->EncodedBytes().size(),
-			static_cast<unsigned long long>(payload->meta.uncompressedDataSize));
-		if (!SendClipboardData(channel, io, *payload)) {
-			log(__FUNCTION__, Logger::Level::Debug, L"Peer failed to send clipboard payload.");
-			return false;
+		if (const auto* payloadPtr = std::get_if<std::shared_ptr<const ClipboardPayload>>(&msg.value())) {
+			const std::shared_ptr<const ClipboardPayload>& payload = *payloadPtr;
+			log(__FUNCTION__, Logger::Level::Debug, L"Clipboard payload to be sent: format %ls (%u), payload size %zu bytes, uncompressed size %llu bytes",
+				ClippClipboardFormatNameW(payload->meta.formatId),
+				payload->meta.formatId,
+				payload->EncodedBytes().size(),
+				static_cast<unsigned long long>(payload->meta.uncompressedDataSize));
+			if (!SendClipboardData(channel, io, *payload)) {
+				log(__FUNCTION__, Logger::Level::Debug, L"Peer failed to send clipboard payload.");
+				return false;
+			}
+		} else {
+			const OutboundRawFrame& raw = std::get<OutboundRawFrame>(msg.value());
+			if (!channel.SendFrame(io, raw.tag.data(),
+					raw.body.empty() ? nullptr : raw.body.data(),
+					static_cast<uint32_t>(raw.body.size()))) {
+				log(__FUNCTION__, Logger::Level::Debug, L"Peer failed to send raw frame '%c%c%c%c'.",
+					static_cast<wchar_t>(raw.tag[0]), static_cast<wchar_t>(raw.tag[1]),
+					static_cast<wchar_t>(raw.tag[2]), static_cast<wchar_t>(raw.tag[3]));
+				return false;
+			}
+			ReportTraffic(4 + raw.body.size() + crypto_secretstream_xchacha20poly1305_ABYTES + sizeof(uint32_t), 0);
 		}
 	}
 }
@@ -344,10 +363,35 @@ bool Peer::HandleRegisterFrame(CryptoChannel& channel, const SocketIoContext& io
 	if (std::memcmp(frame.data(), "REGW", 4) == 0) {
 		RegisterRecord rec;
 		uint8_t transport = 0;
-		if (RegisterWire::TryDecodeRecord(body, rec, transport) && IsValidRegisterName(rec.name)) {
-			g_registerStore.ApplyRemote(std::move(rec));
-		} else {
+		if (!RegisterWire::TryDecodeRecord(body, rec, transport) || !IsValidRegisterName(rec.name)) {
 			log(__FUNCTION__, Logger::Level::Warning, L"Peer: malformed or invalid REGW; ignoring.");
+			return true;
+		}
+		if ((transport & RegisterWire::Transport::Relay) != 0) {
+			// Origin write request from a one-shot client: re-stamp with our
+			// authoritative clock (keeping the client's origin) and ACK on the same
+			// connection, so the client's socket stays open until the write has
+			// actually landed; then rebroadcast the result to the mesh.
+			const std::string name = rec.name;
+			bool changed = false;
+			if (rec.IsTombstone()) {
+				const auto result = g_registerStore.Delete(name, rec.originHostId);
+				changed = (result == RegisterStore::DeleteResult::Deleted);
+				channel.SendFrame(io, changed ? "RDEL" : "NONE");
+			} else {
+				const auto result = g_registerStore.Upsert(name, std::move(rec.value), rec.IsPrivate(), rec.originHostId);
+				changed = (result == RegisterStore::WriteResult::Ok);
+				channel.SendFrame(io, changed ? "ROKW" : "RERR");
+			}
+			if (changed) {
+				g_settings.noteRegisterHlcWallMs(g_registerStore.ClockHighWater().wallMs);
+				if (const auto stored = g_registerStore.GetForBroadcast(name)) {
+					const auto regwOut = RegisterWire::EncodeRecord(*stored, 0);
+					g_peerManager.BroadcastRegisterFrame({ 'R', 'E', 'G', 'W' }, regwOut);
+				}
+			}
+		} else {
+			g_registerStore.ApplyRemote(std::move(rec));
 		}
 		return true;
 	}
@@ -465,6 +509,7 @@ void Peer::ThreadProcSend() {
 			hostNameMismatch = hostName_ != remoteHostName;
 			expectedHostName = hostName_;
 			osType_ = channel.RemoteOsType();
+			remoteServesRegisters_.store((channel.RemoteCaps()[0] & CryptoChannel::CAP0_SERVES_REGISTERS) != 0);
 		}
 		if (hostIDMismatch) {
 			log(__FUNCTION__, Logger::Level::Warning, L"Peer: host ID mismatch");
@@ -650,6 +695,7 @@ void Peer::ThreadProcRecv() {
 			hostID_ = remoteHostId;
 			hostName_ = Utf8ToWideString(remoteHostNameUtf8);
 			osType_ = channel.RemoteOsType();
+			remoteServesRegisters_.store((channel.RemoteCaps()[0] & CryptoChannel::CAP0_SERVES_REGISTERS) != 0);
 		}
 		if (verifiedCallback_) {
 			verifiedCallback_(Utf8ToWideString(remoteHostNameUtf8), remoteHostId, channel.RemoteOsType(), connType_, createdAt_);

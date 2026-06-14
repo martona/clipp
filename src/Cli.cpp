@@ -23,6 +23,8 @@
 #include "Logger.h"
 #include "MDNSDiscovery.h"
 #include "OneShotPeer.h"
+#include "RegisterStore.h"
+#include "RegisterWire.h"
 #include "Settings.h"
 #include "platform.h"
 #include "platform/LogPaths.h"
@@ -522,7 +524,326 @@ int RunPaste() {
     return 0;
 }
 
-enum class Action { None, Gui, KeySet, KeyErase, KeyShow, HostIdShow, HostIdReset, Copy, Paste };
+// ---- Named registers: clipp copy/paste/ls/rm <name> -------------------------
+
+bool StdoutIsTty() {
+#ifdef _WIN32
+    return StdHandleIsConsole(STD_OUTPUT_HANDLE);
+#else
+    return isatty(STDOUT_FILENO) != 0;
+#endif
+}
+
+std::wstring FormatAge(const Hlc& touched) {
+    const uint64_t now = HlcClock::SystemNowMs();
+    const uint64_t ageMs = (now > touched.wallMs) ? (now - touched.wallMs) : 0;
+    const uint64_t s = ageMs / 1000;
+    if (s < 60)    return std::to_wstring(s) + L"s";
+    if (s < 3600)  return std::to_wstring(s / 60) + L"m";
+    if (s < 86400) return std::to_wstring(s / 3600) + L"h";
+    return std::to_wstring(s / 86400) + L"d";
+}
+
+// Browse for a peer advertising CAP0_SERVES_REGISTERS, connect, and run `exchange`
+// on it; stop at the first peer where `exchange` returns true (handled). Returns
+// true if some register-capable peer handled it. Mirrors RunPaste's browse loop.
+template <typename Fn>
+bool WithRegisterGateway(const HostId& localHostId, const std::string& localHostName, Fn exchange) {
+    return MDNSDiscovery::BrowseStream(OneShot::kBrowseCeiling, /*includeSelf=*/true,
+        [&](const MDNSDiscovery::DiscoveredPeer& peer) -> bool {
+            VerboseLine(L"Trying " + PeerLabel(peer, localHostId) + L"...");
+            OneShotPeer connection;
+            if (!connection.Connect(peer.ip, peer.port, localHostId, localHostName, peer.hostId,
+                                    OneShot::kConnectTimeout, OneShot::kSessionTimeout)) {
+                VerboseLine(L"  unreachable.");
+                return true;  // browse: try the next peer
+            }
+            if ((connection.RemoteCaps()[0] & CryptoChannel::CAP0_SERVES_REGISTERS) == 0) {
+                VerboseLine(L"  no register support, skipping.");
+                return true;
+            }
+            return !exchange(connection);  // handled -> return false to stop browsing
+        });
+}
+
+int RunRegisterCopy(const std::string& name, bool isPrivate) {
+    if (!IsValidRegisterName(name)) {
+        ErrLine(L"Invalid register name. Use 1-64 characters of [a-z0-9._-].");
+        return 1;
+    }
+    if (!g_keyManager.HaveNetworkKey()) {
+        ErrLine(L"No group key configured. Run `clipp key set` first.");
+        return 1;
+    }
+    NetworkStartup net;
+    if (!net.ok) {
+        ErrLine(L"Failed to initialize networking.");
+        return 1;
+    }
+    std::vector<unsigned char> bytes = ReadAllStdin();
+    if (bytes.empty()) {
+        ErrLine(L"Nothing on stdin to copy.");
+        return 1;
+    }
+
+    HostId localHostId;
+    g_settings.ensureHostID(localHostId);
+    const std::string localHostName =
+        clipp::GetLocalPeerDisplayName("unknown", CryptoChannel::HOSTNAME_MAX_BYTES);
+
+    RegisterRecord rec;
+    rec.name = name;
+    rec.value.assign(bytes.begin(), bytes.end());
+    rec.originHostId = localHostId;
+    rec.flags = isPrivate ? RegisterFlags::Private : 0;
+    // HLCs left zero: the gateway re-stamps from its authoritative clock (keeping our
+    // origin). We wait for its ack so the socket stays open until the write lands —
+    // a fire-and-forget close races the gateway's read and drops the frame.
+    const std::vector<unsigned char> regw =
+        RegisterWire::EncodeRecord(rec, RegisterWire::Transport::Relay);
+
+    bool ok = false;
+    bool refused = false;
+    const bool reached = WithRegisterGateway(localHostId, localHostName, [&](OneShotPeer& conn) -> bool {
+        if (!conn.SendFrame("REGW", regw.data(), static_cast<uint32_t>(regw.size()))) {
+            return false;
+        }
+        std::vector<unsigned char> frame;
+        while (conn.RecvFrame(frame)) {
+            if (frame.size() < 4) {
+                break;
+            }
+            if (std::memcmp(frame.data(), "ROKW", 4) == 0) { ok = true; return true; }
+            if (std::memcmp(frame.data(), "RERR", 4) == 0) { refused = true; return true; }
+            if (std::memcmp(frame.data(), "SYNC", 4) == 0) {
+                conn.SendFrame("EOSY");
+                continue;
+            }
+            // ignore RSYN/REGW/REOS/PING crosstalk; keep waiting for the ack
+        }
+        return false;
+    });
+    if (!reached) {
+        ErrLine(L"Could not reach any register-capable device.");
+        return 1;
+    }
+    if (refused) {
+        ErrLine(L"Register write refused (name, size, or count limit).");
+        return 1;
+    }
+    if (!ok) {
+        ErrLine(L"No acknowledgement from the gateway; the register was not stored.");
+        return 1;
+    }
+    VerboseLine(L"Copied " + std::to_wstring(bytes.size()) + L" byte(s) to register '" +
+                ToWide(name) + L"'.");
+    return 0;
+}
+
+int RunRegisterPaste(const std::string& name) {
+    if (!IsValidRegisterName(name)) {
+        ErrLine(L"Invalid register name. Use 1-64 characters of [a-z0-9._-].");
+        return 1;
+    }
+    if (!g_keyManager.HaveNetworkKey()) {
+        ErrLine(L"No group key configured. Run `clipp key set` first.");
+        return 1;
+    }
+    NetworkStartup net;
+    if (!net.ok) {
+        ErrLine(L"Failed to initialize networking.");
+        return 1;
+    }
+    HostId localHostId;
+    g_settings.ensureHostID(localHostId);
+    const std::string localHostName =
+        clipp::GetLocalPeerDisplayName("unknown", CryptoChannel::HOSTNAME_MAX_BYTES);
+    const std::vector<unsigned char> req = RegisterWire::EncodeName(name);
+
+    bool present = false;
+    bool refusedPrivate = false;
+    const bool reached = WithRegisterGateway(localHostId, localHostName, [&](OneShotPeer& conn) -> bool {
+        if (!conn.SendFrame("RGET", req.data(), static_cast<uint32_t>(req.size()))) {
+            return false;  // transport failed; try the next gateway
+        }
+        std::vector<unsigned char> frame;
+        while (conn.RecvFrame(frame)) {
+            if (frame.size() < 4) {
+                break;
+            }
+            if (std::memcmp(frame.data(), "REGW", 4) == 0) {
+                RegisterRecord rec;
+                uint8_t transport = 0;
+                const std::vector<unsigned char> fbody(frame.begin() + 4, frame.end());
+                if (!RegisterWire::TryDecodeRecord(fbody, rec, transport)) {
+                    return false;
+                }
+                if (rec.name != name) {
+                    continue;  // an unsolicited broadcast for another register; keep waiting
+                }
+                present = true;
+                if (rec.IsPrivate() && StdoutIsTty()) {
+                    ErrLine(L"Register '" + ToWide(name) +
+                            L"' is private; refusing to print to a terminal. Pipe it to read.");
+                    refusedPrivate = true;
+                } else {
+                    WriteAllStdout(reinterpret_cast<const unsigned char*>(rec.value.data()),
+                                   rec.value.size());
+                }
+                return true;
+            }
+            if (std::memcmp(frame.data(), "NONE", 4) == 0) {
+                return true;  // definitive: no such register
+            }
+            if (std::memcmp(frame.data(), "SYNC", 4) == 0) {
+                conn.SendFrame("EOSY");  // clipboard-sync crosstalk from the gateway
+                continue;
+            }
+            // Ignore RSYN/REOS/PING and any other crosstalk; keep reading for our reply.
+        }
+        return false;
+    });
+    if (!reached) {
+        ErrLine(L"Could not reach any register-capable device.");
+        return 1;
+    }
+    if (!present) {
+        ErrLine(L"No such register '" + ToWide(name) + L"'.");
+        return 1;
+    }
+    return refusedPrivate ? 1 : 0;
+}
+
+int RunRegisterLs(bool verbose) {
+    if (!g_keyManager.HaveNetworkKey()) {
+        ErrLine(L"No group key configured. Run `clipp key set` first.");
+        return 1;
+    }
+    NetworkStartup net;
+    if (!net.ok) {
+        ErrLine(L"Failed to initialize networking.");
+        return 1;
+    }
+    HostId localHostId;
+    g_settings.ensureHostID(localHostId);
+    const std::string localHostName =
+        clipp::GetLocalPeerDisplayName("unknown", CryptoChannel::HOSTNAME_MAX_BYTES);
+
+    std::vector<RegisterDigestEntry> entries;
+    bool got = false;
+    const bool reached = WithRegisterGateway(localHostId, localHostName, [&](OneShotPeer& conn) -> bool {
+        if (!conn.SendFrame("RLST")) {
+            return false;
+        }
+        std::vector<unsigned char> frame;
+        while (conn.RecvFrame(frame)) {
+            if (frame.size() < 4) {
+                break;
+            }
+            if (std::memcmp(frame.data(), "RLST", 4) == 0) {
+                const std::vector<unsigned char> fbody(frame.begin() + 4, frame.end());
+                if (!RegisterWire::TryDecodeDigest(fbody, entries)) {
+                    return false;
+                }
+                got = true;
+                return true;
+            }
+            if (std::memcmp(frame.data(), "SYNC", 4) == 0) {
+                conn.SendFrame("EOSY");
+                continue;
+            }
+            // ignore crosstalk
+        }
+        return false;
+    });
+    if (!reached) {
+        ErrLine(L"Could not reach any register-capable device.");
+        return 1;
+    }
+    if (!got) {
+        return 0;
+    }
+    // Entries arrive name-sorted (the digest is built from a std::map).
+    for (const auto& e : entries) {
+        if (verbose) {
+            OutLine(ToWide(e.name) + L"\t" + FormatAge(e.touched));
+        } else {
+            OutLine(ToWide(e.name));
+        }
+    }
+    return 0;
+}
+
+int RunRegisterRm(const std::string& name) {
+    if (!IsValidRegisterName(name)) {
+        ErrLine(L"Invalid register name. Use 1-64 characters of [a-z0-9._-].");
+        return 1;
+    }
+    if (!g_keyManager.HaveNetworkKey()) {
+        ErrLine(L"No group key configured. Run `clipp key set` first.");
+        return 1;
+    }
+    NetworkStartup net;
+    if (!net.ok) {
+        ErrLine(L"Failed to initialize networking.");
+        return 1;
+    }
+    HostId localHostId;
+    g_settings.ensureHostID(localHostId);
+    const std::string localHostName =
+        clipp::GetLocalPeerDisplayName("unknown", CryptoChannel::HOSTNAME_MAX_BYTES);
+
+    RegisterRecord rec;
+    rec.name = name;
+    rec.originHostId = localHostId;
+    rec.flags = RegisterFlags::Tombstone;   // empty value; the gateway re-stamps the HLC
+    const std::vector<unsigned char> regw =
+        RegisterWire::EncodeRecord(rec, RegisterWire::Transport::Relay);
+
+    bool deleted = false;
+    bool absent = false;
+    const bool reached = WithRegisterGateway(localHostId, localHostName, [&](OneShotPeer& conn) -> bool {
+        if (!conn.SendFrame("REGW", regw.data(), static_cast<uint32_t>(regw.size()))) {
+            return false;
+        }
+        std::vector<unsigned char> frame;
+        while (conn.RecvFrame(frame)) {
+            if (frame.size() < 4) {
+                break;
+            }
+            if (std::memcmp(frame.data(), "RDEL", 4) == 0) {
+                deleted = true;
+                return true;
+            }
+            if (std::memcmp(frame.data(), "NONE", 4) == 0) {
+                absent = true;
+                return true;
+            }
+            if (std::memcmp(frame.data(), "SYNC", 4) == 0) {
+                conn.SendFrame("EOSY");
+                continue;
+            }
+            // ignore crosstalk
+        }
+        return false;
+    });
+    if (!reached) {
+        ErrLine(L"Could not reach any register-capable device.");
+        return 1;
+    }
+    if (absent) {
+        ErrLine(L"No such register '" + ToWide(name) + L"'.");
+        return 1;
+    }
+    if (!deleted) {
+        ErrLine(L"Delete failed.");
+        return 1;
+    }
+    VerboseLine(L"Removed register '" + ToWide(name) + L"'.");
+    return 0;
+}
+
+enum class Action { None, Gui, KeySet, KeyErase, KeyShow, HostIdShow, HostIdReset, Copy, Paste, RegLs, RegRm };
 
 }  // namespace
 
@@ -570,13 +891,27 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
 
     Action action = Action::None;
 
-    CLI::App* copyCommand = app.add_subcommand("copy", "Read stdin and copy it to the network");
+    std::string copyRegisterName;
+    bool copyPrivate = false;
+    CLI::App* copyCommand = app.add_subcommand("copy", "Read stdin and copy it to the network, or to a named register");
     copyCommand->alias("c");
+    copyCommand->add_option("name", copyRegisterName, "Named register (default: the shared clipboard)");
+    copyCommand->add_flag("--private", copyPrivate, "Mask the value in `ls -v` and refuse to print it to a terminal on paste");
     copyCommand->callback([&]() { action = Action::Copy; });
 
-    CLI::App* pasteCommand = app.add_subcommand("paste", "Fetch the newest clipboard item from the network and write it to stdout");
+    std::string pasteRegisterName;
+    CLI::App* pasteCommand = app.add_subcommand("paste", "Write the newest clipboard item, or a named register, to stdout");
     pasteCommand->alias("p");
+    pasteCommand->add_option("name", pasteRegisterName, "Named register (default: the shared clipboard)");
     pasteCommand->callback([&]() { action = Action::Paste; });
+
+    CLI::App* lsCommand = app.add_subcommand("ls", "List named registers (add -v to show ages)");
+    lsCommand->callback([&]() { action = Action::RegLs; });
+
+    std::string rmRegisterName;
+    CLI::App* rmCommand = app.add_subcommand("rm", "Delete a named register");
+    rmCommand->add_option("name", rmRegisterName, "Register to delete")->required();
+    rmCommand->callback([&]() { action = Action::RegRm; });
 
     CLI::App* keyCommand = app.add_subcommand("key", "Group key management");
     keyCommand->require_subcommand(1);
@@ -696,9 +1031,13 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
     case Action::HostIdReset:
         return RunHostIdReset();
     case Action::Copy:
-        return RunCopy();
+        return copyRegisterName.empty() ? RunCopy() : RunRegisterCopy(copyRegisterName, copyPrivate);
     case Action::Paste:
-        return RunPaste();
+        return pasteRegisterName.empty() ? RunPaste() : RunRegisterPaste(pasteRegisterName);
+    case Action::RegLs:
+        return RunRegisterLs(verbose);
+    case Action::RegRm:
+        return RunRegisterRm(rmRegisterName);
     case Action::Gui:
     case Action::None:
         break;
