@@ -252,21 +252,6 @@ std::wstring PeerLabel(const MDNSDiscovery::DiscoveredPeer& peer, const HostId& 
     return label;
 }
 
-// Does this peer satisfy the --host filter? Device name matches case-insensitively
-// (ASCII), IP matches exactly. Used to pin one daemon for deterministic scripting.
-bool PeerMatchesHost(const MDNSDiscovery::DiscoveredPeer& peer, const std::string& filter) {
-    if (peer.ip == filter) return true;
-    if (peer.deviceName.size() != filter.size()) return false;
-    for (size_t i = 0; i < filter.size(); ++i) {
-        unsigned char a = static_cast<unsigned char>(peer.deviceName[i]);
-        unsigned char b = static_cast<unsigned char>(filter[i]);
-        if (a >= 'A' && a <= 'Z') a = static_cast<unsigned char>(a + 32);
-        if (b >= 'A' && b <= 'Z') b = static_cast<unsigned char>(b + 32);
-        if (a != b) return false;
-    }
-    return true;
-}
-
 // --- Subcommand handlers (return process exit codes) -------------------------
 
 int RunKeySet(const std::string* nameOverride) {
@@ -429,7 +414,7 @@ int RunCopy() {
 
     std::vector<ClipboardPayload> payloads;
     payloads.push_back(std::move(payload));
-    const auto via = OneShot::RelayPayloads(std::move(payloads), localHostId, localHostName, /*includeSelf=*/true);
+    const auto via = OneShot::RelayPayloads(std::move(payloads), localHostId, localHostName, /*includeSelf=*/true, g_hostFilter);
     if (!via) {
         ErrLine(L"Could not reach any device to copy to.");
         return 1;
@@ -522,7 +507,7 @@ int RunPaste() {
 
     const bool got = MDNSDiscovery::BrowseStream(OneShot::kBrowseCeiling, /*includeSelf=*/true,
         [&](const MDNSDiscovery::DiscoveredPeer& peer) -> bool {
-            if (!g_hostFilter.empty() && !PeerMatchesHost(peer, g_hostFilter)) return true;  // --host: skip other devices
+            if (!g_hostFilter.empty() && !OneShot::PeerMatchesHost(peer, g_hostFilter)) return true;  // --host: skip other devices
             VerboseLine(L"Trying " + PeerLabel(peer, localHostId) + L"...");
             OneShotPeer connection;
             if (!connection.Connect(peer.ip, peer.port, localHostId, localHostName, peer.hostId,
@@ -675,7 +660,7 @@ template <typename Fn>
 bool WithRegisterGateway(const HostId& localHostId, const std::string& localHostName, Fn exchange) {
     return MDNSDiscovery::BrowseStream(OneShot::kBrowseCeiling, /*includeSelf=*/true,
         [&](const MDNSDiscovery::DiscoveredPeer& peer) -> bool {
-            if (!g_hostFilter.empty() && !PeerMatchesHost(peer, g_hostFilter)) return true;  // --host: skip other devices
+            if (!g_hostFilter.empty() && !OneShot::PeerMatchesHost(peer, g_hostFilter)) return true;  // --host: skip other devices
             VerboseLine(L"Trying " + PeerLabel(peer, localHostId) + L"...");
             OneShotPeer connection;
             if (!connection.Connect(peer.ip, peer.port, localHostId, localHostName, peer.hostId,

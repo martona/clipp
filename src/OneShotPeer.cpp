@@ -85,11 +85,25 @@ void OneShotPeer::Teardown() {
 
 namespace OneShot {
 
+bool PeerMatchesHost(const MDNSDiscovery::DiscoveredPeer& peer, const std::string& filter) {
+    if (peer.ip == filter) return true;
+    if (peer.deviceName.size() != filter.size()) return false;
+    for (size_t i = 0; i < filter.size(); ++i) {
+        unsigned char a = static_cast<unsigned char>(peer.deviceName[i]);
+        unsigned char b = static_cast<unsigned char>(filter[i]);
+        if (a >= 'A' && a <= 'Z') a = static_cast<unsigned char>(a + 32);
+        if (b >= 'A' && b <= 'Z') b = static_cast<unsigned char>(b + 32);
+        if (a != b) return false;
+    }
+    return true;
+}
+
 std::optional<MDNSDiscovery::DiscoveredPeer> RelayPayloads(
     std::vector<ClipboardPayload> payloads,
     const HostId& localHostId,
     const std::string& localHostName,
-    bool includeSelf) {
+    bool includeSelf,
+    const std::string& hostFilter) {
     for (ClipboardPayload& payload : payloads) {
         payload.meta.flags |= NetworkDefs::CLPM_FLAG_RELAY;
     }
@@ -97,6 +111,9 @@ std::optional<MDNSDiscovery::DiscoveredPeer> RelayPayloads(
     std::optional<MDNSDiscovery::DiscoveredPeer> via;
     MDNSDiscovery::BrowseStream(kBrowseCeiling, includeSelf,
         [&](const MDNSDiscovery::DiscoveredPeer& peer) -> bool {
+            if (!hostFilter.empty() && !PeerMatchesHost(peer, hostFilter)) {
+                return true;  // --host: skip everything but the named device
+            }
             OneShotPeer connection;
             if (!connection.Connect(peer.ip, peer.port, localHostId, localHostName, peer.hostId,
                                     kConnectTimeout, kSessionTimeout)) {
