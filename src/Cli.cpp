@@ -2,9 +2,11 @@
 
 #include <CLI/CLI.hpp>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <optional>
@@ -40,6 +42,7 @@
 #else
     #include <termios.h>
     #include <unistd.h>
+    #include <sys/ioctl.h>
 #endif
 
 // Globals owned elsewhere (declared extern in their headers).
@@ -544,6 +547,105 @@ std::wstring FormatAge(const Hlc& touched) {
     return std::to_wstring(s / 86400) + L"d";
 }
 
+bool HasWildcard(const std::string& s) {
+    return s.find_first_of("*?") != std::string::npos;
+}
+
+// Shell-style glob over ASCII names: '?' = any one char, '*' = any run (incl empty).
+bool GlobMatch(const std::string& pat, const std::string& str) {
+    size_t p = 0, s = 0, star = std::string::npos, ss = 0;
+    while (s < str.size()) {
+        if (p < pat.size() && (pat[p] == '?' || pat[p] == str[s])) { ++p; ++s; }
+        else if (p < pat.size() && pat[p] == '*') { star = p++; ss = s; }
+        else if (star != std::string::npos) { p = star + 1; s = ++ss; }
+        else return false;
+    }
+    while (p < pat.size() && pat[p] == '*') ++p;
+    return p == pat.size();
+}
+
+std::wstring HumanizeSize(uint64_t bytes) {
+    if (bytes < 1024) return std::to_wstring(bytes);
+    if (bytes < 1024 * 1024) return std::to_wstring(bytes / 1024) + L"K";
+    return std::to_wstring(bytes / (1024 * 1024)) + L"M";
+}
+
+// The CLI has no hostId->hostname map (that lives in the GUI), so show a short
+// hostId prefix for the origin column.
+std::wstring OriginLabel(const HostId& host) {
+    const std::wstring hex = host.ToHexWString(HostId::kSize);
+    return hex.substr(0, 8);
+}
+
+std::wstring SanitizePreview(const std::string& preview) {
+    std::string s = preview;
+    for (char& c : s) {
+        const unsigned char u = static_cast<unsigned char>(c);
+        if (u < 0x20 || u == 0x7f) c = '.';   // control chars (incl newlines/tabs) -> dot
+    }
+    return ToWide(s);
+}
+
+int TerminalWidth() {
+    if (const char* cols = std::getenv("COLUMNS")) {
+        const int w = std::atoi(cols);
+        if (w > 0) return w;
+    }
+#ifdef _WIN32
+    CONSOLE_SCREEN_BUFFER_INFO csbi{};
+    if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+        const int w = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+        if (w > 0) return w;
+    }
+#else
+    struct winsize ws {};
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
+        return static_cast<int>(ws.ws_col);
+    }
+#endif
+    return 80;
+}
+
+std::wstring PadRight(const std::wstring& s, size_t w) {
+    return s.size() >= w ? s : s + std::wstring(w - s.size(), L' ');
+}
+std::wstring PadLeft(const std::wstring& s, size_t w) {
+    return s.size() >= w ? s : std::wstring(w - s.size(), L' ') + s;
+}
+
+// `ls -v`: an aligned name / age / size / origin / contents table, contents
+// sanitized + width-capped with an overflow marker on a tty; private masked.
+void FormatListVerbose(const std::vector<const RegisterWire::RegisterListEntry*>& entries) {
+    size_t wName = 0, wAge = 0, wSize = 0, wOrigin = 0;
+    for (const auto* e : entries) {
+        const std::wstring dn = e->name.empty() ? L"(clipboard)" : ToWide(e->name);
+        wName = (std::max)(wName, dn.size());
+        wAge = (std::max)(wAge, FormatAge(e->touched).size());
+        wSize = (std::max)(wSize, HumanizeSize(e->valueSize).size());
+        wOrigin = (std::max)(wOrigin, OriginLabel(e->originHostId).size());
+    }
+    const int termW = TerminalWidth();
+    const bool tty = StdoutIsTty();
+    for (const auto* e : entries) {
+        const std::wstring dn = e->name.empty() ? L"(clipboard)" : ToWide(e->name);
+        std::wstring line = PadRight(dn, wName) + L"  " + PadLeft(FormatAge(e->touched), wAge) + L"  " +
+                            PadLeft(HumanizeSize(e->valueSize), wSize) + L"  " +
+                            PadRight(OriginLabel(e->originHostId), wOrigin) + L"  ";
+        std::wstring contents =
+            (e->flags & RegisterFlags::Private) ? L"[private]" : SanitizePreview(e->preview);
+        int remain = termW - static_cast<int>(line.size());
+        if (remain < 4) remain = 4;
+        bool overflow = false;
+        if (static_cast<int>(contents.size()) > remain) {
+            contents = contents.substr(0, static_cast<size_t>(remain) - 1);
+            overflow = true;
+        }
+        line += contents;
+        if (overflow) line += tty ? L"\x1b[7m>\x1b[0m" : L">";
+        OutLine(line);
+    }
+}
+
 // Browse for a peer advertising CAP0_SERVES_REGISTERS, connect, and run `exchange`
 // on it; stop at the first peer where `exchange` returns true (handled). Returns
 // true if some register-capable peer handled it. Mirrors RunPaste's browse loop.
@@ -714,7 +816,7 @@ int RunRegisterPaste(const std::string& name) {
     return refusedPrivate ? 1 : 0;
 }
 
-int RunRegisterLs(bool verbose) {
+int RunRegisterLs(const std::string& pattern, bool verbose) {
     if (!g_keyManager.HaveNetworkKey()) {
         ErrLine(L"No group key configured. Run `clipp key set` first.");
         return 1;
@@ -729,7 +831,7 @@ int RunRegisterLs(bool verbose) {
     const std::string localHostName =
         clipp::GetLocalPeerDisplayName("unknown", CryptoChannel::HOSTNAME_MAX_BYTES);
 
-    std::vector<RegisterDigestEntry> entries;
+    std::vector<RegisterWire::RegisterListEntry> entries;
     bool got = false;
     const bool reached = WithRegisterGateway(localHostId, localHostName, [&](OneShotPeer& conn) -> bool {
         if (!conn.SendFrame("RLST")) {
@@ -742,7 +844,7 @@ int RunRegisterLs(bool verbose) {
             }
             if (std::memcmp(frame.data(), "RLST", 4) == 0) {
                 const std::vector<unsigned char> fbody(frame.begin() + 4, frame.end());
-                if (!RegisterWire::TryDecodeDigest(fbody, entries)) {
+                if (!RegisterWire::TryDecodeList(fbody, entries)) {
                     return false;
                 }
                 got = true;
@@ -763,19 +865,27 @@ int RunRegisterLs(bool verbose) {
     if (!got) {
         return 0;
     }
-    // Entries arrive name-sorted (the digest is built from a std::map).
+    // Entries arrive name-sorted from the gateway. An empty pattern lists all; the ""
+    // default-mirror entry matches only an empty/`*` pattern.
+    std::vector<const RegisterWire::RegisterListEntry*> shown;
     for (const auto& e : entries) {
-        if (verbose) {
-            OutLine(ToWide(e.name) + L"\t" + FormatAge(e.touched));
-        } else {
-            OutLine(ToWide(e.name));
+        if (pattern.empty() || GlobMatch(pattern, e.name)) {
+            shown.push_back(&e);
+        }
+    }
+    if (verbose) {
+        FormatListVerbose(shown);
+    } else {
+        for (const auto* e : shown) {
+            OutLine(e->name.empty() ? L"(clipboard)" : ToWide(e->name));
         }
     }
     return 0;
 }
 
-int RunRegisterRm(const std::string& name) {
-    if (!IsValidRegisterName(name)) {
+int RunRegisterRm(const std::string& pattern) {
+    const bool wildcard = HasWildcard(pattern);
+    if (!wildcard && !IsValidRegisterName(pattern)) {
         ErrLine(L"Invalid register name. Use 1-64 characters of [a-z0-9._-].");
         return 1;
     }
@@ -793,53 +903,91 @@ int RunRegisterRm(const std::string& name) {
     const std::string localHostName =
         clipp::GetLocalPeerDisplayName("unknown", CryptoChannel::HOSTNAME_MAX_BYTES);
 
-    RegisterRecord rec;
-    rec.name = name;
-    rec.originHostId = localHostId;
-    rec.flags = RegisterFlags::Tombstone;   // empty value; the gateway re-stamps the HLC
-    const std::vector<unsigned char> regw =
-        RegisterWire::EncodeRecord(rec, RegisterWire::Transport::Relay);
-
-    bool deleted = false;
-    bool absent = false;
+    int removed = 0;
+    bool absent = false;    // exact name not present
+    bool noMatch = false;   // glob matched nothing
     const bool reached = WithRegisterGateway(localHostId, localHostName, [&](OneShotPeer& conn) -> bool {
-        if (!conn.SendFrame("REGW", regw.data(), static_cast<uint32_t>(regw.size()))) {
-            return false;
-        }
-        std::vector<unsigned char> frame;
-        while (conn.RecvFrame(frame)) {
-            if (frame.size() < 4) {
-                break;
+        std::vector<std::string> targets;
+        if (wildcard) {
+            // List, match the glob (never the "" default mirror), then tombstone each.
+            if (!conn.SendFrame("RLST")) {
+                return false;
             }
-            if (std::memcmp(frame.data(), "RDEL", 4) == 0) {
-                deleted = true;
+            std::vector<RegisterWire::RegisterListEntry> entries;
+            bool gotList = false;
+            std::vector<unsigned char> frame;
+            while (conn.RecvFrame(frame)) {
+                if (frame.size() < 4) {
+                    break;
+                }
+                if (std::memcmp(frame.data(), "RLST", 4) == 0) {
+                    const std::vector<unsigned char> fbody(frame.begin() + 4, frame.end());
+                    if (!RegisterWire::TryDecodeList(fbody, entries)) {
+                        return false;
+                    }
+                    gotList = true;
+                    break;
+                }
+                if (std::memcmp(frame.data(), "SYNC", 4) == 0) {
+                    conn.SendFrame("EOSY");
+                    continue;
+                }
+            }
+            if (!gotList) {
+                return false;
+            }
+            for (const auto& e : entries) {
+                if (!e.name.empty() && GlobMatch(pattern, e.name)) {
+                    targets.push_back(e.name);
+                }
+            }
+            if (targets.empty()) {
+                noMatch = true;
                 return true;
             }
-            if (std::memcmp(frame.data(), "NONE", 4) == 0) {
-                absent = true;
-                return true;
-            }
-            if (std::memcmp(frame.data(), "SYNC", 4) == 0) {
-                conn.SendFrame("EOSY");
-                continue;
-            }
-            // ignore crosstalk
+        } else {
+            targets.push_back(pattern);
         }
-        return false;
+
+        for (const std::string& target : targets) {
+            RegisterRecord rec;
+            rec.name = target;
+            rec.originHostId = localHostId;
+            rec.flags = RegisterFlags::Tombstone;   // empty value; the gateway re-stamps the HLC
+            const auto regw = RegisterWire::EncodeRecord(rec, RegisterWire::Transport::Relay);
+            if (!conn.SendFrame("REGW", regw.data(), static_cast<uint32_t>(regw.size()))) {
+                return false;
+            }
+            std::vector<unsigned char> frame;
+            bool acked = false;
+            while (conn.RecvFrame(frame)) {
+                if (frame.size() < 4) {
+                    break;
+                }
+                if (std::memcmp(frame.data(), "RDEL", 4) == 0) { ++removed; acked = true; break; }
+                if (std::memcmp(frame.data(), "NONE", 4) == 0) { if (!wildcard) absent = true; acked = true; break; }
+                if (std::memcmp(frame.data(), "SYNC", 4) == 0) { conn.SendFrame("EOSY"); continue; }
+                // ignore crosstalk
+            }
+            if (!acked) {
+                return false;   // connection died mid-batch
+            }
+        }
+        return true;
     });
     if (!reached) {
         ErrLine(L"Could not reach any register-capable device.");
         return 1;
     }
+    if (noMatch) {
+        ErrLine(L"No registers match '" + ToWide(pattern) + L"'.");
+        return 1;
+    }
     if (absent) {
-        ErrLine(L"No such register '" + ToWide(name) + L"'.");
+        ErrLine(L"No such register '" + ToWide(pattern) + L"'.");
         return 1;
     }
-    if (!deleted) {
-        ErrLine(L"Delete failed.");
-        return 1;
-    }
-    VerboseLine(L"Removed register '" + ToWide(name) + L"'.");
+    VerboseLine(L"Removed " + std::to_wstring(removed) + L" register(s).");
     return 0;
 }
 
@@ -905,12 +1053,14 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
     pasteCommand->add_option("name", pasteRegisterName, "Named register (default: the shared clipboard)");
     pasteCommand->callback([&]() { action = Action::Paste; });
 
-    CLI::App* lsCommand = app.add_subcommand("ls", "List named registers (add -v to show ages)");
+    std::string lsPattern;
+    CLI::App* lsCommand = app.add_subcommand("ls", "List named registers (-v for details; optional name/glob filter)");
+    lsCommand->add_option("pattern", lsPattern, "Only list registers matching this name or glob (? and *)");
     lsCommand->callback([&]() { action = Action::RegLs; });
 
     std::string rmRegisterName;
-    CLI::App* rmCommand = app.add_subcommand("rm", "Delete a named register");
-    rmCommand->add_option("name", rmRegisterName, "Register to delete")->required();
+    CLI::App* rmCommand = app.add_subcommand("rm", "Delete a named register (name or glob)");
+    rmCommand->add_option("name", rmRegisterName, "Register name or glob (? and *) to delete")->required();
     rmCommand->callback([&]() { action = Action::RegRm; });
 
     CLI::App* keyCommand = app.add_subcommand("key", "Group key management");
@@ -1035,7 +1185,7 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
     case Action::Paste:
         return pasteRegisterName.empty() ? RunPaste() : RunRegisterPaste(pasteRegisterName);
     case Action::RegLs:
-        return RunRegisterLs(verbose);
+        return RunRegisterLs(lsPattern, verbose);
     case Action::RegRm:
         return RunRegisterRm(rmRegisterName);
     case Action::Gui:

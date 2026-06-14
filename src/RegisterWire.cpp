@@ -21,6 +21,12 @@ void PutU32(std::vector<unsigned char>& b, uint32_t v) {
     b.push_back(static_cast<unsigned char>(v & 0xFF));
 }
 
+void PutU64(std::vector<unsigned char>& b, uint64_t v) {
+    for (int shift = 56; shift >= 0; shift -= 8) {
+        b.push_back(static_cast<unsigned char>((v >> shift) & 0xFF));
+    }
+}
+
 void PutBytes(std::vector<unsigned char>& b, const void* p, size_t n) {
     const auto* bytes = static_cast<const unsigned char*>(p);
     b.insert(b.end(), bytes, bytes + n);
@@ -56,6 +62,16 @@ struct Reader {
               (static_cast<uint32_t>(p[2]) << 8) | static_cast<uint32_t>(p[3]);
         p += 4;
         remaining -= 4;
+        return true;
+    }
+    bool U64(uint64_t& out) {
+        if (remaining < 8) return false;
+        out = 0;
+        for (size_t i = 0; i < 8; ++i) {
+            out = (out << 8) | p[i];
+        }
+        p += 8;
+        remaining -= 8;
         return true;
     }
     bool ReadHlc(Hlc& out) {
@@ -194,6 +210,55 @@ bool TryDecodeName(const std::vector<unsigned char>& body, std::string& outName)
     uint16_t nameLen = 0;
     if (!r.U16(nameLen) || nameLen > kMaxNameLen) return false;
     if (!r.ReadString(outName, nameLen)) return false;
+    if (r.remaining != 0) return false;
+    return true;
+}
+
+std::vector<unsigned char> EncodeList(const std::vector<RegisterListEntry>& entries) {
+    std::vector<unsigned char> b;
+    const uint16_t count =
+        static_cast<uint16_t>(entries.size() > kMaxDigestEntries ? kMaxDigestEntries : entries.size());
+    b.push_back(kVersion);
+    PutU16(b, count);
+    for (uint16_t i = 0; i < count; ++i) {
+        const RegisterListEntry& e = entries[i];
+        PutU16(b, static_cast<uint16_t>(e.name.size()));
+        PutBytes(b, e.name.data(), e.name.size());
+        PutHlc(b, e.touched);
+        PutU64(b, e.valueSize);
+        PutBytes(b, e.originHostId.data().data(), HostId::kSize);
+        b.push_back(e.flags);
+        const uint16_t previewLen =
+            static_cast<uint16_t>(e.preview.size() > kMaxPreviewLen ? kMaxPreviewLen : e.preview.size());
+        PutU16(b, previewLen);
+        PutBytes(b, e.preview.data(), previewLen);
+    }
+    return b;
+}
+
+bool TryDecodeList(const std::vector<unsigned char>& body, std::vector<RegisterListEntry>& outEntries) {
+    Reader r{ body.data(), body.size() };
+    uint8_t version = 0;
+    if (!r.U8(version) || version != kVersion) return false;
+    uint16_t count = 0;
+    if (!r.U16(count) || count > kMaxDigestEntries) return false;
+
+    outEntries.clear();
+    outEntries.reserve(count);
+    for (uint16_t i = 0; i < count; ++i) {
+        RegisterListEntry e;
+        uint16_t nameLen = 0;
+        if (!r.U16(nameLen) || nameLen > kMaxNameLen) return false;
+        if (!r.ReadString(e.name, nameLen)) return false;
+        if (!r.ReadHlc(e.touched)) return false;
+        if (!r.U64(e.valueSize)) return false;
+        if (!r.ReadHostId(e.originHostId)) return false;
+        if (!r.U8(e.flags)) return false;
+        uint16_t previewLen = 0;
+        if (!r.U16(previewLen) || previewLen > kMaxPreviewLen) return false;
+        if (!r.ReadString(e.preview, previewLen)) return false;
+        outEntries.push_back(std::move(e));
+    }
     if (r.remaining != 0) return false;
     return true;
 }

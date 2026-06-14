@@ -27,6 +27,19 @@ inline constexpr uint8_t TouchOnly = 0x02;  // reserved; v1 always sends the ful
 inline constexpr uint16_t kMaxNameLen = 64;                       // matches IsValidRegisterName
 inline constexpr uint32_t kMaxValueLen = 64u * 1024u * 1024u;     // matches the frame payload cap
 inline constexpr uint16_t kMaxDigestEntries = 1024;               // matches RegisterMaxCount
+inline constexpr uint16_t kMaxPreviewLen = 256;                  // value bytes carried per list entry
+
+// One entry in an RLST list response — richer than a digest: metadata plus a
+// capped, possibly-empty value preview, for `ls -v`. (The anti-entropy RSYN digest
+// stays name/written/touched only; this is the CLI-facing list.)
+struct RegisterListEntry {
+    std::string name;        // "" = the default-clipboard mirror
+    Hlc touched;             // for age
+    uint64_t valueSize{ 0 }; // full value size in bytes
+    HostId originHostId;
+    uint8_t flags{ 0 };      // PRIVATE etc.
+    std::string preview;     // up to kMaxPreviewLen bytes; empty for private/empty values
+};
 
 // REGW: a full register record (value or tombstone) plus transport flags.
 std::vector<unsigned char> EncodeRecord(const RegisterRecord& record, uint8_t transportFlags);
@@ -41,5 +54,9 @@ bool TryDecodeDigest(const std::vector<unsigned char>& body,
 // RGET: a single register name to fetch.
 std::vector<unsigned char> EncodeName(const std::string& name);
 bool TryDecodeName(const std::vector<unsigned char>& body, std::string& outName);
+
+// RLST response: the rich list (name + metadata + capped preview) for `ls`/`ls -v`.
+std::vector<unsigned char> EncodeList(const std::vector<RegisterListEntry>& entries);
+bool TryDecodeList(const std::vector<unsigned char>& body, std::vector<RegisterListEntry>& outEntries);
 
 }  // namespace RegisterWire

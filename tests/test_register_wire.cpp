@@ -133,3 +133,36 @@ TEST_CASE("RGET name round-trips and rejects malformed") {
     CHECK_FALSE(RegisterWire::TryDecodeName(extra, out));
     CHECK_FALSE(RegisterWire::TryDecodeName({}, out));
 }
+
+TEST_CASE("RLST rich list round-trips and rejects malformed") {
+    std::vector<RegisterWire::RegisterListEntry> in;
+    in.push_back({ "", Hlc{ 100, 0 }, 12, MakeHost(1), 0, "clipboard txt" });        // default mirror
+    in.push_back({ "url", Hlc{ 200, 1 }, 23, MakeHost(2), 0, "https://example.com" });
+    in.push_back({ "pw", Hlc{ 300, 0 }, 8, MakeHost(2), RegisterFlags::Private, "" }); // private: empty preview
+
+    const auto body = RegisterWire::EncodeList(in);
+    std::vector<RegisterWire::RegisterListEntry> out;
+    REQUIRE(RegisterWire::TryDecodeList(body, out));
+    REQUIRE(out.size() == in.size());
+    for (size_t i = 0; i < in.size(); ++i) {
+        CHECK(out[i].name == in[i].name);
+        CHECK(out[i].touched == in[i].touched);
+        CHECK(out[i].valueSize == in[i].valueSize);
+        CHECK(out[i].originHostId == in[i].originHostId);
+        CHECK(out[i].flags == in[i].flags);
+        CHECK(out[i].preview == in[i].preview);
+    }
+    CHECK(out[2].flags == RegisterFlags::Private);
+    CHECK(out[2].preview.empty());
+
+    // Empty list round-trips.
+    std::vector<RegisterWire::RegisterListEntry> emptyOut;
+    REQUIRE(RegisterWire::TryDecodeList(RegisterWire::EncodeList({}), emptyOut));
+    CHECK(emptyOut.empty());
+
+    // Truncation is rejected.
+    for (size_t cut = 0; cut < body.size(); ++cut) {
+        const std::vector<unsigned char> truncated(body.begin(), body.begin() + cut);
+        CHECK_FALSE(RegisterWire::TryDecodeList(truncated, out));
+    }
+}

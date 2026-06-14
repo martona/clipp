@@ -432,8 +432,26 @@ bool Peer::HandleRegisterFrame(CryptoChannel& channel, const SocketIoContext& io
 		return true;
 	}
 	if (std::memcmp(frame.data(), "RLST", 4) == 0) {
-		const auto digestBody = RegisterWire::EncodeDigest(g_registerStore.Digest());
-		channel.SendFrame(io, "RLST", digestBody.data(), static_cast<uint32_t>(digestBody.size()));
+		// Rich list for `ls`/`ls -v`: live values + the default "" mirror, each with a
+		// capped preview (omitted for private records — their bytes never leave the
+		// gateway for a listing).
+		std::vector<RegisterWire::RegisterListEntry> list;
+		for (const auto& storeRec : g_registerStore.List()) {
+			RegisterWire::RegisterListEntry e;
+			e.name = storeRec.name;
+			e.touched = storeRec.touched;
+			e.valueSize = storeRec.value.size();
+			e.originHostId = storeRec.originHostId;
+			e.flags = storeRec.flags;
+			if (!storeRec.IsPrivate()) {
+				const size_t n = storeRec.value.size() < RegisterWire::kMaxPreviewLen
+					? storeRec.value.size() : RegisterWire::kMaxPreviewLen;
+				e.preview.assign(storeRec.value.data(), storeRec.value.data() + n);
+			}
+			list.push_back(std::move(e));
+		}
+		const auto listBody = RegisterWire::EncodeList(list);
+		channel.SendFrame(io, "RLST", listBody.data(), static_cast<uint32_t>(listBody.size()));
 		return true;
 	}
 	return false;
