@@ -131,6 +131,9 @@ void WritePrompt(const std::wstring& prompt) {
 // Verbose (`-v`) progress goes to stderr, separate from the gated g_logger stream.
 // stdout stays reserved for command data (e.g. `paste` bytes).
 bool g_verbose = false;
+// --host filter: when non-empty, network verbs talk only to the device whose name
+// (case-insensitive) or IP equals this. Empty = connect to the first peer found.
+std::string g_hostFilter;
 void VerboseLine(const std::wstring& line) {
     if (g_verbose) {
         ErrLine(line);
@@ -247,6 +250,21 @@ std::wstring PeerLabel(const MDNSDiscovery::DiscoveredPeer& peer, const HostId& 
         label += L" [this device]";
     }
     return label;
+}
+
+// Does this peer satisfy the --host filter? Device name matches case-insensitively
+// (ASCII), IP matches exactly. Used to pin one daemon for deterministic scripting.
+bool PeerMatchesHost(const MDNSDiscovery::DiscoveredPeer& peer, const std::string& filter) {
+    if (peer.ip == filter) return true;
+    if (peer.deviceName.size() != filter.size()) return false;
+    for (size_t i = 0; i < filter.size(); ++i) {
+        unsigned char a = static_cast<unsigned char>(peer.deviceName[i]);
+        unsigned char b = static_cast<unsigned char>(filter[i]);
+        if (a >= 'A' && a <= 'Z') a = static_cast<unsigned char>(a + 32);
+        if (b >= 'A' && b <= 'Z') b = static_cast<unsigned char>(b + 32);
+        if (a != b) return false;
+    }
+    return true;
 }
 
 // --- Subcommand handlers (return process exit codes) -------------------------
@@ -504,6 +522,7 @@ int RunPaste() {
 
     const bool got = MDNSDiscovery::BrowseStream(OneShot::kBrowseCeiling, /*includeSelf=*/true,
         [&](const MDNSDiscovery::DiscoveredPeer& peer) -> bool {
+            if (!g_hostFilter.empty() && !PeerMatchesHost(peer, g_hostFilter)) return true;  // --host: skip other devices
             VerboseLine(L"Trying " + PeerLabel(peer, localHostId) + L"...");
             OneShotPeer connection;
             if (!connection.Connect(peer.ip, peer.port, localHostId, localHostName, peer.hostId,
@@ -656,6 +675,7 @@ template <typename Fn>
 bool WithRegisterGateway(const HostId& localHostId, const std::string& localHostName, Fn exchange) {
     return MDNSDiscovery::BrowseStream(OneShot::kBrowseCeiling, /*includeSelf=*/true,
         [&](const MDNSDiscovery::DiscoveredPeer& peer) -> bool {
+            if (!g_hostFilter.empty() && !PeerMatchesHost(peer, g_hostFilter)) return true;  // --host: skip other devices
             VerboseLine(L"Trying " + PeerLabel(peer, localHostId) + L"...");
             OneShotPeer connection;
             if (!connection.Connect(peer.ip, peer.port, localHostId, localHostName, peer.hostId,
@@ -1040,6 +1060,10 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
     bool verbose = false;
     app.add_flag("-v,--verbose", verbose, "Print progress to stderr (for copy/paste)");
 
+    std::string hostFilter;
+    app.add_option("--host", hostFilter,
+        "Talk only to the device with this name (case-insensitive) or IP, instead of the first peer found (copy/paste/ls/rm)");
+
     Action action = Action::None;
 
     std::string copyRegisterName;
@@ -1123,6 +1147,7 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
     }
 
     g_verbose = verbose;
+    g_hostFilter = hostFilter;
 
     // Bare launch (no command): print usage and exit instead of silently launching
     // the terminal-blocking GUI. On the desktop builds this is gated on a console (a
