@@ -87,6 +87,23 @@ jobs:
         # authored on a filesystem that doesn't preserve mode).
         run: bash ./scripts/build_linux.sh
 
+      - name: Unit tests (doctest)
+        # The engine + wire tests are pure, portable C++ (no platform code), so running
+        # them on one OS guards the logic for every platform; the per-OS build jobs above
+        # already give cross-compiler COMPILE coverage. Reuses the vcpkg tree the Release
+        # build just populated ($CLIPP_CACHE_DIR/vcpkg-installed) -- only doctest is added.
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/tests -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_MANIFEST_DIR=src \
+            -DVCPKG_INSTALLED_DIR="$CLIPP_CACHE_DIR/vcpkg-installed" \
+            -DVCPKG_MANIFEST_FEATURES=tests \
+            -DCLIPP_BUILD_TESTS=ON \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/tests --target clipp-tests
+          ctest --test-dir build/tests --output-on-failure
+
       - name: Verify Linux binary
         run: |
           set -euo pipefail
