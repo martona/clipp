@@ -91,7 +91,11 @@ static void MirrorClipboardToDefaultRegister(const std::shared_ptr<const Clipboa
         constexpr DWORD kTotalWaitMillis = 2000;
         constexpr DWORD kPollIntervalMillis = 50;
         for (DWORD waitedMillis = 0; waitedMillis <= kTotalWaitMillis; waitedMillis += kPollIntervalMillis) {
-            HWND trayWindow = FindWindowExW(HWND_MESSAGE, nullptr, kTrayWindowClassName, nullptr);
+            // The tray window is a hidden TOP-LEVEL window (so it receives the
+            // TaskbarCreated / WM_SETTINGCHANGE broadcasts), not a message-only one,
+            // so it must be found among top-level windows. FindWindowEx(HWND_MESSAGE, …)
+            // only enumerates message-only windows and would never find it.
+            HWND trayWindow = FindWindowW(kTrayWindowClassName, nullptr);
             if (trayWindow) {
                 PostMessageW(trayWindow, showMainWindowMessage, 0, 0);
                 return;
