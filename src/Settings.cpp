@@ -14,6 +14,9 @@ namespace {
     constexpr wchar_t kClipboardSyncMaxItemsName[] = L"ClipboardSyncMaxItems";
     constexpr wchar_t kHonorExternalPrivacyMarkersName[] = L"HonorExternalPrivacyMarkers";
     constexpr wchar_t kOriginSequenceFloorName[] = L"OriginSequenceFloor";
+    constexpr wchar_t kRegisterTtlSecondsName[] = L"RegisterTtlSeconds";
+    constexpr wchar_t kRegisterMaxCountName[] = L"RegisterMaxCount";
+    constexpr wchar_t kRegisterHlcFloorMsName[] = L"RegisterHlcFloorMs";
     constexpr wchar_t kNetworkKeyName[] = L"NetworkKey";
     // Legacy name, read-migrated below. Originally "Encrypted..." because Windows
     // DPAPI-wraps the blob, but the value is plaintext on Linux (raw 0600 key), so
@@ -48,7 +51,9 @@ Settings::Settings()
       clipboardHistoryMaxAgeSeconds_(DefaultClipboardHistoryMaxAgeSeconds),
       clipboardHistoryMaxItems_(DefaultClipboardHistoryMaxItems),
       clipboardSyncMaxItems_(DefaultClipboardSyncMaxItems),
-      honorExternalPrivacyMarkers_(DefaultHonorExternalPrivacyMarkers) {
+      honorExternalPrivacyMarkers_(DefaultHonorExternalPrivacyMarkers),
+      registerTtlSeconds_(DefaultRegisterTtlSeconds),
+      registerMaxCount_(DefaultRegisterMaxCount) {
     LoadCache();
 }
 
@@ -183,6 +188,33 @@ uint64_t Settings::nextOriginSequenceNumber() {
     return next;
 }
 
+uint64_t Settings::registerTtlSeconds() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return registerTtlSeconds_;
+}
+
+uint64_t Settings::registerMaxCount() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return registerMaxCount_;
+}
+
+uint64_t Settings::registerHlcFloorMs() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return registerHlcFloorMs_;
+}
+
+void Settings::noteRegisterHlcWallMs(uint64_t wallMs) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // Batched, reserved-ahead persist (mirrors nextOriginSequenceNumber): only
+    // touch storage when the clock crosses the reserved floor, then reserve the
+    // next block. A crash loses at most one block; the next session resumes above
+    // it. Seeding the register clock to this floor on start prevents self-regression.
+    if (wallMs >= registerHlcFloorMs_) {
+        registerHlcFloorMs_ = wallMs + RegisterHlcFloorBatchMs;
+        WriteUint64Value(kRegisterHlcFloorMsName, registerHlcFloorMs_);
+    }
+}
+
 bool Settings::setNetworkKey(const std::vector<unsigned char>& value) {
     // Neutralize any value still stored under the legacy name, so it can't shadow
     // this write through getNetworkKey's migration fallback below. This matters for
@@ -285,6 +317,18 @@ bool Settings::LoadCache() {
     ReadUint64Value(kOriginSequenceFloorName, originSequenceFloor);
     originSequenceCounter_ = originSequenceFloor;
     originSequencePersistedFloor_ = originSequenceFloor;
+
+    uint64_t registerTtlSeconds = DefaultRegisterTtlSeconds;
+    uint64_t registerMaxCount = DefaultRegisterMaxCount;
+    uint64_t registerHlcFloorMs = 0;
+    if (ReadUint64Value(kRegisterTtlSecondsName, registerTtlSeconds)) {
+        registerTtlSeconds_ = registerTtlSeconds;
+    }
+    if (ReadUint64Value(kRegisterMaxCountName, registerMaxCount)) {
+        registerMaxCount_ = registerMaxCount;
+    }
+    ReadUint64Value(kRegisterHlcFloorMsName, registerHlcFloorMs);
+    registerHlcFloorMs_ = registerHlcFloorMs;
 
     return true;
 }

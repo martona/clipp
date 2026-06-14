@@ -20,6 +20,8 @@ void CLPIOSReceiveClipboardPayload(std::shared_ptr<const ClipboardPayload> paylo
 #else
 #include "ClipboardActivityStore.h"
 #include "Clipboard.h"
+#include "ClipboardFormat.h"
+#include "RegisterStore.h"
 #define CLIPP_IOS_CLIPBOARD_RECEIVE_STUB 0
 #endif
 
@@ -429,6 +431,14 @@ void NetworkRuntime::OnClipboardReceived(std::shared_ptr<const ClipboardPayload>
     g_clipboardActivityStore.Add(payload);
     if (!isReplay && !isPrivatePlaceholder) {
         SetClipboardData(payload, true);
+        // Mirror the now-current clipboard into the default ("") register for `ls`.
+        if (IsClippTextFormat(payload->meta.formatId)) {
+            const std::vector<unsigned char>* bytes = payload->TryGetUncompressedBytes();
+            if (bytes != nullptr) {
+                g_registerStore.MirrorDefault(std::string(bytes->begin(), bytes->end()));
+                g_settings.noteRegisterHlcWallMs(g_registerStore.ClockHighWater().wallMs);
+            }
+        }
     }
 #endif
 }

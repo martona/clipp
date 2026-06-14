@@ -11,5 +11,11 @@
       "platform": "linux"
     }
   ],
+  "features": {
+    "tests": {
+      "description": "Unit-test dependencies (doctest); enable with -DVCPKG_MANIFEST_FEATURES=tests",
+      "dependencies": [ "doctest" ]
+    }
+  },
   "builtin-baseline": "4ebb30167f14487dcb71fac13efbf63273ab6a3f"
 }

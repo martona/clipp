@@ -11,6 +11,7 @@
 #include <optional>
 #include <thread>
 #include <utility>
+#include <variant>
 
 #include "Settings.h"
 #include "ClipboardActivityStore.h"
@@ -22,6 +23,9 @@
 #include "utils.h"
 #include "utils_socket.h"
 #include "PeerManager.h"
+#include "RegisterConfig.h"
+#include "RegisterStore.h"
+#include "RegisterWire.h"
 
 #if defined(__APPLE__)
 #include <fcntl.h>
@@ -188,7 +192,12 @@ std::chrono::steady_clock::time_point Peer::createdAt() const {
 }
 
 void Peer::PushMessage(std::shared_ptr<const ClipboardPayload> payload) {
-	messageQueue_.Push(std::move(payload));
+	messageQueue_.Push(OutboundMessage{ std::move(payload) });
+	wakeEvent_.Signal();
+}
+
+void Peer::PushRawFrame(std::array<char, 4> tag, std::vector<unsigned char> body) {
+	messageQueue_.Push(OutboundMessage{ OutboundRawFrame{ tag, std::move(body) } });
 	wakeEvent_.Signal();
 }
 
@@ -315,22 +324,173 @@ bool Peer::SendClipboardData(CryptoChannel& channel, const SocketIoContext& io, 
 
 bool Peer::DrainOutboundMessages(CryptoChannel& channel, const SocketIoContext& io) {
 	for (;;) {
-		std::optional<std::shared_ptr<const ClipboardPayload>> msg = messageQueue_.TryPop();
+		std::optional<OutboundMessage> msg = messageQueue_.TryPop();
 		if (!msg.has_value()) {
 			return true;
 		}
 
-		const std::shared_ptr<const ClipboardPayload>& payload = msg.value();
-		log(__FUNCTION__, Logger::Level::Debug, L"Clipboard payload to be sent: format %ls (%u), payload size %zu bytes, uncompressed size %llu bytes",
-			ClippClipboardFormatNameW(payload->meta.formatId),
-			payload->meta.formatId,
-			payload->EncodedBytes().size(),
-			static_cast<unsigned long long>(payload->meta.uncompressedDataSize));
-		if (!SendClipboardData(channel, io, *payload)) {
-			log(__FUNCTION__, Logger::Level::Debug, L"Peer failed to send clipboard payload.");
-			return false;
+		if (const auto* payloadPtr = std::get_if<std::shared_ptr<const ClipboardPayload>>(&msg.value())) {
+			const std::shared_ptr<const ClipboardPayload>& payload = *payloadPtr;
+			log(__FUNCTION__, Logger::Level::Debug, L"Clipboard payload to be sent: format %ls (%u), payload size %zu bytes, uncompressed size %llu bytes",
+				ClippClipboardFormatNameW(payload->meta.formatId),
+				payload->meta.formatId,
+				payload->EncodedBytes().size(),
+				static_cast<unsigned long long>(payload->meta.uncompressedDataSize));
+			if (!SendClipboardData(channel, io, *payload)) {
+				log(__FUNCTION__, Logger::Level::Debug, L"Peer failed to send clipboard payload.");
+				return false;
+			}
+		} else {
+			const OutboundRawFrame& raw = std::get<OutboundRawFrame>(msg.value());
+			if (!channel.SendFrame(io, raw.tag.data(),
+					raw.body.empty() ? nullptr : raw.body.data(),
+					static_cast<uint32_t>(raw.body.size()))) {
+				log(__FUNCTION__, Logger::Level::Debug, L"Peer failed to send raw frame '%c%c%c%c'.",
+					static_cast<wchar_t>(raw.tag[0]), static_cast<wchar_t>(raw.tag[1]),
+					static_cast<wchar_t>(raw.tag[2]), static_cast<wchar_t>(raw.tag[3]));
+				return false;
+			}
+			ReportTraffic(4 + raw.body.size() + crypto_secretstream_xchacha20poly1305_ABYTES + sizeof(uint32_t), 0);
 		}
 	}
+}
+
+bool Peer::HandleRegisterFrame(CryptoChannel& channel, const SocketIoContext& io, const std::vector<unsigned char>& frame) {
+#if CLIPP_REGISTERS_DAEMON
+	// frame = 4-byte tag + body; slice the body once for the decoders.
+	const std::vector<unsigned char> body(frame.begin() + 4, frame.end());
+
+	if (std::memcmp(frame.data(), "REGW", 4) == 0) {
+		RegisterRecord rec;
+		uint8_t transport = 0;
+		if (!RegisterWire::TryDecodeRecord(body, rec, transport) || !IsValidRegisterName(rec.name)) {
+			log(__FUNCTION__, Logger::Level::Warning, L"Peer: malformed or invalid REGW; ignoring.");
+			return true;
+		}
+		if ((transport & RegisterWire::Transport::Relay) != 0) {
+			// Origin write request from a one-shot client: re-stamp with our
+			// authoritative clock (keeping the client's origin) and ACK on the same
+			// connection, so the client's socket stays open until the write has
+			// actually landed; then rebroadcast the result to the mesh.
+			const std::string name = rec.name;
+			bool changed = false;
+			if (rec.IsTombstone()) {
+				const auto result = g_registerStore.Delete(name, rec.originHostId);
+				changed = (result == RegisterStore::DeleteResult::Deleted);
+				channel.SendFrame(io, changed ? "RDEL" : "NONE");
+			} else {
+				const auto result = g_registerStore.Upsert(name, std::move(rec.value), rec.IsPrivate(), rec.originHostId);
+				changed = (result == RegisterStore::WriteResult::Ok);
+				channel.SendFrame(io, changed ? "ROKW" : "RERR");
+			}
+			if (changed) {
+				g_settings.noteRegisterHlcWallMs(g_registerStore.ClockHighWater().wallMs);
+				if (const auto stored = g_registerStore.GetForBroadcast(name)) {
+					const auto regwOut = RegisterWire::EncodeRecord(*stored, 0);
+					g_peerManager.BroadcastRegisterFrame({ 'R', 'E', 'G', 'W' }, regwOut);
+				}
+			}
+		} else {
+			g_registerStore.ApplyRemote(std::move(rec));
+		}
+		return true;
+	}
+	if (std::memcmp(frame.data(), "RSYN", 4) == 0) {
+		std::vector<RegisterDigestEntry> theirDigest;
+		if (!RegisterWire::TryDecodeDigest(body, theirDigest)) {
+			log(__FUNCTION__, Logger::Level::Warning, L"Peer: malformed RSYN; ignoring.");
+			return true;
+		}
+		const auto toPush = g_registerStore.RecordsToPush(theirDigest);
+		for (const auto& rec : toPush) {
+			const auto regw = RegisterWire::EncodeRecord(rec, 0);
+			if (!channel.SendFrame(io, "REGW", regw.data(), static_cast<uint32_t>(regw.size()))) {
+				log(__FUNCTION__, Logger::Level::Debug, L"Peer: REGW send failed during anti-entropy.");
+				return true;
+			}
+		}
+		channel.SendFrame(io, "REOS");
+		log(__FUNCTION__, Logger::Level::Debug, L"Answered RSYN: pushed %zu register record(s).", toPush.size());
+		return true;
+	}
+	if (std::memcmp(frame.data(), "REOS", 4) == 0) {
+		log(__FUNCTION__, Logger::Level::Debug, L"Register anti-entropy from this peer complete.");
+		return true;
+	}
+	if (std::memcmp(frame.data(), "RGET", 4) == 0) {
+		std::string name;
+		std::optional<RegisterRecord> rec;
+		if (RegisterWire::TryDecodeName(body, name) && IsValidRegisterName(name)) {
+			rec = g_registerStore.Read(name);  // touch side effect at the serving peer
+		}
+		if (rec.has_value()) {
+			const auto regw = RegisterWire::EncodeRecord(*rec, 0);
+			channel.SendFrame(io, "REGW", regw.data(), static_cast<uint32_t>(regw.size()));
+		} else {
+			channel.SendFrame(io, "NONE");
+		}
+		return true;
+	}
+	if (std::memcmp(frame.data(), "RLST", 4) == 0) {
+		// Rich list for `ls`/`ls -v`: live values + the default "" mirror, each with a
+		// capped preview (omitted for private records — their bytes never leave the
+		// gateway for a listing).
+		// The CLI has no hostId->name map, so resolve each origin to a device name here
+		// (the daemon does have one) and ship it in the entry. Snapshot the peer list
+		// once; ids we can't place stay "" and the CLI shows the short id instead.
+		HostId localHostId{};
+		const bool haveLocalHostId = g_settings.getHostID(localHostId);
+		const std::string localHostName = clipp::GetLocalPeerDisplayName("", CryptoChannel::HOSTNAME_MAX_BYTES);
+		const auto knownPeers = g_peerDisplay.Query();
+		const auto resolveOriginName = [&](const HostId& origin) -> std::string {
+			if (haveLocalHostId && origin == localHostId) return localHostName;
+			for (const auto& peer : knownPeers) {
+				if (peer.hostID == origin) return WideToUtf8String(peer.hostName);
+			}
+			return {};
+		};
+		std::vector<RegisterWire::RegisterListEntry> list;
+		for (const auto& storeRec : g_registerStore.List()) {
+			RegisterWire::RegisterListEntry e;
+			e.name = storeRec.name;
+			e.touched = storeRec.touched;
+			e.valueSize = storeRec.value.size();
+			e.originHostId = storeRec.originHostId;
+			e.originHostName = resolveOriginName(storeRec.originHostId);
+			e.flags = storeRec.flags;
+			if (!storeRec.IsPrivate()) {
+				const size_t n = storeRec.value.size() < RegisterWire::kMaxPreviewLen
+					? storeRec.value.size() : RegisterWire::kMaxPreviewLen;
+				e.preview.assign(storeRec.value.data(), storeRec.value.data() + n);
+			}
+			list.push_back(std::move(e));
+		}
+		const auto listBody = RegisterWire::EncodeList(list);
+		channel.SendFrame(io, "RLST", listBody.data(), static_cast<uint32_t>(listBody.size()));
+		return true;
+	}
+	return false;
+#else
+	(void)channel;
+	(void)io;
+	(void)frame;
+	return false;
+#endif
+}
+
+void Peer::SendRegisterSyncOnConnect(CryptoChannel& channel, const SocketIoContext& io) {
+#if CLIPP_REGISTERS_DAEMON
+	const auto digest = g_registerStore.Digest();
+	const auto body = RegisterWire::EncodeDigest(digest);
+	if (channel.SendFrame(io, "RSYN", body.data(), static_cast<uint32_t>(body.size()))) {
+		log(__FUNCTION__, Logger::Level::Debug, L"Sent register digest (%zu entries) for anti-entropy.", digest.size());
+	} else {
+		log(__FUNCTION__, Logger::Level::Debug, L"Peer: failed to send register RSYN.");
+	}
+#else
+	(void)channel;
+	(void)io;
+#endif
 }
 
 void Peer::ThreadProcSend() {
@@ -382,6 +542,7 @@ void Peer::ThreadProcSend() {
 			hostNameMismatch = hostName_ != remoteHostName;
 			expectedHostName = hostName_;
 			osType_ = channel.RemoteOsType();
+			remoteServesRegisters_.store((channel.RemoteCaps()[0] & CryptoChannel::CAP0_SERVES_REGISTERS) != 0);
 		}
 		if (hostIDMismatch) {
 			log(__FUNCTION__, Logger::Level::Warning, L"Peer: host ID mismatch");
@@ -401,6 +562,8 @@ void Peer::ThreadProcSend() {
 		log(__FUNCTION__, Logger::Level::Info, L"Peer connected and authenticated.");
 		backoffIdx = 0;
 		g_peerDisplay.NotifyPeerConnState(hostName(), hostID(), PeerConnState::Connected);
+		// Register anti-entropy: offer our digest; the peer pushes back what we lack.
+		SendRegisterSyncOnConnect(channel, io);
 		auto nextPingTime = std::chrono::steady_clock::now();
 		std::vector<unsigned char> frame;
 		while (!stopRequested_.load()) {
@@ -521,6 +684,8 @@ void Peer::ThreadProcSend() {
 					// outgoing-direction peer; the requester is on the incoming
 					// side). Tolerate it without breaking the connection.
 					log(__FUNCTION__, Logger::Level::Debug, L"Unexpected EOSY received on outgoing connection; ignoring.");
+				} else if (HandleRegisterFrame(channel, io, frame)) {
+					// Register-protocol frame handled inline.
 				} else {
 					// Forward-compat: unknown tags from a peer with caps we don't recognize
 					// are logged and ignored rather than treated as fatal.
@@ -563,6 +728,7 @@ void Peer::ThreadProcRecv() {
 			hostID_ = remoteHostId;
 			hostName_ = Utf8ToWideString(remoteHostNameUtf8);
 			osType_ = channel.RemoteOsType();
+			remoteServesRegisters_.store((channel.RemoteCaps()[0] & CryptoChannel::CAP0_SERVES_REGISTERS) != 0);
 		}
 		if (verifiedCallback_) {
 			verifiedCallback_(Utf8ToWideString(remoteHostNameUtf8), remoteHostId, channel.RemoteOsType(), connType_, createdAt_);
@@ -585,6 +751,10 @@ void Peer::ThreadProcRecv() {
 				log(__FUNCTION__, Logger::Level::Debug, L"Peer: failed to send initial SYNC request.");
 			}
 		}
+
+		// Register anti-entropy with this incoming peer (per-connection, not gated on
+		// firstIncoming): offer our digest so it pushes back anything we lack.
+		SendRegisterSyncOnConnect(channel, io);
 
 		// Idle deadline: if no traffic arrives for this long, assume the peer is gone (e.g.,
 		// iOS backgrounded the app — the kernel keeps the TCP state alive but the process
@@ -706,6 +876,10 @@ void Peer::ThreadProcRecv() {
 				} else if (!channel.SendFrame(io, "NONE")) {
 					break;
 				}
+				continue;
+			}
+
+			if (HandleRegisterFrame(channel, io, frame)) {
 				continue;
 			}
 

@@ -514,3 +514,20 @@ elseif (UNIX AND NOT APPLE)
 else()
     message(FATAL_ERROR "Unsupported platform.")
 endif()
+
+# ---------------------------------------------------------------------------
+# Unit tests (opt-in; OFF by default so platform/release builds are untouched).
+# The engine sources live in src/ and are already in every target via the glob;
+# the test target just re-compiles the pure ones it needs and links doctest only
+# -- no platform code, no sodium/zstd/etc. Build with:
+#   cmake -S . -B build/tests -G Ninja \
+#     -DCMAKE_TOOLCHAIN_FILE=<vcpkg.cmake> \
+#     -DVCPKG_MANIFEST_FEATURES=tests -DCLIPP_BUILD_TESTS=ON
+#   cmake --build build/tests --target clipp-tests
+#   ctest --test-dir build/tests --output-on-failure
+# ---------------------------------------------------------------------------
+option(CLIPP_BUILD_TESTS "Build the clipp unit tests (doctest)" OFF)
+if (CLIPP_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()

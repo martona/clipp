@@ -1,4 +1,5 @@
 #include "CryptoChannel.h"
+#include "RegisterConfig.h"
 
 #include <cstring>
 #include <vector>
@@ -154,6 +155,9 @@ namespace {
         // the iOS share extension) simply never get asked.
         CryptoChannel::Caps caps{};
         caps[0] |= CryptoChannel::CAP0_SERVES_RECENT;
+#if CLIPP_REGISTERS_DAEMON
+        caps[0] |= CryptoChannel::CAP0_SERVES_REGISTERS;
+#endif
         return caps;
     }
 

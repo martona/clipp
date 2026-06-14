@@ -26,6 +26,11 @@ public:
     // this peer answers an "RCNT" frame with its most recent clipboard item — used
     // by one-shot clients like `clipp paste` to decide whether a peer is worth asking.
     static constexpr uint8_t CAP0_SERVES_RECENT = 0x01;
+    // SERVES_REGISTERS means this peer participates in the named-register protocol
+    // (REGW/RGET/RLST/RSYN anti-entropy). Advertised only by desktop daemons — the
+    // one-shot CLI and iOS don't serve. Gating register-frame sends on it keeps old
+    // and non-serving peers from seeing frames they'd only log-and-ignore.
+    static constexpr uint8_t CAP0_SERVES_REGISTERS = 0x02;
 
     CryptoChannel();
 

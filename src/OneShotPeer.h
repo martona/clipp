@@ -80,16 +80,23 @@ constexpr auto kConnectTimeout = std::chrono::seconds(3);
 constexpr auto kSessionTimeout = std::chrono::seconds(30);
 constexpr auto kBrowseCeiling  = std::chrono::milliseconds(1200);
 
+// True if `peer` satisfies a --host filter: device name matches case-insensitively
+// (ASCII) or the IP matches exactly. The caller handles an empty filter (match-all).
+bool PeerMatchesHost(const MDNSDiscovery::DiscoveredPeer& peer, const std::string& filter);
+
 // Finds a gateway peer (the first that accepts) and pushes `payloads` to it with
 // CLPM_FLAG_RELAY set, so that peer rebroadcasts them to the synced mesh — one push
 // instead of a fan-out. Returns the peer it relayed through, or nullopt if none
 // accepted within kBrowseCeiling. Shared by the CLI `copy` verb and the iOS share
 // extension. `includeSelf` surfaces this device's own GUI (CLI uses true; the share
 // extension uses false, since it can't assume its own app is running to relay).
+// `hostFilter` (optional) pins delivery to one device, matching PeerMatchesHost; empty
+// means the first peer found — the default the iOS share extension relies on.
 std::optional<MDNSDiscovery::DiscoveredPeer> RelayPayloads(
     std::vector<ClipboardPayload> payloads,
     const HostId& localHostId,
     const std::string& localHostName,
-    bool includeSelf);
+    bool includeSelf,
+    const std::string& hostFilter = {});
 
 }  // namespace OneShot
