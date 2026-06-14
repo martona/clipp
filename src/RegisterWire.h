@@ -28,6 +28,7 @@ inline constexpr uint16_t kMaxNameLen = 64;                       // matches IsV
 inline constexpr uint32_t kMaxValueLen = 64u * 1024u * 1024u;     // matches the frame payload cap
 inline constexpr uint16_t kMaxDigestEntries = 1024;               // matches RegisterMaxCount
 inline constexpr uint16_t kMaxPreviewLen = 256;                  // value bytes carried per list entry
+inline constexpr uint16_t kMaxOriginNameLen = 128;              // device name per list entry (== CryptoChannel::HOSTNAME_MAX_BYTES)
 
 // One entry in an RLST list response — richer than a digest: metadata plus a
 // capped, possibly-empty value preview, for `ls -v`. (The anti-entropy RSYN digest
@@ -39,6 +40,7 @@ struct RegisterListEntry {
     HostId originHostId;
     uint8_t flags{ 0 };      // PRIVATE etc.
     std::string preview;     // up to kMaxPreviewLen bytes; empty for private/empty values
+    std::string originHostName;  // server-resolved device name for `ls -v`; "" when the id can't be mapped (CLI falls back to the id prefix). Appended last so older aggregate inits still compile.
 };
 
 // REGW: a full register record (value or tombstone) plus transport flags.

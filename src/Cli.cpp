@@ -572,11 +572,6 @@ std::wstring HumanizeSize(uint64_t bytes) {
 
 // The CLI has no hostId->hostname map (that lives in the GUI), so show a short
 // hostId prefix for the origin column.
-std::wstring OriginLabel(const HostId& host) {
-    const std::wstring hex = host.ToHexWString(HostId::kSize);
-    return hex.substr(0, 8);
-}
-
 std::wstring SanitizePreview(const std::string& preview) {
     std::string s = preview;
     for (char& c : s) {
@@ -584,6 +579,14 @@ std::wstring SanitizePreview(const std::string& preview) {
         if (u < 0x20 || u == 0x7f) c = '.';   // control chars (incl newlines/tabs) -> dot
     }
     return ToWide(s);
+}
+
+// Origin column for `ls -v`: the server-resolved device name when present, else the
+// short hostId prefix. The name is a peer-controlled field, so run it through the
+// same control-char scrub as the preview to keep escape sequences out of the terminal.
+std::wstring OriginLabel(const RegisterWire::RegisterListEntry& e) {
+    if (!e.originHostName.empty()) return SanitizePreview(e.originHostName);
+    return e.originHostId.ToHexWString(HostId::kSize).substr(0, 8);
 }
 
 int TerminalWidth() {
@@ -622,7 +625,7 @@ void FormatListVerbose(const std::vector<const RegisterWire::RegisterListEntry*>
         wName = (std::max)(wName, dn.size());
         wAge = (std::max)(wAge, FormatAge(e->touched).size());
         wSize = (std::max)(wSize, HumanizeSize(e->valueSize).size());
-        wOrigin = (std::max)(wOrigin, OriginLabel(e->originHostId).size());
+        wOrigin = (std::max)(wOrigin, OriginLabel(*e).size());
     }
     const int termW = TerminalWidth();
     const bool tty = StdoutIsTty();
@@ -630,7 +633,7 @@ void FormatListVerbose(const std::vector<const RegisterWire::RegisterListEntry*>
         const std::wstring dn = e->name.empty() ? L"(clipboard)" : ToWide(e->name);
         std::wstring line = PadRight(dn, wName) + L"  " + PadLeft(FormatAge(e->touched), wAge) + L"  " +
                             PadLeft(HumanizeSize(e->valueSize), wSize) + L"  " +
-                            PadRight(OriginLabel(e->originHostId), wOrigin) + L"  ";
+                            PadRight(OriginLabel(*e), wOrigin) + L"  ";
         std::wstring contents =
             (e->flags & RegisterFlags::Private) ? L"[private]" : SanitizePreview(e->preview);
         int remain = termW - static_cast<int>(line.size());

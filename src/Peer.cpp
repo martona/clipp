@@ -435,6 +435,20 @@ bool Peer::HandleRegisterFrame(CryptoChannel& channel, const SocketIoContext& io
 		// Rich list for `ls`/`ls -v`: live values + the default "" mirror, each with a
 		// capped preview (omitted for private records — their bytes never leave the
 		// gateway for a listing).
+		// The CLI has no hostId->name map, so resolve each origin to a device name here
+		// (the daemon does have one) and ship it in the entry. Snapshot the peer list
+		// once; ids we can't place stay "" and the CLI shows the short id instead.
+		HostId localHostId{};
+		const bool haveLocalHostId = g_settings.getHostID(localHostId);
+		const std::string localHostName = clipp::GetLocalPeerDisplayName("", CryptoChannel::HOSTNAME_MAX_BYTES);
+		const auto knownPeers = g_peerDisplay.Query();
+		const auto resolveOriginName = [&](const HostId& origin) -> std::string {
+			if (haveLocalHostId && origin == localHostId) return localHostName;
+			for (const auto& peer : knownPeers) {
+				if (peer.hostID == origin) return WideToUtf8String(peer.hostName);
+			}
+			return {};
+		};
 		std::vector<RegisterWire::RegisterListEntry> list;
 		for (const auto& storeRec : g_registerStore.List()) {
 			RegisterWire::RegisterListEntry e;
@@ -442,6 +456,7 @@ bool Peer::HandleRegisterFrame(CryptoChannel& channel, const SocketIoContext& io
 			e.touched = storeRec.touched;
 			e.valueSize = storeRec.value.size();
 			e.originHostId = storeRec.originHostId;
+			e.originHostName = resolveOriginName(storeRec.originHostId);
 			e.flags = storeRec.flags;
 			if (!storeRec.IsPrivate()) {
 				const size_t n = storeRec.value.size() < RegisterWire::kMaxPreviewLen

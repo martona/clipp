@@ -114,3 +114,4 @@ compile_commands.json
 *.patch
 *.diff
 .claude/
+handoff.md

@@ -136,9 +136,9 @@ TEST_CASE("RGET name round-trips and rejects malformed") {
 
 TEST_CASE("RLST rich list round-trips and rejects malformed") {
     std::vector<RegisterWire::RegisterListEntry> in;
-    in.push_back({ "", Hlc{ 100, 0 }, 12, MakeHost(1), 0, "clipboard txt" });        // default mirror
-    in.push_back({ "url", Hlc{ 200, 1 }, 23, MakeHost(2), 0, "https://example.com" });
-    in.push_back({ "pw", Hlc{ 300, 0 }, 8, MakeHost(2), RegisterFlags::Private, "" }); // private: empty preview
+    in.push_back({ "", Hlc{ 100, 0 }, 12, MakeHost(1), 0, "clipboard txt", "Mars11" });        // default mirror
+    in.push_back({ "url", Hlc{ 200, 1 }, 23, MakeHost(2), 0, "https://example.com", "devbox2" });
+    in.push_back({ "pw", Hlc{ 300, 0 }, 8, MakeHost(2), RegisterFlags::Private, "", "" }); // private preview empty; origin unresolved
 
     const auto body = RegisterWire::EncodeList(in);
     std::vector<RegisterWire::RegisterListEntry> out;
@@ -151,6 +151,7 @@ TEST_CASE("RLST rich list round-trips and rejects malformed") {
         CHECK(out[i].originHostId == in[i].originHostId);
         CHECK(out[i].flags == in[i].flags);
         CHECK(out[i].preview == in[i].preview);
+        CHECK(out[i].originHostName == in[i].originHostName);
     }
     CHECK(out[2].flags == RegisterFlags::Private);
     CHECK(out[2].preview.empty());

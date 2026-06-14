@@ -232,6 +232,10 @@ std::vector<unsigned char> EncodeList(const std::vector<RegisterListEntry>& entr
             static_cast<uint16_t>(e.preview.size() > kMaxPreviewLen ? kMaxPreviewLen : e.preview.size());
         PutU16(b, previewLen);
         PutBytes(b, e.preview.data(), previewLen);
+        const uint16_t originNameLen =
+            static_cast<uint16_t>(e.originHostName.size() > kMaxOriginNameLen ? kMaxOriginNameLen : e.originHostName.size());
+        PutU16(b, originNameLen);
+        PutBytes(b, e.originHostName.data(), originNameLen);
     }
     return b;
 }
@@ -257,6 +261,9 @@ bool TryDecodeList(const std::vector<unsigned char>& body, std::vector<RegisterL
         uint16_t previewLen = 0;
         if (!r.U16(previewLen) || previewLen > kMaxPreviewLen) return false;
         if (!r.ReadString(e.preview, previewLen)) return false;
+        uint16_t originNameLen = 0;
+        if (!r.U16(originNameLen) || originNameLen > kMaxOriginNameLen) return false;
+        if (!r.ReadString(e.originHostName, originNameLen)) return false;
         outEntries.push_back(std::move(e));
     }
     if (r.remaining != 0) return false;
