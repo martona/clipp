@@ -41,6 +41,7 @@ Clipp moves clipboard history between your own devices without a cloud service i
 - Shows recent clipboard activity so you can copy an earlier item again.
 - Works over trusted mesh or overlay networks when you want the same setup away from your LAN.
 - Pipes clipboard text to and from the network from the command line (`clipp copy` / `clipp paste`), including over SSH.
+- Keeps named, persistent clipboard registers that sync across devices (`clipp copy <name>` / `paste <name>`, listed and removed with `ls` / `rm`).
 
 ## Security Model
 
@@ -187,11 +188,37 @@ clipp paste                          # print the newest network clipboard item
 clipp p > notes.txt                  # `p` aliases paste; `c` aliases copy
 ```
 
-Transfers are text-only and add no trailing newline, so they pipe cleanly. Delivery goes through whatever peers are already running on the network, so the desktop app doesn't need to be open on *this* machine — just reachable somewhere. You can also set a device's group name and passphrase from the terminal with `clipp key set`; run `clipp --help` for the rest (`key`, `hostid`).
+Transfers are text-only and add no trailing newline, so they pipe cleanly. Delivery goes through whatever peers are already running on the network, so the desktop app doesn't need to be open on *this* machine — just reachable somewhere. You can also set a device's group name and passphrase from the terminal with `clipp key set`; run `clipp --help` for the rest (`key`, `hostid`) and the [named registers](#named-registers) below.
 
 On Windows, pipe through `clipp.com` (the console shim from [Installation](#windows)) — `clipp.exe` is the GUI and carries no stdio. On macOS the binary lives inside the bundle at `Clipp.app/Contents/MacOS/clipp`, if it's not on your `PATH`.
 
 A note on macOS and using Clipp via SSH on a Mac host: Apps in an SSH session are blind to the keychain. Using Clipp this way requires you to have the GUI app running on the same machine so the process in the SSH session can query it for the group key.
+
+### Named registers
+
+`copy` and `paste` with no name share a single clipboard. Add a name and you get a **named register** instead — a persistent, named slot that syncs across your devices the same peer-to-peer way. Handy for the handful of things you reach for constantly: an SSH target, a deploy command, a public key.
+
+```sh
+echo "ssh me@prod" | clipp copy login     # write the "login" register
+clipp paste login                         # read it back, on any device
+cat id_ed25519.pub | clipp copy ssh.pub   # names use [a-z0-9._-], up to 64 chars
+```
+
+Registers stick around until you delete them or they go unused for 90 days. List and remove them with `ls` and `rm`:
+
+```sh
+clipp ls                # register names, one per line
+clipp ls -v             # table: name, age, size, origin device, preview
+clipp ls 'deploy.*'     # filter by exact name or glob (? and *)
+clipp rm login          # remove one
+clipp rm 'deploy.*'     # remove by glob
+```
+
+`ls` also lists a `(clipboard)` entry for the live unnamed clipboard. If the same register is written on two devices around the same time, the most recent write wins.
+
+The **`--private`** flag: `clipp copy --private otp` masks the value in `ls -v` and refuses to print it to a terminal on `paste`; pipe or redirect it to actually read it. For values you'd rather not leave on screen.
+
+Like the command-line clipboard, registers are text-only in this release; and like the clipboard, they survive only in the GUI apps' memory. They're available as long as at least one instance of the desktop app is running. They achieve eventual consistency through LWW-CRDT when it comes to multiple writes at the same time, or group splits due to networking conditions. Due to the complexity it introduces (tombstone records) a sane-but-comfortable max age of 90 days was chosen for all records; this is refreshed on register read _and_ write.
 
 ## Troubleshooting
 
