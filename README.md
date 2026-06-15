@@ -54,8 +54,8 @@ Clipp's trust model is deliberately narrow - your own devices, on a local or ove
 | Platform | Architectures   | Minimum version | Notes                                                                |
 |----------|-----------------|-----------------|----------------------------------------------------------------------|
 | Windows  | amd64, arm64    | Windows 10 1809 | Native builds for both architectures.                                |
-| macOS    | Apple Silicon   | macOS 14*       | Intel Macs are not supported.                                        |
-| iOS      | arm64           | iOS 17          | App Store build under review (free); until then, install from Xcode. |
+| macOS    | Apple Silicon   | macOS 14*       | On the [Mac App Store][app-store-mac]; Intel Macs are not supported. |
+| iOS      | arm64           | iOS 17          | Free on the [App Store][app-store-ios].                              |
 | Linux    | amd64, arm64    | glibc 2.31†     | Terminal client only (`clipp copy`/`paste`); no GUI, no tray.        |
 
 \* The 14 floor is arbitrary; I just don't have older Macs or Intel hardware to test on. PRs to lower the minimum are welcome.
@@ -90,17 +90,24 @@ Direct download links below always point at the **latest published release** —
 [lin-amd64-bin]: https://github.com/martona/clipp/releases/latest/download/clipp-linux-amd64
 [lin-arm64-bin]: https://github.com/martona/clipp/releases/latest/download/clipp-linux-arm64
 
+[app-store-ios]: https://apps.apple.com/us/app/clipp-net/id6773113533
+[app-store-mac]: https://apps.apple.com/us/app/clipp-net/id6773113533?platform=mac
+
 ### Windows
 
 Download the portable zip ([amd64][win-amd64-zip] / [arm64][win-arm64-zip]), extract it anywhere, and run `clipp.exe`. Alternatively, there's an MSIX installer ([amd64][win-amd64-msix] / [arm64][win-arm64-msix]) if you prefer. The app writes to HKCU\Software\Clipp under the registry, and registers itself to auto-start with Windows, but otherwise leaves your system alone. To undo the latter (and stop Clipp from automatically starting), just use the Exit option in either the tray menu or the main app window. `clipp copy` and `clipp paste` work from the terminal as long as you have Clipp on the path. The app uses a .com shim to enable console operation.
 
 ### macOS
 
-Download the [Apple Silicon zip][mac-arm64-zip], open it, and drag `Clipp.app` to `/Applications` then doubleclick to open. Clipp registers itself as a macOS background item so it can start with the system: use the Exit option in either the main app window or the menu bar menu to undo this. To use `clipp copy` / `paste` you probably want the app's binary (`/Applications/clipp.app/Contents/MacOS/clipp`) on your PATH.
+Install from the [Mac App Store][app-store-mac] (the easy path — it stays updated automatically), or download the [Apple Silicon zip][mac-arm64-zip] directly: open it, and drag `Clipp.app` to `/Applications` then doubleclick to open. Clipp registers itself as a macOS background item so it can start with the system: use the Exit option in either the main app window or the menu bar menu to undo this. To use `clipp copy` / `paste` you probably want the app's binary (`/Applications/clipp.app/Contents/MacOS/clipp`) on your PATH.
 
 ### iOS
 
-The iOS app is in App Store review, priced free. Until it's approved, install on a physical device by building from source via Xcode (see [BUILDING.md](BUILDING.md#ios-device)).
+Clipp is free on the App Store:
+
+<a href="https://apps.apple.com/us/app/clipp-net/id6773113533"><img src="https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg" alt="Download Clipp on the App Store" height="40"></a>
+
+Prefer to build it yourself? Install on a physical device from Xcode (see [BUILDING.md](BUILDING.md#ios-device)).
 
 ### Linux
 
@@ -257,7 +264,7 @@ If `avahi-browse` shows nothing while another device's Clipp GUI is up, the prob
 
 **Is Clipp free? Is there a catch? Are you smuggling malware?**
 
-No catch. Clipp is open source under the MIT license - read it, build it, and run it yourself at no cost. The prebuilt binaries are free too, App Store builds included (when available). No paid tier, no subscription, no ads, and no telemetry. As a friend of mine used to say: released code can't be un-MIT'd. The releases are GitHub-attested (meaning they _actually_ came from the source here) and I signed my legal name on them, once for Apple, and once for Microsoft. 
+No catch. Clipp is open source under the MIT license - read it, build it, and run it yourself at no cost. The prebuilt binaries are free too, App Store builds included. No paid tier, no subscription, no ads, and no telemetry. The releases are built by GitHub actions and are GitHub-attested (meaning they _actually_ came from the source here) and I signed my legal name on them, once for Apple, and once for Microsoft. 
 
 **Does Linux have a GUI? What about Android?**
 
@@ -284,7 +291,7 @@ See [BUILDING.md](BUILDING.md) for prerequisites and build instructions for Wind
 Clipp is currently **early-stage public preview**: it works for the cases I use day-to-day, but it's not a finished product. Specifically:
 
 - The wire protocol is subject to breaking changes.
-- iOS and macOS App Store builds are submitted and under review, priced free; until they're approved, install iOS from Xcode and macOS from the released binary.
+- iOS and macOS are free on the App Store; Windows and Linux from the download links above.
 - Bug reports are welcome, but expect a single-maintainer response time.
 
 Clipp is actively developed.
