@@ -1492,24 +1492,46 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
                 if (hData) {
                     const wchar_t* utf16Str = static_cast<const wchar_t*>(GlobalLock(hData));
                     if (utf16Str) {
-                        // Calculate required buffer size for UTF-8 (including null terminator)
-                        int utf8Size = WideCharToMultiByte(CP_UTF8, 0, utf16Str, -1, nullptr, 0, nullptr, nullptr);
-                        if (utf8Size > 0) {
-                            payload.meta.formatId = CLIPP_FORMAT_UTF8;
-                            bytes.resize(utf8Size);
-                            // Perform the actual conversion straight into the vector
-                            if (WideCharToMultiByte(CP_UTF8, 0, utf16Str, -1,
-                                reinterpret_cast<char*>(bytes.data()), utf8Size, nullptr, nullptr) > 0) {
-                                g_logger.log(__FUNCTION__, Logger::Level::Info, L"Read CF_UNICODETEXT from system clipboard (UTF-8 payload: %zu bytes)", bytes.size());
-                            }
-                            else {
-                                payload.meta.formatId = CLIPP_FORMAT_NONE;
-                                bytes.clear();
-                                LogLastError(__FUNCTION__, L"Failed to convert CF_UNICODETEXT clipboard data to UTF-8");
-                            }
+                        // A conformant CF_UNICODETEXT buffer is NUL-terminated within its
+                        // own allocation. A foreign owner (notably the RDP / Terminal
+                        // Services clipboard) can hand us one that isn't -- passing -1 to
+                        // WideCharToMultiByte would then scan for a NUL past the end of the
+                        // buffer (an over-read: intermittent AV in the wild, deterministic
+                        // under PageHeap). So sanity-check first: probe how much of the
+                        // declared buffer is committed and require a NUL within it. No NUL
+                        // -> truncated/garbage (or hostile); drop the whole clipboard event.
+                        // A NUL that IS present makes the -1 scans below safe by construction.
+                        const SIZE_T byteSize = GlobalSize(hData);
+                        size_t readableBytes = 0;
+                        ClipboardSpanIsReadable(reinterpret_cast<const unsigned char*>(utf16Str),
+                                                static_cast<size_t>(byteSize), &readableBytes);
+                        const size_t readableChars = readableBytes / sizeof(wchar_t);
+                        if (readableChars == 0 || wmemchr(utf16Str, L'\0', readableChars) == nullptr) {
+                            g_logger.log(__FUNCTION__, Logger::Level::Warning,
+                                L"Ignoring clipboard event: CF_UNICODETEXT is not NUL-terminated within its committed buffer (declared %zu bytes, %zu readable).",
+                                static_cast<size_t>(byteSize), readableBytes);
+                            LogClipboardOwnerDossier(__FUNCTION__, L"malformed CF_UNICODETEXT clipboard buffer");
                         }
                         else {
-                            LogLastError(__FUNCTION__, L"Failed to measure CF_UNICODETEXT clipboard data as UTF-8");
+                            // Calculate required buffer size for UTF-8 (including null terminator)
+                            int utf8Size = WideCharToMultiByte(CP_UTF8, 0, utf16Str, -1, nullptr, 0, nullptr, nullptr);
+                            if (utf8Size > 0) {
+                                payload.meta.formatId = CLIPP_FORMAT_UTF8;
+                                bytes.resize(utf8Size);
+                                // Perform the actual conversion straight into the vector
+                                if (WideCharToMultiByte(CP_UTF8, 0, utf16Str, -1,
+                                    reinterpret_cast<char*>(bytes.data()), utf8Size, nullptr, nullptr) > 0) {
+                                    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Read CF_UNICODETEXT from system clipboard (UTF-8 payload: %zu bytes)", bytes.size());
+                                }
+                                else {
+                                    payload.meta.formatId = CLIPP_FORMAT_NONE;
+                                    bytes.clear();
+                                    LogLastError(__FUNCTION__, L"Failed to convert CF_UNICODETEXT clipboard data to UTF-8");
+                                }
+                            }
+                            else {
+                                LogLastError(__FUNCTION__, L"Failed to measure CF_UNICODETEXT clipboard data as UTF-8");
+                            }
                         }
                         GlobalUnlock(hData);
                     }
