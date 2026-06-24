@@ -96,7 +96,13 @@ void PeerManager::CullPeers() {
 		}
 		const auto age = now - peer->createdAt();
 		const auto silence = now - peer->lastPingReceivedAt();
-		const bool dead = age >= std::chrono::minutes(1) && silence >= std::chrono::minutes(1);
+		// Only incoming peers are silence-culled. Outgoing peers self-manage: they retry
+		// forever (lastPingReceivedAt_ freezes while disconnected, so silence is meaningless
+		// for them) and are removed only when discovery reports the peer gone, via the
+		// OutgoingReconciler -> RemoveOutgoingPeer. Silence-culling a live, reconnecting
+		// outgoing peer would reap a healthy connection and desync the reconciler.
+		const bool dead = peer->connType_ == Peer::ConnType::Incoming
+			&& age >= std::chrono::minutes(1) && silence >= std::chrono::minutes(1);
 		if (dead) {
 			peer->Stop();
 			g_peerDisplay.NotifyPeerRemoved(peer->hostID(), peer->connType_);
