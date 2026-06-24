@@ -695,6 +695,9 @@ int RunRegisterCopy(const std::string& name, bool isPrivate) {
         ErrLine(L"Nothing on stdin to copy.");
         return 1;
     }
+    // Registers are text: fold CRLF/CR -> LF so the same content stored from any platform
+    // or shell settles to one canonical form, matching clipboard text (SetUncompressedBytes).
+    CanonicalizeCrlfToLf(bytes);
 
     HostId localHostId;
     g_settings.ensureHostID(localHostId);
@@ -797,8 +800,16 @@ int RunRegisterPaste(const std::string& name) {
                             L"' is private; refusing to print to a terminal. Pipe it to read.");
                     refusedPrivate = true;
                 } else {
+#ifdef _WIN32
+                    // Registers store canonical LF; expand to the native ending on egress
+                    // (CRLF on Windows), mirroring clipboard paste (TryGetLocalizedBytes).
+                    std::vector<unsigned char> out(rec.value.begin(), rec.value.end());
+                    ExpandLfToCrlf(out);
+                    WriteAllStdout(out.data(), out.size());
+#else
                     WriteAllStdout(reinterpret_cast<const unsigned char*>(rec.value.data()),
                                    rec.value.size());
+#endif
                 }
                 return true;
             }

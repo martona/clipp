@@ -435,7 +435,11 @@ void NetworkRuntime::OnClipboardReceived(std::shared_ptr<const ClipboardPayload>
         if (IsClippTextFormat(payload->meta.formatId)) {
             const std::vector<unsigned char>* bytes = payload->TryGetUncompressedBytes();
             if (bytes != nullptr) {
-                g_registerStore.MirrorDefault(std::string(bytes->begin(), bytes->end()));
+                // Strip the convention NUL so the "" mirror reports the logical content length,
+                // matching named registers (see MirrorClipboardToDefaultRegister in main.cpp).
+                size_t n = bytes->size();
+                if (n > 0 && bytes->back() == '\0') --n;
+                g_registerStore.MirrorDefault(std::string(bytes->begin(), bytes->begin() + n));
                 g_settings.noteRegisterHlcWallMs(g_registerStore.ClockHighWater().wallMs);
             }
         }

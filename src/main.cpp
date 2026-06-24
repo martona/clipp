@@ -70,7 +70,12 @@ static void MirrorClipboardToDefaultRegister(const std::shared_ptr<const Clipboa
     if (bytes == nullptr) {
         return;
     }
-    g_registerStore.MirrorDefault(std::string(bytes->begin(), bytes->end()));
+    // Clipboard text carries a convention NUL terminator (see SetUncompressedBytes / capture).
+    // Mirror the logical content -- what `clipp paste` emits -- so `ls` reports the same length
+    // as a named register instead of counting the terminator.
+    size_t n = bytes->size();
+    if (n > 0 && bytes->back() == '\0') --n;
+    g_registerStore.MirrorDefault(std::string(bytes->begin(), bytes->begin() + n));
     g_settings.noteRegisterHlcWallMs(g_registerStore.ClockHighWater().wallMs);
 }
 #endif

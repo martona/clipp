@@ -16,6 +16,55 @@
 #include "Logger.h"
 #include "NetworkDefs.h"
 
+// Canonicalize text line endings to LF in place: CRLF -> LF, and a lone CR -> LF.
+// Only rebuilds the buffer when a CR is actually present. Shared by clipboard text
+// (SetUncompressedBytes) and named-register copy (Cli.cpp) so the same text -- captured
+// on any platform or piped through any shell -- settles to one canonical form.
+inline void CanonicalizeCrlfToLf(std::vector<unsigned char>& bytes) {
+    if (std::find(bytes.begin(), bytes.end(), static_cast<unsigned char>('\r')) == bytes.end()) {
+        return;
+    }
+    std::vector<unsigned char> lf;
+    lf.reserve(bytes.size());
+    for (size_t i = 0; i < bytes.size(); ++i) {
+        if (bytes[i] == '\r') {
+            lf.push_back('\n');
+            if (i + 1 < bytes.size() && bytes[i + 1] == '\n') {
+                ++i;  // collapse CRLF to a single LF (lone CR also folds to LF)
+            }
+        } else {
+            lf.push_back(bytes[i]);
+        }
+    }
+    bytes = std::move(lf);
+}
+
+// Expand canonical-LF text to CRLF for egress where the platform's native line ending is
+// CRLF (Windows): LF -> CRLF, a lone CR -> CRLF, and existing CRLF preserved (never
+// CR-CR-LF). Only rebuilds when a line ending is present. The reverse of
+// CanonicalizeCrlfToLf; callers apply it only where the native ending is CRLF.
+inline void ExpandLfToCrlf(std::vector<unsigned char>& bytes) {
+    if (std::find_if(bytes.begin(), bytes.end(),
+                     [](unsigned char c) { return c == '\r' || c == '\n'; }) == bytes.end()) {
+        return;
+    }
+    std::vector<unsigned char> out;
+    out.reserve(bytes.size() + bytes.size() / 8 + 1);
+    for (size_t i = 0; i < bytes.size(); ++i) {
+        const unsigned char c = bytes[i];
+        if (c == '\r' || c == '\n') {
+            out.push_back('\r');
+            out.push_back('\n');
+            if (c == '\r' && i + 1 < bytes.size() && bytes[i + 1] == '\n') {
+                ++i;  // consume the LF of a CRLF pair
+            }
+        } else {
+            out.push_back(c);
+        }
+    }
+    bytes = std::move(out);
+}
+
 // One in-memory representation of a clipboard item, end to end. `meta` is the
 // same struct that travels on the wire (NetworkDefs::ClipboardMessage), so
 // format / compression / sizes / hash / origin all live in one place.
@@ -67,22 +116,8 @@ public:
         // form is platform-neutral: the same text copied on Windows (CRLF) and macOS
         // (LF) hashes identically (so cross-platform dedup / the hash-guard see one
         // item), and receivers re-add the native ending on write (TryGetLocalizedBytes).
-        // Only a payload that actually contains CR pays the rebuild.
-        if (meta.formatId == CLIPP_FORMAT_UTF8
-            && std::find(bytes.begin(), bytes.end(), static_cast<unsigned char>('\r')) != bytes.end()) {
-            std::vector<unsigned char> lf;
-            lf.reserve(bytes.size());
-            for (size_t i = 0; i < bytes.size(); ++i) {
-                if (bytes[i] == '\r') {
-                    lf.push_back('\n');
-                    if (i + 1 < bytes.size() && bytes[i + 1] == '\n') {
-                        ++i;  // collapse CRLF to a single LF (lone CR also folds to LF)
-                    }
-                } else {
-                    lf.push_back(bytes[i]);
-                }
-            }
-            bytes = std::move(lf);
+        if (meta.formatId == CLIPP_FORMAT_UTF8) {
+            CanonicalizeCrlfToLf(bytes);
         }
 
         // Hash over plaintext (content identity, stable across compression).
@@ -256,24 +291,12 @@ public:
             return localizedOk_ ? &localizedScratch_ : canonical;
         }
         localizedAttempted_ = true;
-        localizedScratch_.clear();
-        localizedScratch_.reserve(canonical->size() + canonical->size() / 8 + 1);
-        // Emit CRLF for every line ending, treating LF / CRLF / lone CR uniformly, so a
-        // payload from an older (pre-normalization) peer that still carries CRLF doesn't
-        // come out as CR-CR-LF. The receive path can't pre-normalize (it would break the
-        // payloadDataSize wire check), so the robustness lives here.
-        for (size_t i = 0; i < canonical->size(); ++i) {
-            const unsigned char c = (*canonical)[i];
-            if (c == '\r' || c == '\n') {
-                localizedScratch_.push_back('\r');
-                localizedScratch_.push_back('\n');
-                if (c == '\r' && i + 1 < canonical->size() && (*canonical)[i + 1] == '\n') {
-                    ++i;  // consume the LF of a CRLF pair
-                }
-            } else {
-                localizedScratch_.push_back(c);
-            }
-        }
+        // Emit CRLF for every line ending (LF / CRLF / lone CR uniformly), so a payload from
+        // an older peer that still carries CRLF doesn't come out CR-CR-LF. The receive path
+        // can't pre-normalize (it would break the payloadDataSize wire check), so the
+        // robustness lives here -- via the same expansion named-register paste uses.
+        localizedScratch_.assign(canonical->begin(), canonical->end());
+        ExpandLfToCrlf(localizedScratch_);
         localizedOk_ = true;
         return &localizedScratch_;
 #else
