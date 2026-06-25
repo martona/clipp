@@ -97,7 +97,11 @@ Download the portable zip ([amd64][win-amd64-zip] / [arm64][win-arm64-zip]), ext
 
 ### macOS
 
-Install from the [Mac App Store][app-store-mac] (the easy path — it stays updated automatically), or download the [Apple Silicon zip][mac-arm64-zip] directly: open it, and drag `Clipp.app` to `/Applications` then doubleclick to open. Clipp registers itself as a macOS background item so it can start with the system: use the Exit option in either the main app window or the menu bar menu to undo this. To use `clipp copy` / `paste` you probably want the app's binary (`/Applications/clipp.app/Contents/MacOS/clipp`) on your PATH.
+```sh
+brew install martona/tap/clipp
+```
+
+Otherwise, install from the [Mac App Store][app-store-mac] (the easy path — it stays updated automatically), or download the [Apple Silicon zip][mac-arm64-zip] directly: open it, and drag `Clipp.app` to `/Applications` then doubleclick to open. Clipp registers itself as a macOS background item so it can start with the system: use the Exit option in either the main app window or the menu bar menu to undo this. To use `clipp copy` / `paste` you probably want the app's binary (`/Applications/clipp.app/Contents/MacOS/clipp`) on your PATH (the Homebrew cask does this for you).
 
 ### iOS
 
