@@ -314,4 +314,4 @@ For setup and build instructions, see [BUILDING.md](BUILDING.md).
 
 ## License
 
-Clipp is released under the MIT License. See [LICENSE.md](LICENSE.md).
+Clipp is released under the MIT License. See [LICENSE.md](LICENSE.md). This is a personal, non-commercial project. Copyright (C) 2026 [Marton Anka](https://anka.me)
