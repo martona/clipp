@@ -572,10 +572,25 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: List artifacts
+      # One combined SHA256SUMS.txt over every asset: lets users verify downloads and
+      # lets a Homebrew tap bump read the cask's sha256 from this file instead of
+      # re-downloading the asset (mirrors ../yo and ../gig). Computed before attest so
+      # it's covered by provenance, and shipped as a release asset.
+      - name: Checksums
         run: |
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+
+          root = Path("artifacts")
+          lines = []
+          for path in sorted(p for p in root.iterdir() if p.is_file() and p.name != "SHA256SUMS.txt"):
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              lines.append(f"{digest}  {path.name}")
+          (root / "SHA256SUMS.txt").write_text("\n".join(lines) + "\n", encoding="ascii")
+          print((root / "SHA256SUMS.txt").read_text(encoding="ascii"), end="")
+          PY
           ls -la artifacts/
-          echo "Total: $(ls artifacts/ | wc -l) files"
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v3
