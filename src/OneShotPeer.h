@@ -92,11 +92,15 @@ bool PeerMatchesHost(const MDNSDiscovery::DiscoveredPeer& peer, const std::strin
 // extension uses false, since it can't assume its own app is running to relay).
 // `hostFilter` (optional) pins delivery to one device, matching PeerMatchesHost; empty
 // means the first peer found — the default the iOS share extension relies on.
+// `outFilterMatched` (optional) is set true if some discovered peer passed `hostFilter`
+// (so a nullopt return means "matched but unreachable" rather than "filter matched
+// nothing") — lets the CLI give a precise --host diagnostic. Left untouched on no match.
 std::optional<MDNSDiscovery::DiscoveredPeer> RelayPayloads(
     std::vector<ClipboardPayload> payloads,
     const HostId& localHostId,
     const std::string& localHostName,
     bool includeSelf,
-    const std::string& hostFilter = {});
+    const std::string& hostFilter = {},
+    bool* outFilterMatched = nullptr);
 
 }  // namespace OneShot

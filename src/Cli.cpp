@@ -252,6 +252,22 @@ std::wstring PeerLabel(const MDNSDiscovery::DiscoveredPeer& peer, const HostId& 
     return label;
 }
 
+// Failure message for the network verbs. The frequent mistake is handing --host a
+// hostname / FQDN / "localhost": --host is an EXACT name-or-IP filter over discovered
+// peers, NOT a resolver, so those silently match nothing and collapse to the same
+// generic failure. When a filter is set and nothing matched, say so and point at the
+// command that lists the valid values; otherwise emit the verb's own default message
+// (which also covers the matched-but-unreachable / no-content cases).
+void ReportNoGateway(const std::wstring& defaultMessage, bool filterMatched) {
+    if (!g_hostFilter.empty() && !filterMatched) {
+        ErrLine(L"No discovered device matched --host '" + ToWide(g_hostFilter) +
+                L"'. --host is an exact device-name or IP filter, not a hostname lookup — "
+                L"run `clipp peers` to see the names and IPs to use.");
+    } else {
+        ErrLine(defaultMessage);
+    }
+}
+
 // --- Subcommand handlers (return process exit codes) -------------------------
 
 int RunKeySet(const std::string* nameOverride) {
@@ -414,9 +430,11 @@ int RunCopy() {
 
     std::vector<ClipboardPayload> payloads;
     payloads.push_back(std::move(payload));
-    const auto via = OneShot::RelayPayloads(std::move(payloads), localHostId, localHostName, /*includeSelf=*/true, g_hostFilter);
+    bool filterMatched = false;
+    const auto via = OneShot::RelayPayloads(std::move(payloads), localHostId, localHostName,
+                                            /*includeSelf=*/true, g_hostFilter, &filterMatched);
     if (!via) {
-        ErrLine(L"Could not reach any device to copy to.");
+        ReportNoGateway(L"Could not reach any device to copy to.", filterMatched);
         return 1;
     }
     VerboseLine(L"Relayed via " + PeerLabel(*via, localHostId) + L".");
@@ -505,9 +523,11 @@ int RunPaste() {
     g_settings.ensureHostID(localHostId);
     const std::string localHostName = clipp::GetLocalPeerDisplayName("unknown", CryptoChannel::HOSTNAME_MAX_BYTES);
 
+    bool filterMatched = false;
     const bool got = MDNSDiscovery::BrowseStream(OneShot::kBrowseCeiling, /*includeSelf=*/true,
         [&](const MDNSDiscovery::DiscoveredPeer& peer) -> bool {
             if (!g_hostFilter.empty() && !OneShot::PeerMatchesHost(peer, g_hostFilter)) return true;  // --host: skip other devices
+            filterMatched = true;
             VerboseLine(L"Trying " + PeerLabel(peer, localHostId) + L"...");
             OneShotPeer connection;
             if (!connection.Connect(peer.ip, peer.port, localHostId, localHostName, peer.hostId,
@@ -525,7 +545,7 @@ int RunPaste() {
         });
 
     if (!got) {
-        ErrLine(L"No clipboard content available from any device.");
+        ReportNoGateway(L"No clipboard content available from any device.", filterMatched);
         return 1;
     }
     return 0;
@@ -656,11 +676,15 @@ void FormatListVerbose(const std::vector<const RegisterWire::RegisterListEntry*>
 // Browse for a peer advertising CAP0_SERVES_REGISTERS, connect, and run `exchange`
 // on it; stop at the first peer where `exchange` returns true (handled). Returns
 // true if some register-capable peer handled it. Mirrors RunPaste's browse loop.
+// `filterMatched` is set true if any discovered peer passed the --host filter, so the
+// caller can tell a no-match (bad --host) from a genuine no-reachable-gateway.
 template <typename Fn>
-bool WithRegisterGateway(const HostId& localHostId, const std::string& localHostName, Fn exchange) {
+bool WithRegisterGateway(const HostId& localHostId, const std::string& localHostName,
+                         bool& filterMatched, Fn exchange) {
     return MDNSDiscovery::BrowseStream(OneShot::kBrowseCeiling, /*includeSelf=*/true,
         [&](const MDNSDiscovery::DiscoveredPeer& peer) -> bool {
             if (!g_hostFilter.empty() && !OneShot::PeerMatchesHost(peer, g_hostFilter)) return true;  // --host: skip other devices
+            filterMatched = true;
             VerboseLine(L"Trying " + PeerLabel(peer, localHostId) + L"...");
             OneShotPeer connection;
             if (!connection.Connect(peer.ip, peer.port, localHostId, localHostName, peer.hostId,
@@ -717,7 +741,8 @@ int RunRegisterCopy(const std::string& name, bool isPrivate) {
 
     bool ok = false;
     bool refused = false;
-    const bool reached = WithRegisterGateway(localHostId, localHostName, [&](OneShotPeer& conn) -> bool {
+    bool filterMatched = false;
+    const bool reached = WithRegisterGateway(localHostId, localHostName, filterMatched, [&](OneShotPeer& conn) -> bool {
         if (!conn.SendFrame("REGW", regw.data(), static_cast<uint32_t>(regw.size()))) {
             return false;
         }
@@ -737,7 +762,7 @@ int RunRegisterCopy(const std::string& name, bool isPrivate) {
         return false;
     });
     if (!reached) {
-        ErrLine(L"Could not reach any register-capable device.");
+        ReportNoGateway(L"Could not reach any register-capable device.", filterMatched);
         return 1;
     }
     if (refused) {
@@ -775,7 +800,8 @@ int RunRegisterPaste(const std::string& name) {
 
     bool present = false;
     bool refusedPrivate = false;
-    const bool reached = WithRegisterGateway(localHostId, localHostName, [&](OneShotPeer& conn) -> bool {
+    bool filterMatched = false;
+    const bool reached = WithRegisterGateway(localHostId, localHostName, filterMatched, [&](OneShotPeer& conn) -> bool {
         if (!conn.SendFrame("RGET", req.data(), static_cast<uint32_t>(req.size()))) {
             return false;  // transport failed; try the next gateway
         }
@@ -825,7 +851,7 @@ int RunRegisterPaste(const std::string& name) {
         return false;
     });
     if (!reached) {
-        ErrLine(L"Could not reach any register-capable device.");
+        ReportNoGateway(L"Could not reach any register-capable device.", filterMatched);
         return 1;
     }
     if (!present) {
@@ -852,7 +878,8 @@ int RunRegisterLs(const std::string& pattern, bool verbose) {
 
     std::vector<RegisterWire::RegisterListEntry> entries;
     bool got = false;
-    const bool reached = WithRegisterGateway(localHostId, localHostName, [&](OneShotPeer& conn) -> bool {
+    bool filterMatched = false;
+    const bool reached = WithRegisterGateway(localHostId, localHostName, filterMatched, [&](OneShotPeer& conn) -> bool {
         if (!conn.SendFrame("RLST")) {
             return false;
         }
@@ -878,7 +905,7 @@ int RunRegisterLs(const std::string& pattern, bool verbose) {
         return false;
     });
     if (!reached) {
-        ErrLine(L"Could not reach any register-capable device.");
+        ReportNoGateway(L"Could not reach any register-capable device.", filterMatched);
         return 1;
     }
     if (!got) {
@@ -925,7 +952,8 @@ int RunRegisterRm(const std::string& pattern) {
     int removed = 0;
     bool absent = false;    // exact name not present
     bool noMatch = false;   // glob matched nothing
-    const bool reached = WithRegisterGateway(localHostId, localHostName, [&](OneShotPeer& conn) -> bool {
+    bool filterMatched = false;
+    const bool reached = WithRegisterGateway(localHostId, localHostName, filterMatched, [&](OneShotPeer& conn) -> bool {
         std::vector<std::string> targets;
         if (wildcard) {
             // List, match the glob (never the "" default mirror), then tombstone each.
@@ -995,7 +1023,7 @@ int RunRegisterRm(const std::string& pattern) {
         return true;
     });
     if (!reached) {
-        ErrLine(L"Could not reach any register-capable device.");
+        ReportNoGateway(L"Could not reach any register-capable device.", filterMatched);
         return 1;
     }
     if (noMatch) {
@@ -1010,7 +1038,146 @@ int RunRegisterRm(const std::string& pattern) {
     return 0;
 }
 
-enum class Action { None, Gui, KeySet, KeyErase, KeyShow, HostIdShow, HostIdReset, Copy, Paste, RegLs, RegRm };
+// ---- Discovery diagnostics: clipp peers / probe -----------------------------
+
+std::wstring OsLabel(OsType os) {
+    switch (os) {
+    case OsType::Windows:    return L"Windows";
+    case OsType::MacOS:      return L"macOS";
+    case OsType::IOS_iPhone: return L"iPhone";
+    case OsType::IOS_iPad:   return L"iPad";
+    case OsType::Linux:      return L"Linux";
+    case OsType::Unknown:    break;
+    }
+    return L"?";
+}
+
+// One streaming browse, deduped by (hostId, ip, port). includeSelf=true so this
+// device's own running GUI shows up. Runs to the browse ceiling (the callback never
+// stops it) so the full neighbor set is collected. Needs the network key set, or the
+// TXT records don't decrypt and nothing surfaces (the caller checks that first).
+std::vector<MDNSDiscovery::DiscoveredPeer> CollectPeers() {
+    std::vector<MDNSDiscovery::DiscoveredPeer> peers;
+    std::vector<std::wstring> seen;
+    MDNSDiscovery::BrowseStream(OneShot::kBrowseCeiling, /*includeSelf=*/true,
+        [&](const MDNSDiscovery::DiscoveredPeer& peer) -> bool {
+            const std::wstring key =
+                peer.hostId.ToHexWString() + L"/" + ToWide(peer.ip) + L"/" + std::to_wstring(peer.port);
+            if (std::find(seen.begin(), seen.end(), key) == seen.end()) {
+                seen.push_back(key);
+                peers.push_back(peer);
+            }
+            return true;  // keep browsing until the ceiling; collect everyone
+        });
+    return peers;
+}
+
+// Aligned table to stdout: a header row plus data rows, columns left-aligned, two
+// spaces between, no trailing pad on the last column. Shared by peers/probe.
+void PrintTable(const std::vector<std::wstring>& headers,
+                const std::vector<std::vector<std::wstring>>& rows) {
+    std::vector<size_t> width(headers.size(), 0);
+    for (size_t c = 0; c < headers.size(); ++c) width[c] = headers[c].size();
+    for (const auto& row : rows)
+        for (size_t c = 0; c < row.size() && c < width.size(); ++c)
+            width[c] = (std::max)(width[c], row[c].size());
+    const auto emit = [&](const std::vector<std::wstring>& row) {
+        std::wstring line;
+        for (size_t c = 0; c < width.size(); ++c) {
+            const std::wstring cell = c < row.size() ? row[c] : std::wstring();
+            line += (c + 1 == width.size()) ? cell : PadRight(cell, width[c]) + L"  ";
+        }
+        OutLine(line);
+    };
+    emit(headers);
+    for (const auto& row : rows) emit(row);
+}
+
+// `peers`: pure discovery. Lists every device the network browse surfaces (name, IP,
+// port, OS, host id) with no connection attempt — so it answers "what does clipp see?"
+// even when connections are failing, and shows the exact name/IP strings `--host` wants.
+int RunPeers() {
+    if (!g_keyManager.HaveNetworkKey()) {
+        ErrLine(L"No group key configured. Run `clipp key set` first.");
+        return 1;
+    }
+    NetworkStartup net;
+    if (!net.ok) {
+        ErrLine(L"Failed to initialize networking.");
+        return 1;
+    }
+    HostId localHostId;
+    g_settings.ensureHostID(localHostId);
+
+    VerboseLine(L"Browsing for peers...");
+    const std::vector<MDNSDiscovery::DiscoveredPeer> peers = CollectPeers();
+    if (peers.empty()) {
+        ErrLine(L"No devices discovered on the network.");
+        return 1;
+    }
+
+    std::vector<std::vector<std::wstring>> rows;
+    for (const auto& peer : peers) {
+        const std::wstring name = peer.deviceName.empty() ? L"(unknown)" : SanitizePreview(peer.deviceName);
+        const std::wstring tag = (peer.hostId == localHostId) ? L"[this device]" : L"";
+        // 17 chars = the first two dash-separated 8-hex groups (a clean boundary; the
+        // full id is 4 groups). Enough to disambiguate devices on a normal network.
+        rows.push_back({name, ToWide(peer.ip), std::to_wstring(peer.port),
+                        OsLabel(peer.osType), peer.hostId.ToHexWString().substr(0, 17), tag});
+    }
+    PrintTable({L"NAME", L"IP", L"PORT", L"OS", L"HOST ID", L""}, rows);
+    return 0;
+}
+
+// `probe`: the active counterpart to `peers`. Connects to each discovered device and
+// reports reachability and advertised capabilities (paste = serves recent clipboard,
+// registers = serves the named-register protocol). Slower than `peers` — it handshakes
+// with every device, including this one — but it's how you confirm WHY a verb picked,
+// or skipped, a given gateway.
+int RunProbe() {
+    if (!g_keyManager.HaveNetworkKey()) {
+        ErrLine(L"No group key configured. Run `clipp key set` first.");
+        return 1;
+    }
+    NetworkStartup net;
+    if (!net.ok) {
+        ErrLine(L"Failed to initialize networking.");
+        return 1;
+    }
+    HostId localHostId;
+    g_settings.ensureHostID(localHostId);
+    const std::string localHostName =
+        clipp::GetLocalPeerDisplayName("unknown", CryptoChannel::HOSTNAME_MAX_BYTES);
+
+    VerboseLine(L"Browsing for peers...");
+    const std::vector<MDNSDiscovery::DiscoveredPeer> peers = CollectPeers();
+    if (peers.empty()) {
+        ErrLine(L"No devices discovered on the network.");
+        return 1;
+    }
+
+    std::vector<std::vector<std::wstring>> rows;
+    for (const auto& peer : peers) {
+        VerboseLine(L"Probing " + PeerLabel(peer, localHostId) + L"...");
+        OneShotPeer connection;
+        const bool reachable = connection.Connect(peer.ip, peer.port, localHostId, localHostName,
+                                                  peer.hostId, OneShot::kConnectTimeout,
+                                                  OneShot::kSessionTimeout);
+        std::wstring paste = L"-", registers = L"-";
+        if (reachable) {
+            const auto& caps = connection.RemoteCaps();
+            paste     = (caps[0] & CryptoChannel::CAP0_SERVES_RECENT)    ? L"yes" : L"no";
+            registers = (caps[0] & CryptoChannel::CAP0_SERVES_REGISTERS) ? L"yes" : L"no";
+        }
+        const std::wstring name = peer.deviceName.empty() ? L"(unknown)" : SanitizePreview(peer.deviceName);
+        const std::wstring tag = (peer.hostId == localHostId) ? L"[this device]" : L"";
+        rows.push_back({name, ToWide(peer.ip), reachable ? L"yes" : L"no", paste, registers, tag});
+    }
+    PrintTable({L"NAME", L"IP", L"REACHABLE", L"PASTE", L"REGISTERS", L""}, rows);
+    return 0;
+}
+
+enum class Action { None, Gui, KeySet, KeyErase, KeyShow, HostIdShow, HostIdReset, Copy, Paste, RegLs, RegRm, Peers, Probe };
 
 }  // namespace
 
@@ -1085,6 +1252,14 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
     CLI::App* rmCommand = app.add_subcommand("rm", "Delete a named register (name or glob)");
     rmCommand->add_option("name", rmRegisterName, "Register name or glob (? and *) to delete")->required();
     rmCommand->callback([&]() { action = Action::RegRm; });
+
+    CLI::App* peersCommand = app.add_subcommand(
+        "peers", "List devices discovered on the network (name, IP, port, OS) — these are the names/IPs for --host");
+    peersCommand->callback([&]() { action = Action::Peers; });
+
+    CLI::App* probeCommand = app.add_subcommand(
+        "probe", "Connect to each discovered device and report reachability + capabilities");
+    probeCommand->callback([&]() { action = Action::Probe; });
 
     CLI::App* keyCommand = app.add_subcommand("key", "Group key management");
     keyCommand->require_subcommand(1);
@@ -1212,6 +1387,10 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
         return RunRegisterLs(lsPattern, verbose);
     case Action::RegRm:
         return RunRegisterRm(rmRegisterName);
+    case Action::Peers:
+        return RunPeers();
+    case Action::Probe:
+        return RunProbe();
     case Action::Gui:
     case Action::None:
         break;

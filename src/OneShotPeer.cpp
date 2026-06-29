@@ -103,7 +103,8 @@ std::optional<MDNSDiscovery::DiscoveredPeer> RelayPayloads(
     const HostId& localHostId,
     const std::string& localHostName,
     bool includeSelf,
-    const std::string& hostFilter) {
+    const std::string& hostFilter,
+    bool* outFilterMatched) {
     for (ClipboardPayload& payload : payloads) {
         payload.meta.flags |= NetworkDefs::CLPM_FLAG_RELAY;
     }
@@ -113,6 +114,9 @@ std::optional<MDNSDiscovery::DiscoveredPeer> RelayPayloads(
         [&](const MDNSDiscovery::DiscoveredPeer& peer) -> bool {
             if (!hostFilter.empty() && !PeerMatchesHost(peer, hostFilter)) {
                 return true;  // --host: skip everything but the named device
+            }
+            if (outFilterMatched != nullptr) {
+                *outFilterMatched = true;  // a peer passed the filter; failure now means unreachable
             }
             OneShotPeer connection;
             if (!connection.Connect(peer.ip, peer.port, localHostId, localHostName, peer.hostId,

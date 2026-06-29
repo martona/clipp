@@ -233,6 +233,19 @@ The **`--private`** flag: `clipp copy --private otp` masks the value in `ls -v` 
 
 Like the command-line clipboard, registers are text-only in this release; and like the clipboard, they survive only in the GUI apps' memory. They're available as long as at least one instance of the desktop app is running. They achieve eventual consistency through LWW-CRDT when it comes to multiple writes at the same time, or group splits due to networking conditions. Due to the complexity it introduces (tombstone records) a sane-but-comfortable max age of 90 days was chosen for all records; this is refreshed on register read _and_ write.
 
+### Discovery diagnostics
+
+To see what your device can find on the network, `clipp peers` lists every discovered device — its name, IP, port, and OS — without connecting to anything. `clipp probe` goes a step further and actually connects to each, reporting whether it's reachable and what it serves (clipboard paste, named registers):
+
+```sh
+clipp peers             # name / IP / port / OS of every discovered device
+clipp probe             # connect to each: reachable? serves paste? registers?
+```
+
+Both need a group key set (devices only appear once their announcements decrypt under your key).
+
+By default the network verbs use the first suitable peer they find. The **`--host`** option (on `copy`/`paste`/`ls`/`rm`) pins them to one device — but it's an **exact device-name or IP filter, not a hostname lookup**: pass a name or IP exactly as `clipp peers` prints it (e.g. `--host mbp` or `--host 192.168.1.140`), not a `.local`/`.lan`/`localhost` form, which won't match.
+
 ## Troubleshooting
 
 This section covers runtime issues. For build problems, see [BUILDING.md's troubleshooting section](BUILDING.md#troubleshooting).
