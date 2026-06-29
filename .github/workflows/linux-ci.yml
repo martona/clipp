@@ -276,7 +276,7 @@ jobs:
           # The smoke then runs clipp, which dynamically links libavahi-client.so.3: any
           # invocation (even --help) load-fails if the dep didn't resolve OR if the
           # binary's glibc floor is above the container's -- so one run guards both.
-          docker run --rm -e ARCH -e KIND -v "$PWD/packages:/pkg:ro" "$IMAGE" bash -c '
+          docker run --rm -e IMAGE -e ARCH -e KIND -v "$PWD/packages:/pkg:ro" "$IMAGE" bash -c '
             set -eu
             echo "=== install ($KIND, $ARCH) ==="
             case "$KIND" in
