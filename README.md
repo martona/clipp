@@ -31,13 +31,11 @@ Clipp is LAN-only by design. If you want the same workflow across networks, use 
 
 ## What It Does
 
-Clipp moves clipboard history between your own devices without a cloud service in the middle.
+Clipp syncs clipboard text and images between your own devices without a cloud service in the middle.
 
-- Syncs clipboard text and images across Windows, macOS, and iOS, with a terminal-only client for Linux.
 - Discovers peers on the local network automatically.
 - Sends clipboard data directly between devices.
 - Shows recent clipboard activity so you can copy an earlier item again.
-- Works over trusted mesh or overlay networks when you want the same setup away from your LAN.
 - Pipes clipboard text to and from the network from the command line (`clipp copy` / `clipp paste`), including over SSH.
 - Keeps named, persistent clipboard registers that sync across devices (`clipp copy <name>` / `paste <name>`, listed and removed with `ls` / `rm`).
 
@@ -101,7 +99,7 @@ Download the portable zip ([amd64][win-amd64-zip] / [arm64][win-arm64-zip]), ext
 brew install martona/tap/clipp
 ```
 
-Otherwise, install from the [Mac App Store][app-store-mac] (the easy path — it stays updated automatically), or download the [Apple Silicon zip][mac-arm64-zip] directly: open it, and drag `Clipp.app` to `/Applications` then doubleclick to open. Clipp registers itself as a macOS background item so it can start with the system: use the Exit option in either the main app window or the menu bar menu to undo this. To use `clipp copy` / `paste` you probably want the app's binary (`/Applications/clipp.app/Contents/MacOS/clipp`) on your PATH (the Homebrew cask does this for you).
+Alternatively install from the [Mac App Store][app-store-mac], or download the [Apple Silicon zip][mac-arm64-zip] directly: open it, and drag `Clipp.app` to `/Applications` then doubleclick to open. Clipp registers itself as a macOS background item so it can start with the system: use the Exit option in either the main app window or the menu bar menu to undo this. To use `clipp copy` / `paste` you probably want the app's binary (`/Applications/clipp.app/Contents/MacOS/clipp`) on your PATH.
 
 ### iOS
 
@@ -109,33 +107,33 @@ Clipp is free on the App Store:
 
 <a href="https://apps.apple.com/us/app/clipp-net/id6773113533"><img src="https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg" alt="Download Clipp on the App Store" height="40"></a>
 
-Prefer to build it yourself? Install on a physical device from Xcode (see [BUILDING.md](BUILDING.md#ios-device)).
-
 ### Linux
 
-The Linux client is terminal-only (`clipp copy` / `clipp paste`) — there is no GUI. The quickest path is the installer, which detects your architecture and package manager, picks the right package, and pulls in the Avahi dependency:
+The Linux client is terminal-only (`clipp copy` / `clipp paste`). The easiest is the installer script, which detects your architecture and package manager, picks the right package, and pulls in the Avahi dependency:
 
 ```sh
 curl -fsSL https://github.com/martona/clipp/releases/latest/download/install.sh | sudo bash
 ```
 
-Prefer to do it by hand? Grab the package for your distro from the table above (or `curl -LO` the link), then install it with your package manager — not the raw `dpkg`/`rpm` tools — so the Avahi dependency is pulled in automatically. Replace `<arch>` with `amd64` or `arm64`:
+Prefer to do it by hand? Grab the package for your distro from the table above, then install it with your package manager so the Avahi dependency is pulled in automatically. Replace `<arch>` with `amd64` or `arm64`:
 
 ```sh
 # Debian / Ubuntu
 sudo apt install ./clipp-linux-<arch>.deb
 
-# Fedora / RHEL / openSUSE
-sudo dnf install ./clipp-linux-<arch>.rpm      # Fedora/RHEL
-sudo zypper install ./clipp-linux-<arch>.rpm   # openSUSE
+# Fedora / RHEL
+sudo dnf install ./clipp-linux-<arch>.rpm
+
+# openSUSE
+sudo zypper install ./clipp-linux-<arch>.rpm 
 
 # Arch
 sudo pacman -U ./clipp-linux-<arch>.pkg.tar.zst
 ```
 
-The package installs `clipp` to `/usr/bin` and pulls in `libavahi-client`; it *recommends* `avahi-daemon`, which `apt`/`dnf` install by default (discovery needs it running). If you used `dpkg -i` / `rpm -i` on the downloaded file directly, those don't process recommends — enable the daemon yourself: `sudo systemctl enable --now avahi-daemon`. A raw static binary ([amd64][lin-amd64-bin] / [arm64][lin-arm64-bin]) is also published for distros without a matching package; `chmod +x` it and drop it anywhere on your `PATH`.
+The package installs `clipp` to `/usr/bin` and pulls in `libavahi-client`. A raw static binary ([amd64][lin-amd64-bin] / [arm64][lin-arm64-bin]) is also published for distros without a matching package; `chmod +x` it and drop it anywhere on your `PATH`.
 
-Set up your group from the terminal with `clipp key set` (it prompts for the group name and passphrase, exactly like the GUI's Network tab), then `clipp copy` / `clipp paste`. See [Command line](#command-line) below. Note that with no GUI, the Linux client relies on at least one desktop peer being reachable on the network to relay through.
+Set up your group from the terminal with `clipp key set` (it prompts for the group name and passphrase), then `clipp copy` / `clipp paste`. See [Command line](#command-line) below. Note that with no GUI, the Linux client relies on at least one desktop peer being reachable on the network to relay through.
 
 ### Verifying downloads
 
@@ -169,23 +167,23 @@ codesign -dvvv Clipp.app
 When you launch Clipp on a new device, open the **Network** tab and choose:
 
 - A **group name** — a label for your set of devices. Not a secret, but should be entered in exactly the same way on all your devices.
-- A **passphrase** — the shared secret that makes one of your devices indistinguishable from another to Clipp. Treat this with the care you'd give any password.
+- A **passphrase** — the shared secret. Treat this with the care you'd give any password.
 
 Clipp derives a master key from those two inputs and shows a fingerprint. Repeat the setup on every device you want to sync, using exactly the same group name and passphrase. If the inputs match, the fingerprint matches and the devices will connect immediately; if a device shows a different fingerprint, one of the inputs is wrong on one device, and they won't sync until you fix it.
 
 ### Day-to-day
 
-Once two or more devices show the same fingerprint, they discover each other on the local network within a few seconds and appear in the **Paired devices** list.
+Once two or more devices show the same fingerprint, they discover each other on the local network within seconds and appear in the **Paired devices** list.
 
-The simple flow: copy something (text or image) on device A, paste it on device B. You can ignore the UI entirely if that's all you need.
+The simple flow: copy something on device A, paste it on device B. You can ignore the UI entirely if that's all you need.
 
 If you want more:
 
 - The **Clipp** (activity) tab shows recent items received from every connected peer. Click any item to copy it back to your local clipboard.
-- Text and images sync. Larger items take a moment. Copying files across devices is out of scope for the current release.
+- Text and images sync. Copying files across devices is out of scope for the current release.
 - The activity history lives in RAM only and is cleared when you quit. It's repopulated from the network when you open the app again.
 
-Single-line text without whitespace is treated as a password and shown masked in the activity stream. The clipboard content itself isn't modified. iOS has a peek gesture to briefly reveal the text; the desktop apps don't have one yet.
+Single-line text without whitespace is treated as a password and shown masked in the activity stream. (The clipboard content itself isn't modified.)
 
 ### Tray and menu bar
 
@@ -195,7 +193,7 @@ Single-line text without whitespace is treated as a password and shown masked in
 
 ### Command line
 
-On the desktop, the same binary doubles as a command-line tool, dispatching on its arguments — so moving the clipboard doesn't require the window in front of you, including over SSH. `clipp copy` reads stdin and sends it to your devices; `clipp paste` fetches the newest item and writes it to stdout. It's `pbcopy`/`pbpaste` for your Clipp network:
+On the desktop, the same binary doubles as a command-line tool, dispatching on its arguments. `clipp copy` reads stdin and sends it to your devices; `clipp paste` fetches the newest item and writes it to stdout. It's `pbcopy`/`pbpaste` for your Clipp network:
 
 ```sh
 echo "deploy v2.1.0" | clipp copy    # push stdin to every device
