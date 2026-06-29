@@ -113,7 +113,13 @@ Prefer to build it yourself? Install on a physical device from Xcode (see [BUILD
 
 ### Linux
 
-The Linux client is terminal-only (`clipp copy` / `clipp paste`) — there is no GUI. Grab the package for your distro from the table above (or `curl -LO` the link), then install it with your package manager — not the raw `dpkg`/`rpm` tools — so the Avahi dependency is pulled in automatically. Replace `<arch>` with `amd64` or `arm64`:
+The Linux client is terminal-only (`clipp copy` / `clipp paste`) — there is no GUI. The quickest path is the installer, which detects your architecture and package manager, picks the right package, and pulls in the Avahi dependency:
+
+```sh
+curl -fsSL https://github.com/martona/clipp/releases/latest/download/install.sh | sudo bash
+```
+
+Prefer to do it by hand? Grab the package for your distro from the table above (or `curl -LO` the link), then install it with your package manager — not the raw `dpkg`/`rpm` tools — so the Avahi dependency is pulled in automatically. Replace `<arch>` with `amd64` or `arm64`:
 
 ```sh
 # Debian / Ubuntu

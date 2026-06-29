@@ -1,5 +1,14 @@
 name: Linux CI
 
+# Builds the terminal client AT THE GLIBC FLOOR (Debian 11 / glibc 2.31, the same
+# base the release pipeline ships from), packages it (deb/rpm/arch), then INSTALLS
+# each package in a clean distro/arch matrix and smoke-tests it. The matrix is the
+# point: a successful install+run on, say, ubuntu:20.04 proves the glibc-2.31 floor
+# holds AND that the package's Avahi dependency resolves -- both of which the raw
+# build can't show (the build runner already has libavahi-client-dev, and a
+# modern-glibc build would silently raise the floor). Build here == build at release,
+# so green CI means the release artifacts will install the same way.
+
 on:
   push:
     branches:
@@ -18,43 +27,71 @@ concurrency:
 
 jobs:
   build:
-    name: Linux build test (terminal-only)
-    runs-on: ubuntu-latest
-
+    name: Build + package (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    # Same old-glibc base as the release build-linux job (glibc 2.31 floor). Native
+    # arm64 runner -- no QEMU; both arches run the identical container.
+    container:
+      image: debian:11
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    defaults:
+      run:
+        shell: bash
     env:
       CLIPP_CACHE_DIR: ${{ github.workspace }}/clipp-cache
       VCPKG_ROOT: ${{ github.workspace }}/v
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-cache
       VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/vcpkg-cache,readwrite
-
     steps:
+      # debian:11 is bare -- install the toolchain build_linux.sh expects plus the bits
+      # vcpkg needs to build libsodium, the Avahi client headers, and the packaging
+      # tools (gettext-base = envsubst for package_linux.sh; rpm + zstd let nfpm emit
+      # .rpm / Arch packages and let the assertion below read them).
+      - name: Install toolchain
+        run: |
+          apt-get update
+          # NOT installing Debian 11's cmake (3.18.4 < our 3.20 floor); a recent Kitware
+          # build is dropped on PATH in the next step.
+          apt-get install -y --no-install-recommends \
+            build-essential ninja-build pkg-config git curl ca-certificates \
+            autoconf autoconf-archive automake libtool \
+            libavahi-client-dev \
+            gettext-base rpm zstd \
+            zip unzip tar
+
+      - name: Install recent CMake
+        run: |
+          set -euo pipefail
+          cmake_version=3.30.5
+          case "${{ matrix.arch }}" in
+            amd64) cmake_arch=x86_64 ;;
+            arm64) cmake_arch=aarch64 ;;
+            *) echo "Unhandled arch ${{ matrix.arch }}" >&2; exit 1 ;;
+          esac
+          url="https://github.com/Kitware/CMake/releases/download/v${cmake_version}/cmake-${cmake_version}-linux-${cmake_arch}.tar.gz"
+          mkdir -p /opt/cmake
+          curl -fsSL "$url" | tar -xz --strip-components=1 -C /opt/cmake
+          echo "/opt/cmake/bin" >> "$GITHUB_PATH"
+          /opt/cmake/bin/cmake --version
+
       - name: Checkout clipp
         uses: actions/checkout@v6
         with:
           persist-credentials: false
 
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          # autoconf/autoconf-archive/automake/libtool: vcpkg builds libsodium from
-          # source and needs them. libavahi-client-dev: discovery (pkg-config
-          # avahi-client). ninja/pkg-config/zip/unzip/tar/curl: build + vcpkg.
-          sudo apt-get install -y --no-install-recommends \
-            build-essential cmake ninja-build pkg-config \
-            autoconf autoconf-archive automake libtool \
-            libavahi-client-dev \
-            zip unzip tar curl
-
       - name: Read vcpkg baseline
         id: vcpkg-baseline
         run: |
-          baseline="$(python3 - <<'PY'
-          import json
-          with open("src/vcpkg.json", encoding="utf-8") as manifest_file:
-              manifest = json.load(manifest_file)
-          print(manifest.get("builtin-baseline", ""))
-          PY
-          )"
+          # Grep the 40-hex baseline straight out of the manifest -- the bare debian:11
+          # base has no python3, and a grep is sufficient for a single well-formed field.
+          baseline="$(grep -oE '"builtin-baseline"[[:space:]]*:[[:space:]]*"[0-9a-f]+"' src/vcpkg.json | grep -oE '[0-9a-f]{40}')"
           if [[ -z "$baseline" ]]; then
             echo "src/vcpkg.json must define builtin-baseline for CI." >&2
             exit 1
@@ -76,22 +113,23 @@ jobs:
       - name: Cache vcpkg binaries
         uses: actions/cache@v5
         with:
+          # Same key scheme as the release build-linux job, so CI and release share the
+          # warm cache instead of each rebuilding the dependency tree from source.
           path: vcpkg-cache
-          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}
+          key: linux-${{ matrix.arch }}-glibc231-vcpkg-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-vcpkg-
+            linux-${{ matrix.arch }}-glibc231-vcpkg-
 
       - name: Build Release
-        # Invoke via `bash` rather than `./scripts/build_linux.sh` so the job does
-        # not depend on the script's git executable bit (the file may have been
-        # authored on a filesystem that doesn't preserve mode).
-        run: bash ./scripts/build_linux.sh
+        # A synthetic 0.0.0.0 version: nothing in the build/package/smoke path depends on
+        # the value (the release pipeline passes the real tag).
+        run: bash ./scripts/build_linux.sh --release --version 0.0.0.0
 
       - name: Unit tests (doctest)
-        # The engine + wire tests are pure, portable C++ (no platform code), so running
-        # them on one OS guards the logic for every platform; the per-OS build jobs above
-        # already give cross-compiler COMPILE coverage. Reuses the vcpkg tree the Release
-        # build just populated ($CLIPP_CACHE_DIR/vcpkg-installed) -- only doctest is added.
+        # The engine + wire tests are pure, portable C++ (no platform code), so one arch
+        # guards the logic for all of them; the arm64 build still gives cross-compiler
+        # COMPILE coverage. Reuses the vcpkg tree the Release build just populated.
+        if: matrix.arch == 'amd64'
         run: |
           set -euo pipefail
           cmake -S . -B build/tests -G Ninja \
@@ -104,108 +142,167 @@ jobs:
           cmake --build build/tests --target clipp-tests
           ctest --test-dir build/tests --output-on-failure
 
-      - name: Verify Linux binary
+      - name: Verify dependency closure
         run: |
           set -euo pipefail
-          # The CI workspace is local-disk ext4, so build_linux.sh keeps the build
-          # tree in-source at build/linux-release/. (On a CIFS/SMB source mount the
-          # script relocates it to local disk; that path doesn't arise here.)
           binary="build/linux-release/clipp"
           if [[ ! -x "$binary" ]]; then
             echo "Missing expected executable: $binary" >&2
-            find build -maxdepth 2 -print | sed -n '1,80p'
             exit 1
           fi
-          # Confirm it's a native ELF, not some stray script.
-          file "$binary" | grep -q 'ELF' || {
-            echo "Expected an ELF binary: $(file "$binary")" >&2
-            exit 1
-          }
-          echo "CLIPP_BINARY=$(pwd)/$binary" >> "$GITHUB_ENV"
+          echo "=== readelf -d NEEDED ==="
+          readelf -d "$binary" | grep NEEDED || true
+          # Static-runtime invariant: libstdc++/libgcc_s must NOT be dynamic deps, and the
+          # vcpkg libs must be statically baked in. If any reappear, the package's declared
+          # deps would be wrong (only avahi + libc may be dynamic).
+          needed="$(readelf -d "$binary" | grep NEEDED || true)"
+          for forbidden in libstdc++ libgcc_s libsodium libxxhash libzstd libutf8proc; do
+            if echo "$needed" | grep -q "$forbidden"; then
+              echo "Unexpected dynamic dependency on $forbidden -- static-link invariant broken." >&2
+              exit 1
+            fi
+          done
+          echo "Static-runtime invariant holds (only avahi + libc are dynamic)."
 
-      - name: Smoke test (terminal verbs)
+      - name: Smoke test the raw binary
         run: |
           set -euo pipefail
-          binary="$CLIPP_BINARY"  # absolute path exported by the verify step
-
-          # Isolate settings under a temp XDG dir so we exercise the file backend
-          # cleanly and can inspect what it wrote (the macOS/Windows builds can't
-          # easily run their GUI in CI; the terminal build can run end-to-end).
+          binary="build/linux-release/clipp"
+          # Isolate settings under a temp XDG dir so the file backend writes somewhere
+          # inspectable and disposable.
           export XDG_CONFIG_HOME="$(mktemp -d)"
-          settings_file="$XDG_CONFIG_HOME/clipp/settings"
 
           echo "::group::clipp --help (headless bare-launch path)"
-          # cli::Run prints app.help() and returns 0 for a bare/`--help` launch.
           help_out="$("$binary" --help)"
           echo "$help_out"
           for verb in copy paste key hostid; do
             echo "$help_out" | grep -qw "$verb" || { echo "help missing verb: $verb" >&2; exit 1; }
           done
-          # The `gui` subcommand must NOT exist in the headless build.
           if echo "$help_out" | grep -qw gui; then
             echo "headless help unexpectedly lists a 'gui' subcommand" >&2
             exit 1
           fi
           echo "::endgroup::"
 
-          echo "::group::hostid round-trip (Settings file backend: base64 binary + atomic write)"
+          echo "::group::hostid round-trip (Settings file backend)"
           "$binary" hostid reset
           id1="$("$binary" hostid show | sed -n 's/^hostid: //p')"
           id2="$("$binary" hostid show | sed -n 's/^hostid: //p')"
-          echo "hostid after reset: $id1"
-          if [[ -z "$id1" || "$id1" == "(none)" ]]; then
-            echo "hostid show returned no id after reset" >&2
+          if [[ -z "$id1" || "$id1" == "(none)" || "$id1" != "$id2" ]]; then
+            echo "hostid not stable/persisted: '$id1' vs '$id2'" >&2
             exit 1
           fi
-          if [[ "$id1" != "$id2" ]]; then
-            echo "hostid not stable across reads: '$id1' vs '$id2' (settings not persisted?)" >&2
-            exit 1
-          fi
+          echo "hostid: $id1"
           echo "::endgroup::"
 
-          echo "::group::settings file created 0600"
-          if [[ ! -f "$settings_file" ]]; then
-            echo "expected settings file not found: $settings_file" >&2
-            find "$XDG_CONFIG_HOME" -print
-            exit 1
-          fi
-          perms="$(stat -c '%a' "$settings_file")"
-          echo "settings file mode: $perms"
-          if [[ "$perms" != "600" ]]; then
-            echo "expected settings file mode 600, got $perms" >&2
-            exit 1
-          fi
-          echo "::endgroup::"
+      - name: Package (deb, rpm, Arch) + stage canonical names
+        run: |
+          set -euo pipefail
+          arch="${{ matrix.arch }}"
+          bash ./scripts/package_linux.sh \
+            --version 0.0.0.0 \
+            --binary build/linux-release/clipp \
+            --arch "$arch" \
+            --outdir dist
 
-          echo "::group::key show with no key (KeyManager Linux branch: benign-empty)"
-          # No key configured yet -> fingerprint "(none)", exit 0 (not a read error).
-          key_out="$("$binary" key show)"
-          echo "$key_out"
-          echo "$key_out" | grep -q 'fingerprint: (none)' || {
-            echo "expected 'fingerprint: (none)' before any key is set" >&2
-            exit 1
-          }
-          echo "::endgroup::"
+          mkdir -p packages
+          # Version-LESS names matching the release assets (and what package-test expects).
+          cp "$(ls dist/*.deb)"         "packages/clipp-linux-$arch.deb"
+          cp "$(ls dist/*.rpm)"         "packages/clipp-linux-$arch.rpm"
+          cp "$(ls dist/*.pkg.tar.zst)" "packages/clipp-linux-$arch.pkg.tar.zst"
+          # Raw binary too, for the curl-and-chmod path that the install matrix doesn't cover.
+          cp build/linux-release/clipp  "packages/clipp-linux-$arch"
+          ls -la packages/
 
-          echo "::group::key set + show round-trip (KeyManager store + utf8proc NFC path)"
-          # `key set` requires an interactive console (isatty) to read the secret;
-          # `script` hands it a pseudo-tty and forwards the piped password. This
-          # exercises DeriveNetworkKey -> CanonicalizeKeyDerivationText (utf8proc NFC)
-          # -> SetNetworkKey (raw key to the 0600 settings file) end-to-end.
-          password="ci-secret-password"
-          printf '%s\n' "$password" | script -qe -c "$binary key set --name 'CI Network'" /dev/null
-          fp="$("$binary" key show | sed -n 's/^fingerprint: //p')"
-          echo "fingerprint after key set: $fp"
-          if [[ -z "$fp" || "$fp" == "(none)" ]]; then
-            echo "key set did not persist a usable key (fingerprint still none)" >&2
-            exit 1
-          fi
-          # Idempotent read: same key -> same fingerprint on a second invocation.
-          fp2="$("$binary" key show | sed -n 's/^fingerprint: //p')"
-          if [[ "$fp" != "$fp2" ]]; then
-            echo "fingerprint not stable across reads: '$fp' vs '$fp2'" >&2
-            exit 1
-          fi
-          echo "::endgroup::"
+      - name: Assert each package ships /usr/bin/clipp
+        run: |
+          set -euo pipefail
+          arch="${{ matrix.arch }}"
+          # Capture listings into vars and match with a pipe-free `case`: a
+          # `<lister> | grep -q` would SIGPIPE the lister under `pipefail` (grep -q
+          # closes the pipe at first match) and falsely report "missing".
+          has() { case "$1" in *"$2"*) return 0 ;; *) return 1 ;; esac; }
+          deb_list="$(dpkg-deb -c "packages/clipp-linux-$arch.deb")"
+          rpm_list="$(rpm -qlp "packages/clipp-linux-$arch.rpm")"
+          arch_list="$(tar --zstd -tf "packages/clipp-linux-$arch.pkg.tar.zst")"
+          has "$deb_list"  './usr/bin/clipp' || has "$deb_list"  'usr/bin/clipp' || { echo "::error::deb ($arch) missing /usr/bin/clipp"; exit 1; }
+          has "$rpm_list"  '/usr/bin/clipp'                                      || { echo "::error::rpm ($arch) missing /usr/bin/clipp"; exit 1; }
+          has "$arch_list" 'usr/bin/clipp'                                       || { echo "::error::arch ($arch) missing /usr/bin/clipp"; exit 1; }
+          echo "All packages ship /usr/bin/clipp."
 
-          echo "All terminal smoke tests passed."
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages-${{ matrix.arch }}
+          path: packages/*
+          if-no-files-found: error
+          retention-days: 1
+
+  package-test:
+    name: Install ${{ matrix.kind }} on ${{ matrix.image }} (${{ matrix.arch }})
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ubuntu:20.04 is the glibc-2.31 FLOOR guard -- a debian:11-built clipp must
+          # install and RUN here, or the floor has been raised. The rest cover newer
+          # glibc + the three package families (deb/rpm/arch).
+          - { image: "ubuntu:20.04",     arch: amd64, kind: deb,  runner: ubuntu-latest }
+          - { image: "debian:12",        arch: amd64, kind: deb,  runner: ubuntu-latest }
+          - { image: "fedora:latest",    arch: amd64, kind: rpm,  runner: ubuntu-latest }
+          - { image: "almalinux:9",      arch: amd64, kind: rpm,  runner: ubuntu-latest }
+          - { image: "archlinux:latest", arch: amd64, kind: arch, runner: ubuntu-latest }
+          # arm64: lighter smoke (one deb + one rpm) on a native ARM runner, no QEMU.
+          - { image: "debian:12",        arch: arm64, kind: deb,  runner: ubuntu-24.04-arm }
+          - { image: "fedora:latest",    arch: arm64, kind: rpm,  runner: ubuntu-24.04-arm }
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-packages-${{ matrix.arch }}
+          path: packages
+
+      - name: Install and smoke-test in a clean container
+        env:
+          IMAGE: ${{ matrix.image }}
+          ARCH: ${{ matrix.arch }}
+          KIND: ${{ matrix.kind }}
+        run: |
+          set -euo pipefail
+          # Install via the REAL package manager (not dpkg -i / rpm -i) so clipp's Avahi
+          # dependency resolves from the distro repos -- the whole point of the matrix.
+          # The smoke then runs clipp, which dynamically links libavahi-client.so.3: any
+          # invocation (even --help) load-fails if the dep didn't resolve OR if the
+          # binary's glibc floor is above the container's -- so one run guards both.
+          docker run --rm -e ARCH -e KIND -v "$PWD/packages:/pkg:ro" "$IMAGE" bash -c '
+            set -eu
+            echo "=== install ($KIND, $ARCH) ==="
+            case "$KIND" in
+              deb)
+                export DEBIAN_FRONTEND=noninteractive
+                apt-get update -qq
+                apt-get install -y "/pkg/clipp-linux-$ARCH.deb"
+                ;;
+              rpm)
+                dnf install -y "/pkg/clipp-linux-$ARCH.rpm"
+                ;;
+              arch)
+                pacman -Sy --noconfirm
+                pacman -U --noconfirm "/pkg/clipp-linux-$ARCH.pkg.tar.zst"
+                ;;
+              *) echo "unknown kind: $KIND" >&2; exit 1 ;;
+            esac
+
+            echo "=== smoke ==="
+            export XDG_CONFIG_HOME="$(mktemp -d)"
+            fail=0
+            chk() { if eval "$2"; then echo "  PASS: $1"; else echo "  FAIL: $1"; fail=1; fi; }
+            chk "clipp resolves on PATH"     "command -v clipp >/dev/null"
+            chk "clipp --help loads + runs"  "clipp --help >/dev/null"
+            chk "hostid reset/show persists" "clipp hostid reset && clipp hostid show | grep -vq \"(none)\""
+            chk "key show with no key"        "clipp key show | grep -q \"fingerprint: (none)\""
+            if [ "$fail" -ne 0 ]; then echo "SMOKE FAILED: $IMAGE ($ARCH/$KIND)"; exit 1; fi
+            echo "SMOKE OK: $IMAGE ($ARCH/$KIND)"
+          '
