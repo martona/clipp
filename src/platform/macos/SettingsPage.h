@@ -24,6 +24,7 @@ public:
     void OnHistorySliderChanged();
     void OnResetHostID();
     void OnHonorPrivacyMarkersChanged();
+    void OnMaskShortTextPreviewsChanged();
     void OnLaunchAtLoginChanged();
 
 private:
@@ -59,6 +60,7 @@ private:
     NSTextField* hostIDValue_ = nullptr;
     NSTextField* hostIDWarningText_ = nullptr;
     NSButton* resetHostIDButton_ = nullptr;
+    NSButton* maskShortTextPreviewsCheckbox_ = nullptr;
     NSButton* honorPrivacyMarkersCheckbox_ = nullptr;
     NSButton* launchAtLoginCheckbox_ = nullptr;
     NSTextField* statusMessage_ = nullptr;

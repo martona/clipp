@@ -47,6 +47,7 @@ private:
     winrt::Windows::UI::Xaml::Controls::TextBlock historyMemoryValue_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBlock historyAgeValue_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBlock historyItemValue_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::CheckBox maskShortTextPreviewsCheck_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::CheckBox honorPrivacyMarkersCheck_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBlock statusMessage_{ nullptr };
     bool loadingSettings_{ false };

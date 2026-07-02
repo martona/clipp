@@ -13,6 +13,7 @@ namespace {
     constexpr wchar_t kClipboardHistoryMaxItemsName[] = L"ClipboardHistoryMaxItems";
     constexpr wchar_t kClipboardSyncMaxItemsName[] = L"ClipboardSyncMaxItems";
     constexpr wchar_t kHonorExternalPrivacyMarkersName[] = L"HonorExternalPrivacyMarkers";
+    constexpr wchar_t kMaskShortTextPreviewsName[] = L"MaskShortTextPreviews";
     constexpr wchar_t kOriginSequenceFloorName[] = L"OriginSequenceFloor";
     constexpr wchar_t kRegisterTtlSecondsName[] = L"RegisterTtlSeconds";
     constexpr wchar_t kRegisterMaxCountName[] = L"RegisterMaxCount";
@@ -52,6 +53,7 @@ Settings::Settings()
       clipboardHistoryMaxItems_(DefaultClipboardHistoryMaxItems),
       clipboardSyncMaxItems_(DefaultClipboardSyncMaxItems),
       honorExternalPrivacyMarkers_(DefaultHonorExternalPrivacyMarkers),
+      maskShortTextPreviews_(DefaultMaskShortTextPreviews),
       registerTtlSeconds_(DefaultRegisterTtlSeconds),
       registerMaxCount_(DefaultRegisterMaxCount) {
     LoadCache();
@@ -95,6 +97,11 @@ uint64_t Settings::clipboardSyncMaxItems() const {
 bool Settings::honorExternalPrivacyMarkers() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return honorExternalPrivacyMarkers_;
+}
+
+bool Settings::maskShortTextPreviews() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return maskShortTextPreviews_;
 }
 
 bool Settings::set_listenerIp(const std::string& value) {
@@ -172,6 +179,15 @@ bool Settings::set_honorExternalPrivacyMarkers(bool value) {
     }
     std::lock_guard<std::mutex> lock(mutex_);
     honorExternalPrivacyMarkers_ = value;
+    return true;
+}
+
+bool Settings::set_maskShortTextPreviews(bool value) {
+    if (!WriteUint32Value(kMaskShortTextPreviewsName, value ? 1 : 0)) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    maskShortTextPreviews_ = value;
     return true;
 }
 
@@ -284,6 +300,7 @@ bool Settings::LoadCache() {
     uint64_t clipboardHistoryMaxItems = DefaultClipboardHistoryMaxItems;
     uint64_t clipboardSyncMaxItems = DefaultClipboardSyncMaxItems;
     int honorExternalPrivacyMarkers = DefaultHonorExternalPrivacyMarkers ? 1 : 0;
+    int maskShortTextPreviews = DefaultMaskShortTextPreviews ? 1 : 0;
     uint64_t originSequenceFloor = 0;
 
     if (ReadStringValue(kListenerIpName, ip) && IsValidListenerIp(ip)) {
@@ -309,6 +326,9 @@ bool Settings::LoadCache() {
     }
     if (ReadUint32Value(kHonorExternalPrivacyMarkersName, honorExternalPrivacyMarkers)) {
         honorExternalPrivacyMarkers_ = (honorExternalPrivacyMarkers != 0);
+    }
+    if (ReadUint32Value(kMaskShortTextPreviewsName, maskShortTextPreviews)) {
+        maskShortTextPreviews_ = (maskShortTextPreviews != 0);
     }
 
     // Origin sequence counter: load the persisted floor (the value the previous

@@ -382,12 +382,33 @@ void SettingsPage::BuildView() {
     privacyColumn.Width(GridLength{ 1, GridUnitType::Star });
     privacySection.ColumnDefinitions().Append(privacyColumn);
 
-    RowDefinition privacyCheckRow;
-    privacyCheckRow.Height(GridLength{ 1, GridUnitType::Auto });
-    privacySection.RowDefinitions().Append(privacyCheckRow);
-    RowDefinition privacyHelpRow;
-    privacyHelpRow.Height(GridLength{ 1, GridUnitType::Auto });
-    privacySection.RowDefinitions().Append(privacyHelpRow);
+    for (int i = 0; i < 4; ++i) {
+        RowDefinition privacyRow;
+        privacyRow.Height(GridLength{ 1, GridUnitType::Auto });
+        privacySection.RowDefinitions().Append(privacyRow);
+    }
+
+    maskShortTextPreviewsCheck_ = CheckBox();
+    maskShortTextPreviewsCheck_.Content(winrt::box_value(winrt::hstring(CLP_W(CLP_UI_MASK_SHORT_TEXT_PREVIEWS))));
+    maskShortTextPreviewsCheck_.Checked([this](auto const&, auto const&) {
+        ApplyPrivacySettingChange();
+    });
+    maskShortTextPreviewsCheck_.Unchecked([this](auto const&, auto const&) {
+        ApplyPrivacySettingChange();
+    });
+    Grid::SetRow(maskShortTextPreviewsCheck_, 0);
+    Grid::SetColumn(maskShortTextPreviewsCheck_, 0);
+    privacySection.Children().Append(maskShortTextPreviewsCheck_);
+
+    TextBlock maskHelp;
+    maskHelp.Text(CLP_W(CLP_UI_MASK_SHORT_TEXT_PREVIEWS_HELP));
+    maskHelp.FontSize(12);
+    maskHelp.Opacity(0.75);
+    maskHelp.TextWrapping(TextWrapping::WrapWholeWords);
+    maskHelp.Margin(ThicknessHelper::FromLengths(0, 0, 0, 8));
+    Grid::SetRow(maskHelp, 1);
+    Grid::SetColumn(maskHelp, 0);
+    privacySection.Children().Append(maskHelp);
 
     honorPrivacyMarkersCheck_ = CheckBox();
     honorPrivacyMarkersCheck_.Content(winrt::box_value(winrt::hstring(CLP_W(CLP_UI_HONOR_PRIVACY_MARKERS))));
@@ -397,7 +418,7 @@ void SettingsPage::BuildView() {
     honorPrivacyMarkersCheck_.Unchecked([this](auto const&, auto const&) {
         ApplyPrivacySettingChange();
     });
-    Grid::SetRow(honorPrivacyMarkersCheck_, 0);
+    Grid::SetRow(honorPrivacyMarkersCheck_, 2);
     Grid::SetColumn(honorPrivacyMarkersCheck_, 0);
     privacySection.Children().Append(honorPrivacyMarkersCheck_);
 
@@ -406,7 +427,7 @@ void SettingsPage::BuildView() {
     privacyHelp.FontSize(12);
     privacyHelp.Opacity(0.75);
     privacyHelp.TextWrapping(TextWrapping::WrapWholeWords);
-    Grid::SetRow(privacyHelp, 1);
+    Grid::SetRow(privacyHelp, 3);
     Grid::SetColumn(privacyHelp, 0);
     privacySection.Children().Append(privacyHelp);
 
@@ -634,25 +655,32 @@ void SettingsPage::ApplyClipboardHistorySettingChange() {
 }
 
 void SettingsPage::RefreshPrivacyControls() {
-    if (!honorPrivacyMarkersCheck_) {
+    if (!honorPrivacyMarkersCheck_ || !maskShortTextPreviewsCheck_) {
         return;
     }
 
+    maskShortTextPreviewsCheck_.IsChecked(winrt::Windows::Foundation::IReference<bool>(g_settings.maskShortTextPreviews()));
     honorPrivacyMarkersCheck_.IsChecked(winrt::Windows::Foundation::IReference<bool>(g_settings.honorExternalPrivacyMarkers()));
 }
 
 void SettingsPage::ApplyPrivacySettingChange() {
-    if (loadingSettings_ || !honorPrivacyMarkersCheck_) {
+    if (loadingSettings_ || !honorPrivacyMarkersCheck_ || !maskShortTextPreviewsCheck_) {
         return;
     }
 
-    const auto checkedRef = honorPrivacyMarkersCheck_.IsChecked();
-    const bool desired = checkedRef ? checkedRef.Value() : false;
-    if (desired == g_settings.honorExternalPrivacyMarkers()) {
-        return;
-    }
+    const auto maskRef = maskShortTextPreviewsCheck_.IsChecked();
+    const bool desiredMask = maskRef ? maskRef.Value() : false;
+    const auto honorRef = honorPrivacyMarkersCheck_.IsChecked();
+    const bool desiredHonor = honorRef ? honorRef.Value() : false;
 
-    if (!g_settings.set_honorExternalPrivacyMarkers(desired)) {
+    bool changed = false;
+    if (desiredMask != g_settings.maskShortTextPreviews()) {
+        changed = g_settings.set_maskShortTextPreviews(desiredMask) || changed;
+    }
+    if (desiredHonor != g_settings.honorExternalPrivacyMarkers()) {
+        changed = g_settings.set_honorExternalPrivacyMarkers(desiredHonor) || changed;
+    }
+    if (!changed) {
         return;
     }
 

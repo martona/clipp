@@ -306,7 +306,7 @@ std::optional<ClipboardActivityDisplayItem> ClipboardActivityStore::BuildDisplay
             display.kind = ClipboardActivityPayloadKind::Link;
             display.previewText = PreviewText(trimmed);
             display.linkHost = ExtractUrlHost(trimmed);
-        } else if (LooksPrivateText(trimmed)) {
+        } else if (g_settings.maskShortTextPreviews() && LooksPrivateText(trimmed)) {
             display.kind = ClipboardActivityPayloadKind::PrivateText;
             display.previewText = L"••••••••";
             display.revealedPreviewText = PreviewText(*text);

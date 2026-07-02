@@ -30,6 +30,7 @@ extern ClipboardActivityStore g_clipboardActivityStore;
 - (void)historySliderChanged:(id)sender;
 - (void)resetHostID:(id)sender;
 - (void)honorPrivacyMarkersChanged:(id)sender;
+- (void)maskShortTextPreviewsChanged:(id)sender;
 - (void)launchAtLoginChanged:(id)sender;
 @end
 
@@ -69,6 +70,13 @@ extern ClipboardActivityStore g_clipboardActivityStore;
     (void)sender;
     if (owner_ != nullptr) {
         owner_->OnHonorPrivacyMarkersChanged();
+    }
+}
+
+- (void)maskShortTextPreviewsChanged:(id)sender {
+    (void)sender;
+    if (owner_ != nullptr) {
+        owner_->OnMaskShortTextPreviewsChanged();
     }
 }
 
@@ -356,6 +364,10 @@ void MacOSSettingsPage::OnHonorPrivacyMarkersChanged() {
     ApplyPrivacySettingChange();
 }
 
+void MacOSSettingsPage::OnMaskShortTextPreviewsChanged() {
+    ApplyPrivacySettingChange();
+}
+
 void MacOSSettingsPage::OnLaunchAtLoginChanged() {
     ApplyLaunchAtLoginChange();
 }
@@ -451,6 +463,17 @@ void MacOSSettingsPage::BuildView() {
 
     NSBox* privacySection = MacOSMakeGroupBox();
 
+    maskShortTextPreviewsCheckbox_ = [NSButton checkboxWithTitle:CLP_NS(CLP_UI_MASK_SHORT_TEXT_PREVIEWS)
+                                                          target:fieldDelegate_
+                                                          action:@selector(maskShortTextPreviewsChanged:)];
+    maskShortTextPreviewsCheckbox_.translatesAutoresizingMaskIntoConstraints = NO;
+    [privacySection addSubview:maskShortTextPreviewsCheckbox_];
+
+    NSTextField* maskHelp = MacOSMakeWrappingLabel(CLP_NS(CLP_UI_MASK_SHORT_TEXT_PREVIEWS_HELP),
+                                                   12.0,
+                                                   [NSColor secondaryLabelColor]);
+    [privacySection addSubview:maskHelp];
+
     honorPrivacyMarkersCheckbox_ = [NSButton checkboxWithTitle:CLP_NS(CLP_UI_HONOR_PRIVACY_MARKERS)
                                                         target:fieldDelegate_
                                                         action:@selector(honorPrivacyMarkersChanged:)];
@@ -464,9 +487,17 @@ void MacOSSettingsPage::BuildView() {
 
     NSMutableArray<NSLayoutConstraint*>* privacyConstraints = [NSMutableArray array];
     [privacyConstraints addObjectsFromArray:@[
+        [maskShortTextPreviewsCheckbox_.leadingAnchor constraintEqualToAnchor:privacySection.leadingAnchor constant:kSectionInsetX],
+        [maskShortTextPreviewsCheckbox_.trailingAnchor constraintLessThanOrEqualToAnchor:privacySection.trailingAnchor constant:-kSectionInsetX],
+        [maskShortTextPreviewsCheckbox_.topAnchor constraintEqualToAnchor:privacySection.topAnchor constant:kSectionInsetY],
+
+        [maskHelp.leadingAnchor constraintEqualToAnchor:privacySection.leadingAnchor constant:kSectionInsetX],
+        [maskHelp.trailingAnchor constraintEqualToAnchor:privacySection.trailingAnchor constant:-kSectionInsetX],
+        [maskHelp.topAnchor constraintEqualToAnchor:maskShortTextPreviewsCheckbox_.bottomAnchor constant:6.0],
+
         [honorPrivacyMarkersCheckbox_.leadingAnchor constraintEqualToAnchor:privacySection.leadingAnchor constant:kSectionInsetX],
         [honorPrivacyMarkersCheckbox_.trailingAnchor constraintLessThanOrEqualToAnchor:privacySection.trailingAnchor constant:-kSectionInsetX],
-        [honorPrivacyMarkersCheckbox_.topAnchor constraintEqualToAnchor:privacySection.topAnchor constant:kSectionInsetY],
+        [honorPrivacyMarkersCheckbox_.topAnchor constraintEqualToAnchor:maskHelp.bottomAnchor constant:14.0],
 
         [privacyHelp.leadingAnchor constraintEqualToAnchor:privacySection.leadingAnchor constant:kSectionInsetX],
         [privacyHelp.trailingAnchor constraintEqualToAnchor:privacySection.trailingAnchor constant:-kSectionInsetX],
@@ -750,26 +781,34 @@ void MacOSSettingsPage::ApplyClipboardHistorySettingChange() {
 }
 
 void MacOSSettingsPage::RefreshPrivacyControls() {
-    if (honorPrivacyMarkersCheckbox_ == nil) {
+    if (honorPrivacyMarkersCheckbox_ == nil || maskShortTextPreviewsCheckbox_ == nil) {
         return;
     }
 
+    maskShortTextPreviewsCheckbox_.state = g_settings.maskShortTextPreviews()
+        ? NSControlStateValueOn
+        : NSControlStateValueOff;
     honorPrivacyMarkersCheckbox_.state = g_settings.honorExternalPrivacyMarkers()
         ? NSControlStateValueOn
         : NSControlStateValueOff;
 }
 
 void MacOSSettingsPage::ApplyPrivacySettingChange() {
-    if (loadingSettings_ || honorPrivacyMarkersCheckbox_ == nil) {
+    if (loadingSettings_ || honorPrivacyMarkersCheckbox_ == nil || maskShortTextPreviewsCheckbox_ == nil) {
         return;
     }
 
-    const bool desired = honorPrivacyMarkersCheckbox_.state == NSControlStateValueOn;
-    if (desired == g_settings.honorExternalPrivacyMarkers()) {
-        return;
-    }
+    const bool desiredMask = maskShortTextPreviewsCheckbox_.state == NSControlStateValueOn;
+    const bool desiredHonor = honorPrivacyMarkersCheckbox_.state == NSControlStateValueOn;
 
-    if (!g_settings.set_honorExternalPrivacyMarkers(desired)) {
+    bool changed = false;
+    if (desiredMask != g_settings.maskShortTextPreviews()) {
+        changed = g_settings.set_maskShortTextPreviews(desiredMask) || changed;
+    }
+    if (desiredHonor != g_settings.honorExternalPrivacyMarkers()) {
+        changed = g_settings.set_honorExternalPrivacyMarkers(desiredHonor) || changed;
+    }
+    if (!changed) {
         return;
     }
 

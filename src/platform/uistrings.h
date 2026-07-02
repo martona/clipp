@@ -86,6 +86,8 @@
 #define CLP_UI_CLIPBOARD_HISTORY_SETTINGS_APPLIED "Clipboard history settings applied."
 
 #define CLP_UI_PRIVACY "Privacy"
+#define CLP_UI_MASK_SHORT_TEXT_PREVIEWS "Hide previews of short single-word items"
+#define CLP_UI_MASK_SHORT_TEXT_PREVIEWS_HELP "Short text with no spaces might be a password, so Clipp hides its preview in the activity list. This only affects previews - the content still syncs, and the eye button reveals it."
 #define CLP_UI_HONOR_PRIVACY_MARKERS "Honor 'don't sync' requests from other apps"
 #define CLP_UI_HONOR_PRIVACY_MARKERS_HELP "When other apps mark clipboard items as private (passwords from Chrome, password managers, etc.), Clipp will not sync the content to your other devices."
 #define CLP_UI_PRIVACY_SETTINGS_APPLIED "Privacy settings applied."
