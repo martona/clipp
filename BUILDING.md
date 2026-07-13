@@ -147,6 +147,8 @@ CI does not currently build for physical devices; device builds are produced man
 3. Select your development team under **Signing & Capabilities** for the `Clipp` target.
 4. Choose a connected device (or "Any iOS Device") and **Product → Build / Archive**.
 
+Use XCode -> Product -> Archive after selecting "Any iOS Device" in Run Destinations. Click Distribute, then "App Store Connect" for the store upload, or "Release Testing" for ad-hoc devices. For the latter, you can deploy them with XCode -> Window -> Devices and Simulators (same place where you get the device UDIDs).
+
 ### Regenerating the device-type symbol font
 
 Each peer row shows two small glyphs — an OS-family mark and a device-type mark —
