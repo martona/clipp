@@ -9,5 +9,5 @@ set(VCPKG_OSX_SYSROOT iphoneos)
 # CMAKE_SYSTEM_NAME=iOS, that's the iOS deployment target. Must match (or be
 # lower than) the Xcode project's IPHONEOS_DEPLOYMENT_TARGET, or the linker
 # refuses to consume the vcpkg-built static libs.
-set(VCPKG_OSX_DEPLOYMENT_TARGET 17.0)
+set(VCPKG_OSX_DEPLOYMENT_TARGET 16.0)
 set(VCPKG_MAKE_BUILD_TRIPLET "--host=aarch64-apple-ios")

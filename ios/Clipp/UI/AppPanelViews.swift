@@ -131,10 +131,13 @@ private struct NetworkPanelView: View {
             } message: {
                 Text("This device stops syncing until you pair it again with a group name and passphrase.")
             }
-            .onChange(of: model.secret) {
+            // One-parameter onChange(of:perform:) throughout: the two-/zero-parameter
+            // overloads are iOS 17+, and the app floor is 16. (Deprecated on 17, not
+            // removed — revisit if the floor ever moves back up.)
+            .onChange(of: model.secret) { _ in
                 model.updateStatusMessage()
             }
-            .onChange(of: model.networkName) {
+            .onChange(of: model.networkName) { _ in
                 model.networkNameDidChange()
             }
 
@@ -478,7 +481,7 @@ private struct SettingsPanelView: View {
 
             Section {
                 Toggle(CLP_UI_HONOR_PRIVACY_MARKERS, isOn: $model.honorExternalPrivacyMarkers)
-                    .onChange(of: model.honorExternalPrivacyMarkers) { _, newValue in
+                    .onChange(of: model.honorExternalPrivacyMarkers) { newValue in
                         model.applyPrivacySettings(newValue)
                     }
 

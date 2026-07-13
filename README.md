@@ -51,7 +51,7 @@ Clipp's trust model is deliberately narrow - your own devices, on a local or ove
 |----------|-----------------|-----------------|----------------------------------------------------------------------|
 | Windows  | amd64, arm64    | Windows 10 1809 | Native builds for both architectures.                                |
 | macOS    | Apple Silicon   | macOS 14*       | On the [Mac App Store][app-store-mac]; Intel Macs are not supported. |
-| iOS      | arm64           | iOS 17          | Free on the [App Store][app-store-ios].                              |
+| iOS      | arm64           | iOS 16          | Free on the [App Store][app-store-ios].                              |
 | Linux    | amd64, arm64    | glibc 2.31†     | Terminal client only (`clipp copy`/`paste`); no GUI, no tray.        |
 
 \* The 14 floor is arbitrary; I just don't have older Macs or Intel hardware to test on. PRs to lower the minimum are welcome.

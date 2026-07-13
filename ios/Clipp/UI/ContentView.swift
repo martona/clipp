@@ -1084,6 +1084,11 @@ private extension Color {
     static let clippInk = Color(red: 0.0, green: 15.0 / 255.0, blue: 54.0 / 255.0)
 }
 
-#Preview {
-    ContentView()
+// Dev-only. The classic PreviewProvider (not the #Preview macro) because the app
+// floor is iOS 16 and the macro's availability annotation has been 17-only in some
+// Xcode releases; the old protocol works everywhere and previews identically.
+struct ContentView_Previews: PreviewProvider {
+    static var previews: some View {
+        ContentView()
+    }
 }
