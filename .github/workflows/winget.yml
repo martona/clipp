@@ -1,0 +1,83 @@
+name: Publish to winget
+
+# Auto-opens a version-bump PR to microsoft/winget-pkgs when a release goes live.
+# Same dual trigger as the Homebrew tap bump (homebrew-tap.yml): the `published`
+# release event -- which fires when a staged draft is pushed live, the way releases
+# are actually cut here -- plus a workflow_dispatch fallback for re-runs/backfills.
+#
+# Runs Microsoft's wingetcreate directly (no third-party action): it downloads the
+# release MSIXes, computes InstallerSha256 + SignatureSha256, rewrites the manifests
+# PRESERVING the msix structure seeded from packaging/winget/, pushes a branch to
+# the token account's fork of microsoft/winget-pkgs, and opens the upstream PR. The
+# PR link is written to the job summary. wingetcreate is fetched from Microsoft's
+# `latest` alias on purpose: it has to track winget-pkgs' evolving validation, so
+# pinning would rot.
+#
+# Requires a repo secret WINGET_TOKEN: a classic PAT with `public_repo` scope whose
+# account has a fork of microsoft/winget-pkgs. Until that's set, this no-ops cleanly.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release-tag:
+        description: "Existing release tag to publish to winget, e.g. v1.2.1.123"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - name: Is WINGET_TOKEN configured?
+        id: guard
+        shell: pwsh
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          if ($env:WINGET_TOKEN) {
+            "ok=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+            "ok=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Host "::notice::WINGET_TOKEN not set -- skipping winget publish."
+          }
+
+      - name: Submit to winget-pkgs
+        if: steps.guard.outputs.ok == 'true'
+        shell: pwsh
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release-tag }}
+        run: |
+          if (-not $env:RELEASE_TAG) {
+            Write-Host "::error::release tag is required"
+            exit 1
+          }
+          $tag = $env:RELEASE_TAG
+          $version = $tag -replace '^v', ''
+          $urls = @(
+            "https://github.com/martona/clipp/releases/download/$tag/clipp-windows-amd64.msix",
+            "https://github.com/martona/clipp/releases/download/$tag/clipp-windows-arm64.msix"
+          )
+
+          Invoke-WebRequest -Uri https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+
+          # Capture output for the PR link while still streaming it to the log.
+          $output = & .\wingetcreate.exe update martona.clipp --version $version --urls $urls --submit --token $env:WINGET_TOKEN 2>&1 | ForEach-Object { "$_" }
+          $output | Write-Host
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::wingetcreate failed with exit code $LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
+
+          $pr = ($output | Select-String -Pattern 'https://github\.com/microsoft/winget-pkgs/pull/\d+' | Select-Object -First 1)
+          if ($pr) {
+            $link = $pr.Matches[0].Value
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## winget submission`n`nmartona.clipp $version submitted: $link"
+          } else {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## winget submission`n`nmartona.clipp $version submitted, but no PR link was found in the wingetcreate output -- check the step log."
+          }
