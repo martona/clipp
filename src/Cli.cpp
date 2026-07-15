@@ -43,6 +43,7 @@
     #include <termios.h>
     #include <unistd.h>
     #include <sys/ioctl.h>
+    #include <sys/stat.h>
 #endif
 
 // Globals owned elsewhere (declared extern in their headers).
@@ -82,14 +83,89 @@ bool StdHandleIsConsole(DWORD stdHandleId) {
 }
 #endif
 
+// --- Stream dispositions -------------------------------------------------------
+// What each standard stream is actually connected to. Drives tty-styling and the
+// bare-launch verb inference in Run(). Four-way on purpose: only a real pipe or
+// regular file may infer a verb — a terminal is interactive, and Absent (no handle,
+// NUL, /dev/null, sockets) covers the launch contexts (Task Scheduler, cron,
+// launchd, Dock) where inferring `copy` would block on stdin or clobber the
+// group clipboard.
+
+enum class StreamDisposition { Terminal, Pipe, File, Absent };
+
+#ifdef _WIN32
+// mintty (the Git Bash / MSYS2 / Cygwin default terminal) is not a Windows console:
+// programs it runs get MSYS pty PIPES as their standard handles, so an interactive
+// prompt there is indistinguishable from redirection by handle type alone. The pty
+// pipe names look like \msys-<hex>-pty0-from-master / \cygwin-<hex>-pty1-to-master
+// (bash's own `|` pipes are named ...-pipe-..., so they don't match); sniffing that
+// shape is the standard trick (Rust is-terminal, Node) to classify an interactive
+// mintty stream as a terminal rather than a redirect.
+bool PipeIsMsysPty(HANDLE handle) {
+    struct {
+        FILE_NAME_INFO info;
+        wchar_t namePadding[MAX_PATH];  // room for FILE_NAME_INFO's flexible array
+    } buffer{};
+    if (!GetFileInformationByHandleEx(handle, FileNameInfo, &buffer, sizeof(buffer))) {
+        return false;  // anonymous pipe (no name) or name too long: a real redirect
+    }
+    const std::wstring name(buffer.info.FileName, buffer.info.FileNameLength / sizeof(wchar_t));
+    if (name.find(L"msys-") == std::wstring::npos && name.find(L"cygwin-") == std::wstring::npos) {
+        return false;
+    }
+    return name.find(L"-pty") != std::wstring::npos && name.find(L"-master") != std::wstring::npos;
+}
+
+// Runs after main()'s InitializeConsoleOutput(), and depends on it: interactive
+// streams under the clipp.com shim arrive as console handles a GUI-subsystem
+// process can't use, and only classify as Terminal because init re-attached the
+// parent console and reopened them. Redirected pipe/file handles are left in place
+// by init (their CRT fds bound), so they classify as-is.
+StreamDisposition ClassifyStdStream(DWORD stdHandleId) {
+    HANDLE handle = GetStdHandle(stdHandleId);
+    if (handle == nullptr || handle == INVALID_HANDLE_VALUE) {
+        return StreamDisposition::Absent;
+    }
+    DWORD mode = 0;
+    if (GetConsoleMode(handle, &mode) != 0) {
+        return StreamDisposition::Terminal;  // a real console; NUL is CHAR but fails this
+    }
+    switch (GetFileType(handle)) {
+    case FILE_TYPE_DISK: return StreamDisposition::File;
+    case FILE_TYPE_PIPE:  // includes sockets
+        return PipeIsMsysPty(handle) ? StreamDisposition::Terminal : StreamDisposition::Pipe;
+    default:             return StreamDisposition::Absent;  // NUL, unknown
+    }
+}
+StreamDisposition StdinDisposition()  { return ClassifyStdStream(STD_INPUT_HANDLE); }
+StreamDisposition StdoutDisposition() { return ClassifyStdStream(STD_OUTPUT_HANDLE); }
+StreamDisposition StderrDisposition() { return ClassifyStdStream(STD_ERROR_HANDLE); }
+#else
+StreamDisposition ClassifyStdStream(int fd) {
+    if (isatty(fd) != 0) {
+        return StreamDisposition::Terminal;
+    }
+    struct stat st {};
+    if (fstat(fd, &st) != 0) {
+        return StreamDisposition::Absent;  // closed / bad fd
+    }
+    if (S_ISFIFO(st.st_mode)) return StreamDisposition::Pipe;
+    if (S_ISREG(st.st_mode))  return StreamDisposition::File;
+    // Char devices (/dev/null), sockets, directories. Sockets deliberately do NOT
+    // count as Pipe: `ssh host clipp` on a socketpair-based sshd then prints usage
+    // instead of silently blocking on an inferred copy. (Pipe-based sshds still
+    // block; that footgun is inherent — use an explicit verb, or ssh -n.)
+    return StreamDisposition::Absent;
+}
+StreamDisposition StdinDisposition()  { return ClassifyStdStream(STDIN_FILENO); }
+StreamDisposition StdoutDisposition() { return ClassifyStdStream(STDOUT_FILENO); }
+StreamDisposition StderrDisposition() { return ClassifyStdStream(STDERR_FILENO); }
+#endif
+
 // stderr gets a built-in red on an interactive terminal — signed builds block
 // DYLD-injection tools like stderred, so we color our own stderr. Plain on a pipe/file.
 bool StderrIsTty() {
-#ifdef _WIN32
-    return StdHandleIsConsole(STD_ERROR_HANDLE);
-#else
-    return isatty(STDERR_FILENO) != 0;
-#endif
+    return StderrDisposition() == StreamDisposition::Terminal;
 }
 
 void OutLine(const std::wstring& line) {
@@ -142,6 +218,10 @@ void VerboseLine(const std::wstring& line) {
 
 // --- Interactive input -------------------------------------------------------
 
+// True only for a REAL console. Deliberately narrower than StdinDisposition():
+// the console-specific behaviors keyed off this (text-mode Ctrl+Z EOF in
+// ReadAllStdin, echo suppression in ReadHiddenLine) don't apply to an msys pty,
+// which wants the pipe treatment even though it classifies as Terminal.
 bool StdinIsInteractive() {
 #ifdef _WIN32
     HANDLE handle = GetStdHandle(STD_INPUT_HANDLE);
@@ -389,7 +469,9 @@ int RunHostIdReset() {
 // Reads stdin and pushes it to the network as a UTF-8 text item. Finds one gateway
 // peer (the first that accepts) and relays through it — that peer rebroadcasts to the
 // synced mesh, so one push reaches everyone. No GUI required on this machine.
-int RunCopy() {
+// echoStdinToStdout is the inferred `x | clipp | y` mode: tee the consumed bytes
+// back out (explicit `clipp copy` never echoes).
+int RunCopy(bool echoStdinToStdout) {
     if (!g_keyManager.HaveNetworkKey()) {
         ErrLine(L"No group key configured. Run `clipp key set` first.");
         return 1;
@@ -407,6 +489,12 @@ int RunCopy() {
         return 1;
     }
     VerboseLine(L"Read " + std::to_wstring(bytes.size()) + L" byte(s) from stdin.");
+
+    // Tee mode keeps its own copy: `bytes` is consumed by the payload below.
+    std::vector<unsigned char> echoBytes;
+    if (echoStdinToStdout) {
+        echoBytes = bytes;
+    }
 
     // v1: UTF-8 text. Append a trailing NUL to match the platform capture
     // convention (receivers strip one trailing NUL when writing to the clipboard),
@@ -433,12 +521,24 @@ int RunCopy() {
     bool filterMatched = false;
     const auto via = OneShot::RelayPayloads(std::move(payloads), localHostId, localHostName,
                                             /*includeSelf=*/true, g_hostFilter, &filterMatched);
+    int exitCode = 0;
     if (!via) {
         ReportNoGateway(L"Could not reach any device to copy to.", filterMatched);
-        return 1;
+        exitCode = 1;
+    } else {
+        VerboseLine(L"Relayed via " + PeerLabel(*via, localHostId) + L".");
     }
-    VerboseLine(L"Relayed via " + PeerLabel(*via, localHostId) + L".");
-    return 0;
+
+    // The tee happens even when the relay failed — clipp sits mid-pipeline, and
+    // eating the stream would turn a network error into downstream data loss — but
+    // only AFTER the relay: a consumer like `head -1` may close the pipe and
+    // SIGPIPE-kill us on this write, and the copy must have landed by then. This is
+    // also the inferred both-ways "paste" leg: the bytes are already in hand, so it
+    // never re-reads the network.
+    if (echoStdinToStdout) {
+        WriteAllStdout(echoBytes.data(), echoBytes.size());
+    }
+    return exitCode;
 }
 
 enum class FetchResult { Content, Empty, NoSupport, Failed };
@@ -554,11 +654,7 @@ int RunPaste() {
 // ---- Named registers: clipp copy/paste/ls/rm <name> -------------------------
 
 bool StdoutIsTty() {
-#ifdef _WIN32
-    return StdHandleIsConsole(STD_OUTPUT_HANDLE);
-#else
-    return isatty(STDOUT_FILENO) != 0;
-#endif
+    return StdoutDisposition() == StreamDisposition::Terminal;
 }
 
 std::wstring FormatAge(const Hlc& touched) {
@@ -1214,6 +1310,8 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
     CLI::App app{"Clipp v" CLIPP_VERSION_STRING_3PART " - cross-platform clipboard sharing"};
     app.allow_extras();   // a bare/GUI launch (and OS-injected args) must not error
     app.fallthrough();    // let --loglevel be recognized before or after a subcommand
+    app.footer("With no command, redirection picks the verb: `x | clipp` copies, `clipp > f` pastes, "
+               "and both at once copies while passing stdin through. Scripts should spell out copy/paste.");
 
     std::string logLevel;
     CLI::Option* logLevelOption = app.add_option(
@@ -1300,6 +1398,44 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
         return app.exit(error);
     }
 
+    // Bare launch with redirection: infer the verb from the stdio dispositions.
+    // `x | clipp` copies, `clipp > f` pastes, and both redirected at once copies
+    // then tees stdin through to stdout (the paste half never re-reads the network —
+    // the bytes are in hand). Only a real pipe or regular file counts: terminals are
+    // interactive (usage below), and Absent streams (NUL, /dev/null, no handle:
+    // Task Scheduler, cron, launchd, Dock) must never trigger a verb, or a scheduled
+    // bare launch would block on stdin or clobber the group clipboard. Explicit
+    // copy/paste remain the canonical spellings for scripts.
+    bool inferredEchoToStdout = false;
+    if (action == Action::None) {
+        const StreamDisposition inDisp = StdinDisposition();
+        const StreamDisposition outDisp = StdoutDisposition();
+        const auto redirected = [](StreamDisposition d) {
+            return d == StreamDisposition::Pipe || d == StreamDisposition::File;
+        };
+#ifndef CLIPP_HEADLESS
+        // GUI-style launch guard. Dock / double-click / autostart / wrapper-launcher
+        // contexts show no stdin, at most a pipe-or-null stdout (macOS LaunchServices
+        // points stdout at /dev/null or a logging pipe — never a regular file), and
+        // no terminal on stderr. Those must fall through to the GUI untouched, even
+        // though stdout can look like a redirect.
+        const bool guiStyleLaunch = inDisp == StreamDisposition::Absent &&
+                                    (outDisp == StreamDisposition::Absent ||
+                                     outDisp == StreamDisposition::Pipe) &&
+                                    StderrDisposition() != StreamDisposition::Terminal;
+#else
+        const bool guiStyleLaunch = false;  // no GUI to fall through to
+#endif
+        if (!guiStyleLaunch) {
+            if (redirected(inDisp)) {
+                action = Action::Copy;
+                inferredEchoToStdout = redirected(outDisp);
+            } else if (redirected(outDisp)) {
+                action = Action::Paste;
+            }
+        }
+    }
+
     // A bare launch and the explicit `gui` subcommand are both GUI dispositions,
     // not commands -- they must not silence the logger the way a command does.
     const bool guiDisposition = (action == Action::None || action == Action::Gui);
@@ -1320,8 +1456,8 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
     g_verbose = verbose;
     g_hostFilter = hostFilter;
 
-    // Bare launch (no command): print usage and exit instead of silently launching
-    // the terminal-blocking GUI. On the desktop builds this is gated on a console (a
+    // Bare launch with no command and no inferred verb: print usage and exit instead
+    // of silently launching the terminal-blocking GUI. On desktop this is gated on a console (a
     // no-console launch falls through to the GUI via the `gui`/nullopt path below);
     // the headless build has no GUI, so a bare launch ALWAYS prints help.
 #ifdef CLIPP_HEADLESS
@@ -1380,7 +1516,8 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
     case Action::HostIdReset:
         return RunHostIdReset();
     case Action::Copy:
-        return copyRegisterName.empty() ? RunCopy() : RunRegisterCopy(copyRegisterName, copyPrivate);
+        return copyRegisterName.empty() ? RunCopy(inferredEchoToStdout)
+                                        : RunRegisterCopy(copyRegisterName, copyPrivate);
     case Action::Paste:
         return pasteRegisterName.empty() ? RunPaste() : RunRegisterPaste(pasteRegisterName);
     case Action::RegLs:

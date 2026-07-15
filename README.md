@@ -203,6 +203,8 @@ clipp p > notes.txt                  # `p` aliases paste; `c` aliases copy
 
 Transfers are text-only and add no trailing newline, so they pipe cleanly. Delivery goes through whatever peers are already running on the network, so the desktop app doesn't need to be open on *this* machine — just reachable somewhere. You can also set a device's group name and passphrase from the terminal with `clipp key set`; run `clipp --help` for the rest (`key`, `hostid`) and the [named registers](#named-registers) below.
 
+When stdin or stdout is redirected, a bare `clipp` infers the verb — `date | clipp` copies, `clipp > log.txt` pastes, and mid-pipeline (`… | clipp | …`) it copies while passing stdin through. A convenience for interactive use; in scripts, spell out `copy` / `paste`.
+
 On Windows, pipe through `clipp.com` (the console shim from [Installation](#windows)) — `clipp.exe` is the GUI and carries no stdio. On macOS the binary lives inside the bundle at `Clipp.app/Contents/MacOS/clipp`, if it's not on your `PATH`.
 
 A note on macOS and using Clipp via SSH on a Mac host: Apps in an SSH session are blind to the keychain. Using Clipp this way requires you to have the GUI app running on the same machine so the process in the SSH session can query it for the group key.
