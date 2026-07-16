@@ -12,7 +12,7 @@ cd "$REPO_ROOT"
 IDENTITY="${APPLE_CODESIGN_IDENTITY_3RDPARTY:-}"
 INSTALLER_IDENTITY="${APPLE_CODESIGN_INSTALLER_IDENTITY_3RDPARTY:-}"
 TEAM_ID="${APPLE_TEAM_ID:-}"
-PROVISION_PROFILE="${APPLE_MAS_PROVISIONING_PROFILE:-}"
+PROVISION_PROFILE="${APPLE_MAS_CLIPP_PROVISIONING_PROFILE:-}"
 CONFIG="Release"
 VERSION=""
 clean=0
@@ -38,7 +38,7 @@ Options:
                    Omit to let CMake default (local dev builds).
   --sign           Sign for App Store distribution. Requires:
                      APPLE_CODESIGN_IDENTITY_3RDPARTY (3rd Party Mac Developer Application cert)
-                     APPLE_MAS_PROVISIONING_PROFILE   (path to embedded.provisionprofile)
+                     APPLE_MAS_CLIPP_PROVISIONING_PROFILE   (path to embedded.provisionprofile)
   --package        Wrap signed app in a .pkg via productbuild. Implies --sign.
                    Also requires:
                      APPLE_CODESIGN_INSTALLER_IDENTITY_3RDPARTY (3rd Party Mac Developer Installer cert)
@@ -83,11 +83,11 @@ if [[ "$sign_for_distribution" == "1" ]]; then
         exit 2
     fi
     if [[ -z "$PROVISION_PROFILE" ]]; then
-        echo "[!] Fatal: --sign/--package/--upload require APPLE_MAS_PROVISIONING_PROFILE (path to embedded.provisionprofile)." >&2
+        echo "[!] Fatal: --sign/--package/--upload require APPLE_MAS_CLIPP_PROVISIONING_PROFILE (path to embedded.provisionprofile)." >&2
         exit 2
     fi
     if [[ ! -f "$PROVISION_PROFILE" ]]; then
-        echo "[!] Fatal: APPLE_MAS_PROVISIONING_PROFILE does not point at a file: $PROVISION_PROFILE" >&2
+        echo "[!] Fatal: APPLE_MAS_CLIPP_PROVISIONING_PROFILE does not point at a file: $PROVISION_PROFILE" >&2
         exit 2
     fi
 fi

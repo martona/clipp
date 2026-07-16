@@ -350,20 +350,22 @@ elseif (APPLE)
     set_target_properties(clipp PROPERTIES XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC "YES")
     target_compile_options(clipp PRIVATE "$<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>")
 
-    find_library(COREFOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
-    find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
-    find_library(SECURITY_FRAMEWORK Security REQUIRED)
-    find_library(APPKIT_FRAMEWORK AppKit REQUIRED)
-    find_library(SERVICEMANAGEMENT_FRAMEWORK ServiceManagement REQUIRED)
-    find_library(NETWORK_FRAMEWORK Network REQUIRED)   # nw_path_monitor (NetworkChangeMonitor)
-
+    # Link the system frameworks by -framework flag, NOT find_library: find_library
+    # caches an ABSOLUTE path into the current SDK (.../MacOSX26.4.sdk/...), which
+    # dangles every time an Xcode upgrade replaces the SDK directory — the build then
+    # fails to link until the cache is regenerated. Worse, vcpkg's toolchain sets
+    # CMAKE_FIND_FRAMEWORK=LAST, so "Network" used to resolve to the SDK-internal
+    # usr/lib/libnetwork.tbd (a case-insensitive library match that shadows
+    # Network.framework). -framework flags resolve against whatever SDK the current
+    # link uses, so an Xcode upgrade needs no reconfigure. Network.framework carries
+    # nw_path_monitor (NetworkChangeMonitor).
     target_link_libraries(clipp PRIVATE
-        ${COREFOUNDATION_FRAMEWORK}
-        ${FOUNDATION_FRAMEWORK}
-        ${SECURITY_FRAMEWORK}
-        ${APPKIT_FRAMEWORK}
-        ${SERVICEMANAGEMENT_FRAMEWORK}
-        ${NETWORK_FRAMEWORK}
+        "-framework CoreFoundation"
+        "-framework Foundation"
+        "-framework Security"
+        "-framework AppKit"
+        "-framework ServiceManagement"
+        "-framework Network"
     )
 
     # CMake substitutes ${MACOSX_BUNDLE_*} target properties into Info.plist.in

@@ -109,7 +109,7 @@ The build/flag mechanics of `build_macos_mas.sh` (`--sign` / `--package` / `--up
 export APPLE_TEAM_ID=XXXXXXXXXX
 export APPLE_CODESIGN_IDENTITY_3RDPARTY="3rd Party Mac Developer Application: … (XXXXXXXXXX)"
 export APPLE_CODESIGN_INSTALLER_IDENTITY_3RDPARTY="3rd Party Mac Developer Installer: … (XXXXXXXXXX)"
-export APPLE_MAS_PROVISIONING_PROFILE=/path/to/Clipp_Mac_App_Store.provisionprofile
+export APPLE_MAS_CLIPP_PROVISIONING_PROFILE=/path/to/Clipp_Mac_App_Store.provisionprofile
 export APPLE_API_KEY_PATH=/path/to/AuthKey_XXXXXXXXXX.p8
 export APPLE_API_KEY_ID=XXXXXXXXXX
 export APPLE_API_ISSUER_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
@@ -169,7 +169,7 @@ Configured on the GitHub repo (`martona/clipp`) and inherited by `_release.yml` 
 | `APPLE_TEAM_ID` | Apple Developer Team ID |
 | `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID` | App Store Connect API key ID + issuer UUID (notarization) |
 
-The Mac App Store credentials (`APPLE_CODESIGN_IDENTITY_3RDPARTY`, `APPLE_CODESIGN_INSTALLER_IDENTITY_3RDPARTY`, `APPLE_MAS_PROVISIONING_PROFILE`) are **not** in CI — that flow is manual and reads them from your shell.
+The Mac App Store credentials (`APPLE_CODESIGN_IDENTITY_3RDPARTY`, `APPLE_CODESIGN_INSTALLER_IDENTITY_3RDPARTY`, `APPLE_MAS_CLIPP_PROVISIONING_PROFILE`) are **not** in CI — that flow is manual and reads them from your shell.
 
 ## Producing a signed build locally
 
