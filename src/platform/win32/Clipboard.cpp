@@ -1293,6 +1293,20 @@ static void RenderAllDelayedClipboardFormats(HWND hwnd) {
         return;
     }
 
+    // WM_RENDERALLFORMATS contract (documented and easy to miss): between the
+    // message being posted and this open, another app may have taken clipboard
+    // ownership. Rendering anyway would insert our handles into the NEW owner's
+    // session — two owners then disagree about who frees them, which is exactly
+    // the moveable-HGLOBAL metadata corruption a later clipboard walk trips over.
+    // Ownership gone means our advertised formats are gone too; drop the payload.
+    if (GetClipboardOwner() != hwnd) {
+        g_logger.log(__FUNCTION__, Logger::Level::Debug,
+            L"Skipping WM_RENDERALLFORMATS: clipboard ownership changed before rendering.");
+        CloseClipboard();
+        ClearDelayedClipboardRenderState();
+        return;
+    }
+
     // The owner is going away, so every advertised format must be materialized now.
     // This is the one path where delayed rendering is forced to go eager -- and the
     // only place the per-format memory multiplies -- so it mirrors exactly what the
