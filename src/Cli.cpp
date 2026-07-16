@@ -1273,6 +1273,138 @@ int RunRegisterRm(const std::string& pattern) {
     return 0;
 }
 
+// Refreshes the expiry timer on matching registers — `clipp touch <name-or-glob>`.
+// Entirely client-side, no protocol addition and no capability gate: RGET already
+// refreshes `touched` at the serving gateway as a side effect (the documented
+// read-refreshes semantic), so a touch is just a read whose value we discard. The
+// bump then travels on normal anti-entropy — the RSYN digest carries `touched`, and
+// peers holding a staler one get the record pushed — so it works against every
+// deployed gateway. (Transport::TouchOnly stays reserved for a value-free gateway
+// op if register sizes ever make shipping the bytes matter.)
+int RunTouch(const std::string& pattern) {
+    const bool wildcard = HasWildcard(pattern);
+    if (!wildcard && !IsValidRegisterName(pattern)) {
+        ErrLine(L"Invalid register name. Use 1-64 characters of [a-z0-9._-].");
+        return 1;
+    }
+    if (!g_keyManager.HaveNetworkKey()) {
+        ErrLine(L"No group key configured. Run `clipp key set` first.");
+        return 1;
+    }
+    NetworkStartup net;
+    if (!net.ok) {
+        ErrLine(L"Failed to initialize networking.");
+        return 1;
+    }
+    HostId localHostId;
+    g_settings.ensureHostID(localHostId);
+    const std::string localHostName =
+        clipp::GetLocalPeerDisplayName("unknown", CryptoChannel::HOSTNAME_MAX_BYTES);
+
+    int touched = 0;
+    bool absent = false;    // exact name not present
+    bool noMatch = false;   // glob matched nothing
+    bool filterMatched = false;
+    const bool reached = WithRegisterGateway(localHostId, localHostName, filterMatched, [&](OneShotPeer& conn) -> bool {
+        std::vector<std::string> targets;
+        if (wildcard) {
+            // List, match the glob (never the "" default mirror), then read each.
+            if (!conn.SendFrame("RLST")) {
+                return false;
+            }
+            std::vector<RegisterWire::RegisterListEntry> entries;
+            bool gotList = false;
+            std::vector<unsigned char> frame;
+            while (conn.RecvFrame(frame)) {
+                if (frame.size() < 4) {
+                    break;
+                }
+                if (std::memcmp(frame.data(), "RLST", 4) == 0) {
+                    const std::vector<unsigned char> fbody(frame.begin() + 4, frame.end());
+                    if (!RegisterWire::TryDecodeList(fbody, entries)) {
+                        return false;
+                    }
+                    gotList = true;
+                    break;
+                }
+                if (std::memcmp(frame.data(), "SYNC", 4) == 0) {
+                    conn.SendFrame("EOSY");
+                    continue;
+                }
+            }
+            if (!gotList) {
+                return false;
+            }
+            for (const auto& e : entries) {
+                if (!e.name.empty() && GlobMatch(pattern, e.name)) {
+                    targets.push_back(e.name);
+                }
+            }
+            if (targets.empty()) {
+                noMatch = true;
+                return true;
+            }
+        } else {
+            targets.push_back(pattern);
+        }
+
+        for (const std::string& target : targets) {
+            const std::vector<unsigned char> req = RegisterWire::EncodeName(target);
+            if (!conn.SendFrame("RGET", req.data(), static_cast<uint32_t>(req.size()))) {
+                return false;
+            }
+            std::vector<unsigned char> frame;
+            bool answered = false;
+            while (conn.RecvFrame(frame)) {
+                if (frame.size() < 4) {
+                    break;
+                }
+                if (std::memcmp(frame.data(), "REGW", 4) == 0) {
+                    RegisterRecord rec;
+                    uint8_t transport = 0;
+                    const std::vector<unsigned char> fbody(frame.begin() + 4, frame.end());
+                    if (!RegisterWire::TryDecodeRecord(fbody, rec, transport)) {
+                        return false;
+                    }
+                    if (rec.name != target) {
+                        continue;  // an unsolicited broadcast for another register; keep waiting
+                    }
+                    ++touched;  // value discarded; the read itself was the point
+                    answered = true;
+                    break;
+                }
+                if (std::memcmp(frame.data(), "NONE", 4) == 0) {
+                    // Exact name: report absent. Mid-glob: the register expired
+                    // between the list and the read; skip it.
+                    if (!wildcard) absent = true;
+                    answered = true;
+                    break;
+                }
+                if (std::memcmp(frame.data(), "SYNC", 4) == 0) { conn.SendFrame("EOSY"); continue; }
+                // ignore crosstalk
+            }
+            if (!answered) {
+                return false;   // connection died mid-batch
+            }
+        }
+        return true;
+    });
+    if (!reached) {
+        ReportNoGateway(L"Could not reach any register-capable device.", filterMatched);
+        return 1;
+    }
+    if (noMatch) {
+        ErrLine(L"No registers match '" + ToWide(pattern) + L"'.");
+        return 1;
+    }
+    if (absent) {
+        ErrLine(L"No such register '" + ToWide(pattern) + L"'.");
+        return 1;
+    }
+    VerboseLine(L"Touched " + std::to_wstring(touched) + L" register(s).");
+    return 0;
+}
+
 // ---- Discovery diagnostics: clipp peers / probe -----------------------------
 
 std::wstring OsLabel(OsType os) {
@@ -1413,7 +1545,7 @@ int RunProbe() {
     return 0;
 }
 
-enum class Action { None, Gui, KeySet, KeyErase, KeyShow, HostIdShow, HostIdReset, Copy, Paste, Put, RegLs, RegRm, Peers, Probe };
+enum class Action { None, Gui, KeySet, KeyErase, KeyShow, HostIdShow, HostIdReset, Copy, Paste, Put, RegLs, RegRm, RegTouch, Peers, Probe };
 
 }  // namespace
 
@@ -1495,6 +1627,11 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
     CLI::App* rmCommand = app.add_subcommand("rm", "Delete a named register (name or glob)");
     rmCommand->add_option("name", rmRegisterName, "Register name or glob (? and *) to delete")->required();
     rmCommand->callback([&]() { action = Action::RegRm; });
+
+    std::string touchPattern;
+    CLI::App* touchCommand = app.add_subcommand("touch", "Refresh the expiry timer on registers (name or glob)");
+    touchCommand->add_option("name", touchPattern, "Register name or glob (? and *) to refresh")->required();
+    touchCommand->callback([&]() { action = Action::RegTouch; });
 
     CLI::App* peersCommand = app.add_subcommand(
         "peers", "List devices discovered on the network (name, IP, port, OS) — these are the names/IPs for --host");
@@ -1671,6 +1808,8 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
         return RunRegisterLs(lsPattern, verbose);
     case Action::RegRm:
         return RunRegisterRm(rmRegisterName);
+    case Action::RegTouch:
+        return RunTouch(touchPattern);
     case Action::Peers:
         return RunPeers();
     case Action::Probe:
