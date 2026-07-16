@@ -86,8 +86,10 @@ bool PeerMatchesHost(const MDNSDiscovery::DiscoveredPeer& peer, const std::strin
 
 // Finds a gateway peer (the first that accepts) and pushes `payloads` to it with
 // CLPM_FLAG_RELAY set, so that peer rebroadcasts them to the synced mesh — one push
-// instead of a fan-out. Returns the peer it relayed through, or nullopt if none
-// accepted within kBrowseCeiling. Shared by the CLI `copy` verb and the iOS share
+// instead of a fan-out. Delivery is fenced: after the payloads it sends PING and
+// waits for PONG (the gateway's serial recv loop makes that proof the payloads were
+// consumed), so a peer only counts as accepting once acknowledged. Returns the peer
+// it relayed through, or nullopt if none accepted within kBrowseCeiling. Shared by the CLI `copy` verb and the iOS share
 // extension. `includeSelf` surfaces this device's own GUI (CLI uses true; the share
 // extension uses false, since it can't assume its own app is running to relay).
 // `hostFilter` (optional) pins delivery to one device, matching PeerMatchesHost; empty

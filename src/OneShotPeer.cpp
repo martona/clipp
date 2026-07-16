@@ -1,5 +1,7 @@
 #include "OneShotPeer.h"
 
+#include <cstring>
+
 #include "ClipboardWire.h"
 #include "Logger.h"
 
@@ -138,6 +140,46 @@ std::optional<MDNSDiscovery::DiscoveredPeer> RelayPayloads(
                 if (!connection.SendClipboardPayload(payload)) {
                     return true;  // send failed mid-stream; try the next peer
                 }
+            }
+            // Delivery fence. A bare close here is abortive: the gateway pushes RSYN
+            // (and sometimes SYNC) at every fresh incoming peer, we never read it, and
+            // closing with unread inbound data turns the close into an RST — which can
+            // destroy CLIP frames still sitting unread in the gateway's receive buffer.
+            // That is the same race that deterministically dropped the fire-and-forget
+            // REGW writes (see RunRegisterCopy's ack). The gateway's recv loop is
+            // strictly serial, so a PONG proves every frame sent before the PING was
+            // consumed and dispatched — an ack that needs no new protocol and works
+            // against every deployed daemon. Draining the crosstalk while waiting also
+            // makes the eventual close a clean FIN.
+            if (!connection.SendFrame("PING")) {
+                return true;  // try the next peer
+            }
+            bool acked = false;
+            std::vector<unsigned char> frame;
+            while (connection.RecvFrame(frame)) {
+                if (frame.size() < 4) {
+                    break;
+                }
+                if (std::memcmp(frame.data(), "PONG", 4) == 0) {
+                    acked = true;
+                    break;
+                }
+                if (std::memcmp(frame.data(), "SYNC", 4) == 0) {
+                    // Activity-stream sync request meant for a long-lived daemon; we
+                    // have nothing to replay, so end it rather than leave the gateway
+                    // expecting a stream.
+                    if (!connection.SendFrame("EOSY")) {
+                        break;
+                    }
+                    continue;
+                }
+                // Ignore RSYN/REGW/CLIP and any other crosstalk while waiting.
+            }
+            if (!acked) {
+                // No proof of delivery (timeout or reset). Trying the next peer may
+                // re-send an item the gateway did apply — harmless: receivers dedup
+                // on eventGuid and already-current content.
+                return true;
             }
             via = peer;
             return false;  // delivered to a gateway; stop browsing
