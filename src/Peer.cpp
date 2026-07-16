@@ -14,7 +14,6 @@
 #include <variant>
 
 #include "Settings.h"
-#include "version.h"
 #include "ClipboardActivityStore.h"
 #include "ClipboardWire.h"
 #include "CryptoChannel.h"
@@ -27,6 +26,13 @@
 #include "RegisterConfig.h"
 #include "RegisterStore.h"
 #include "RegisterWire.h"
+
+#if CLIPP_REGISTERS_DAEMON
+// Generated into the CMake build tree; only the desktop daemon builds have it on
+// the include path (iOS compiles this file via the .mm bridge with no generated
+// headers). Sole consumer is the NMAP responder's self line, same gate.
+#include "version.h"
+#endif
 
 #if defined(__APPLE__)
 #include <fcntl.h>
