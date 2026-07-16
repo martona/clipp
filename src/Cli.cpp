@@ -658,14 +658,17 @@ bool StdoutIsTty() {
     return StdoutDisposition() == StreamDisposition::Terminal;
 }
 
-std::wstring FormatAge(const Hlc& touched) {
-    const uint64_t now = HlcClock::SystemNowMs();
-    const uint64_t ageMs = (now > touched.wallMs) ? (now - touched.wallMs) : 0;
-    const uint64_t s = ageMs / 1000;
+std::wstring FormatAgeSeconds(uint64_t s) {
     if (s < 60)    return std::to_wstring(s) + L"s";
     if (s < 3600)  return std::to_wstring(s / 60) + L"m";
     if (s < 86400) return std::to_wstring(s / 3600) + L"h";
     return std::to_wstring(s / 86400) + L"d";
+}
+
+std::wstring FormatAge(const Hlc& touched) {
+    const uint64_t now = HlcClock::SystemNowMs();
+    const uint64_t ageMs = (now > touched.wallMs) ? (now - touched.wallMs) : 0;
+    return FormatAgeSeconds(ageMs / 1000);
 }
 
 bool HasWildcard(const std::string& s) {
@@ -1545,7 +1548,236 @@ int RunProbe() {
     return 0;
 }
 
-enum class Action { None, Gui, KeySet, KeyErase, KeyShow, HostIdShow, HostIdReset, Copy, Paste, Put, RegLs, RegRm, RegTouch, Peers, Probe };
+// ---- Mesh map: clipp map ------------------------------------------------------
+
+// One parsed `conn` record from a peer's NMAP report: that peer's view of one
+// remote host (counts aggregate its live connections to that host).
+struct MapConnection {
+    uint64_t in = 0;
+    uint64_t out = 0;
+    std::wstring state;      // outgoing-direction state; meaningful when out > 0
+    uint64_t ageSeconds = 0;
+    uint64_t tx = 0;
+    uint64_t rx = 0;
+    std::wstring os;
+    std::wstring idPrefix;   // first hex group, for display
+    std::wstring name;       // control-char scrubbed for terminal output
+};
+
+// Splits a report line's "k=v k=v ... name=<rest>" tail into pairs. `name` is by
+// convention the LAST key and consumes the remainder of the line (device names
+// contain spaces); unknown keys pass through for the caller to ignore.
+std::vector<std::pair<std::string, std::string>> ParseReportFields(const std::string& tail) {
+    std::vector<std::pair<std::string, std::string>> fields;
+    size_t pos = 0;
+    while (pos < tail.size()) {
+        while (pos < tail.size() && tail[pos] == ' ') ++pos;
+        if (pos >= tail.size()) break;
+        if (tail.compare(pos, 5, "name=") == 0) {
+            fields.emplace_back("name", tail.substr(pos + 5));
+            break;
+        }
+        const size_t eq = tail.find('=', pos);
+        if (eq == std::string::npos) break;  // malformed tail; keep what parsed so far
+        const size_t end = tail.find(' ', eq + 1);
+        fields.emplace_back(tail.substr(pos, eq - pos),
+                            end == std::string::npos ? tail.substr(eq + 1)
+                                                     : tail.substr(eq + 1, end - eq - 1));
+        pos = (end == std::string::npos) ? tail.size() : end + 1;
+    }
+    return fields;
+}
+
+uint64_t ParseU64(const std::string& s) {
+    return std::strtoull(s.c_str(), nullptr, 10);
+}
+
+// Asks every discovered device for its connection table (NMAP, gated on
+// CAP0_SERVES_NETMAP) and renders a mesh-wide health view: one line per device
+// with its total incoming/outgoing connection counts; -v adds that device's
+// per-peer rows, -vv the raw report text (which also shows keys newer daemons
+// emit that this build doesn't render). The GUI already shows THIS device's
+// health; the point of `map` is every other node's view without walking to it.
+int RunMap(int verbosity) {
+    if (!g_keyManager.HaveNetworkKey()) {
+        ErrLine(L"No group key configured. Run `clipp key set` first.");
+        return 1;
+    }
+    NetworkStartup net;
+    if (!net.ok) {
+        ErrLine(L"Failed to initialize networking.");
+        return 1;
+    }
+    HostId localHostId;
+    g_settings.ensureHostID(localHostId);
+    const std::string localHostName =
+        clipp::GetLocalPeerDisplayName("unknown", CryptoChannel::HOSTNAME_MAX_BYTES);
+
+    VerboseLine(L"Browsing for peers...");
+    const std::vector<MDNSDiscovery::DiscoveredPeer> peers = CollectPeers();
+    if (peers.empty()) {
+        ErrLine(L"No devices discovered on the network.");
+        return 1;
+    }
+
+    struct HostReport {
+        enum class Status { Unreachable, NoSupport, BadReport, Ok };
+        HostId hostId;
+        std::wstring name;                   // discovery name until the self-report improves it
+        std::wstring version;
+        bool thisDevice = false;
+        Status status = Status::Unreachable;
+        uint64_t totalIn = 0;
+        uint64_t totalOut = 0;
+        std::vector<MapConnection> conns;
+        std::vector<std::wstring> rawLines;  // -vv
+    };
+    std::vector<HostReport> reports;  // discovery order
+    auto findReport = [&](const HostId& id) -> HostReport& {
+        for (auto& r : reports) {
+            if (r.hostId == id) return r;
+        }
+        reports.push_back({});
+        reports.back().hostId = id;
+        return reports.back();
+    };
+
+    for (const auto& peer : peers) {
+        HostReport& report = findReport(peer.hostId);
+        if (report.name.empty()) {
+            report.name = peer.deviceName.empty() ? L"(unknown)" : SanitizePreview(peer.deviceName);
+            report.thisDevice = (peer.hostId == localHostId);
+        }
+        if (report.status != HostReport::Status::Unreachable) {
+            continue;  // this host already answered via another address
+        }
+        VerboseLine(L"Querying " + PeerLabel(peer, localHostId) + L"...");
+        OneShotPeer connection;
+        if (!connection.Connect(peer.ip, peer.port, localHostId, localHostName, peer.hostId,
+                                OneShot::kConnectTimeout, OneShot::kSessionTimeout)) {
+            VerboseLine(L"  unreachable.");
+            continue;  // a later address for the same host may still answer
+        }
+        if ((connection.RemoteCaps()[0] & CryptoChannel::CAP0_SERVES_NETMAP) == 0) {
+            report.status = HostReport::Status::NoSupport;
+            continue;
+        }
+        if (!connection.SendFrame("NMAP")) {
+            continue;
+        }
+        std::string body;
+        bool answered = false;
+        std::vector<unsigned char> frame;
+        while (connection.RecvFrame(frame)) {
+            if (frame.size() < 4) {
+                break;
+            }
+            if (std::memcmp(frame.data(), "NMAP", 4) == 0) {
+                body.assign(frame.begin() + 4, frame.end());
+                answered = true;
+                break;
+            }
+            if (std::memcmp(frame.data(), "NONE", 4) == 0) {
+                report.status = HostReport::Status::NoSupport;
+                answered = true;
+                break;
+            }
+            if (std::memcmp(frame.data(), "SYNC", 4) == 0) { connection.SendFrame("EOSY"); continue; }
+            // Ignore RSYN/REGW/CLIP and other crosstalk; keep waiting for the reply.
+        }
+        if (!answered || report.status == HostReport::Status::NoSupport) {
+            continue;
+        }
+
+        // Parse: a "netmap" header line, then one record per line ("self ...",
+        // "conn ..."). Unknown record types and keys are ignored (extensibility).
+        report.status = HostReport::Status::BadReport;
+        bool sawHeader = false;
+        size_t lineStart = 0;
+        while (lineStart < body.size()) {
+            const size_t lineEnd = body.find('\n', lineStart);
+            const std::string line = body.substr(
+                lineStart, lineEnd == std::string::npos ? std::string::npos : lineEnd - lineStart);
+            lineStart = (lineEnd == std::string::npos) ? body.size() : lineEnd + 1;
+            if (line.empty()) continue;
+            if (verbosity >= 2) report.rawLines.push_back(SanitizePreview(line));
+            const size_t space = line.find(' ');
+            const std::string tag = line.substr(0, space);
+            const std::string tail = (space == std::string::npos) ? std::string() : line.substr(space + 1);
+            if (tag == "netmap") { sawHeader = true; continue; }
+            if (!sawHeader) break;  // not our format; bail (status stays BadReport)
+            if (tag == "self") {
+                for (const auto& [key, value] : ParseReportFields(tail)) {
+                    if (key == "ver") report.version = ToWide(value);
+                    else if (key == "name" && !value.empty()) report.name = SanitizePreview(value);
+                }
+                continue;
+            }
+            if (tag == "conn") {
+                MapConnection conn;
+                for (const auto& [key, value] : ParseReportFields(tail)) {
+                    if      (key == "in")    conn.in = ParseU64(value);
+                    else if (key == "out")   conn.out = ParseU64(value);
+                    else if (key == "state") conn.state = ToWide(value);
+                    else if (key == "age")   conn.ageSeconds = ParseU64(value);
+                    else if (key == "tx")    conn.tx = ParseU64(value);
+                    else if (key == "rx")    conn.rx = ParseU64(value);
+                    else if (key == "os")    conn.os = ToWide(value);
+                    else if (key == "id")    conn.idPrefix = ToWide(value).substr(0, 8);
+                    else if (key == "name")  conn.name = SanitizePreview(value);
+                }
+                report.totalIn += conn.in;
+                report.totalOut += conn.out;
+                report.conns.push_back(std::move(conn));
+                continue;
+            }
+            // Unknown record type from a newer daemon: skip the line.
+        }
+        if (sawHeader) {
+            report.status = HostReport::Status::Ok;
+        }
+    }
+
+    // Render. Default: one line per device with its in/out totals. In a healthy
+    // N-daemon mesh every daemon shows (N-1)/(N-1).
+    size_t nameWidth = 0;
+    for (const auto& r : reports) nameWidth = (std::max)(nameWidth, r.name.size());
+    for (const auto& r : reports) {
+        std::wstring line = PadRight(r.name, nameWidth) + L"  ";
+        switch (r.status) {
+        case HostReport::Status::Ok:
+            line += std::to_wstring(r.totalIn) + L"/" + std::to_wstring(r.totalOut);
+            break;
+        case HostReport::Status::Unreachable: line += L"unreachable";        break;
+        case HostReport::Status::NoSupport:   line += L"no map support";     break;
+        case HostReport::Status::BadReport:   line += L"unrecognized reply"; break;
+        }
+        if (verbosity >= 1 && !r.version.empty()) line += L"  v" + r.version;
+        if (r.thisDevice) line += L"  [this device]";
+        OutLine(line);
+        if (verbosity >= 1 && r.status == HostReport::Status::Ok) {
+            size_t connNameWidth = 0;
+            for (const auto& c : r.conns) connNameWidth = (std::max)(connNameWidth, c.name.size());
+            for (const auto& c : r.conns) {
+                OutLine(L"  " + PadRight(c.name, connNameWidth) +
+                        L"  in " + std::to_wstring(c.in) + L"  out " + std::to_wstring(c.out) +
+                        L"  " + PadRight(c.out > 0 ? c.state : std::wstring(L"-"), 10) +
+                        L"  " + PadLeft(FormatAgeSeconds(c.ageSeconds), 4) +
+                        L"  tx " + PadLeft(HumanizeSize(c.tx), 5) +
+                        L"  rx " + PadLeft(HumanizeSize(c.rx), 5) +
+                        L"  " + c.os + L" " + c.idPrefix);
+            }
+        }
+        if (verbosity >= 2) {
+            for (const auto& raw : r.rawLines) {
+                OutLine(L"  | " + raw);
+            }
+        }
+    }
+    return 0;
+}
+
+enum class Action { None, Gui, KeySet, KeyErase, KeyShow, HostIdShow, HostIdReset, Copy, Paste, Put, RegLs, RegRm, RegTouch, Peers, Probe, Map };
 
 }  // namespace
 
@@ -1590,8 +1822,8 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
         "--loglevel", logLevel,
         "Log level: error, warn, info, debug, ddebug (default: silent in command mode)");
 
-    bool verbose = false;
-    app.add_flag("-v,--verbose", verbose, "Print progress to stderr (for copy/paste)");
+    int verbose = 0;  // counted: -v / -vv (some commands render extra detail per level)
+    app.add_flag("-v,--verbose", verbose, "Print progress to stderr; repeat (-vv) for more detail (map)");
 
     std::string hostFilter;
     app.add_option("--host", hostFilter,
@@ -1640,6 +1872,10 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
     CLI::App* probeCommand = app.add_subcommand(
         "probe", "Connect to each discovered device and report reachability + capabilities");
     probeCommand->callback([&]() { action = Action::Probe; });
+
+    CLI::App* mapCommand = app.add_subcommand(
+        "map", "Mesh health: every device's connection table (-v per-peer rows, -vv raw reports)");
+    mapCommand->callback([&]() { action = Action::Map; });
 
     CLI::App* keyCommand = app.add_subcommand("key", "Group key management");
     keyCommand->require_subcommand(1);
@@ -1735,7 +1971,7 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
         g_logger.SetMinimumLevel(Logger::Level::Off);
     }
 
-    g_verbose = verbose;
+    g_verbose = verbose > 0;
     g_hostFilter = hostFilter;
 
     // Bare launch with no command and no inferred verb: print usage and exit instead
@@ -1805,7 +2041,7 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
     case Action::Put:
         return RunPut(putRegisterName);
     case Action::RegLs:
-        return RunRegisterLs(lsPattern, verbose);
+        return RunRegisterLs(lsPattern, verbose > 0);
     case Action::RegRm:
         return RunRegisterRm(rmRegisterName);
     case Action::RegTouch:
@@ -1814,6 +2050,8 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
         return RunPeers();
     case Action::Probe:
         return RunProbe();
+    case Action::Map:
+        return RunMap(verbose);
     case Action::Gui:
     case Action::None:
         break;

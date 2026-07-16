@@ -36,6 +36,10 @@ public:
     // mirror — acked with ROKP/NONE. Against peers without it, the CLI falls back
     // to doing the same via RGET followed by a relay CLIP.
     static constexpr uint8_t CAP0_SERVES_PUT = 0x04;
+    // SERVES_NETMAP means this peer answers an "NMAP" frame (CLI `map`) with its
+    // connection table as extensible key=value text — mesh health seen from that
+    // device. No fallback exists: peers without the bit simply can't report.
+    static constexpr uint8_t CAP0_SERVES_NETMAP = 0x08;
 
     CryptoChannel();
 

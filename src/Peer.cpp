@@ -14,6 +14,7 @@
 #include <variant>
 
 #include "Settings.h"
+#include "version.h"
 #include "ClipboardActivityStore.h"
 #include "ClipboardWire.h"
 #include "CryptoChannel.h"
@@ -914,6 +915,86 @@ void Peer::ThreadProcRecv() {
 				} else if (!channel.SendFrame(io, "NONE")) {
 					break;
 				}
+				continue;
+			}
+
+			if (std::memcmp(frame.data(), "NMAP", 4) == 0) {
+#if CLIPP_REGISTERS_DAEMON
+				// `clipp map`: this daemon's connection table (the same per-host
+				// aggregates the GUI peer list renders) as extensible key=value
+				// text. One record per line; `name=` is always the LAST key and
+				// takes the rest of the line (device names may contain spaces);
+				// readers ignore unknown keys, so fields can be added without a
+				// protocol rev. Names are peer-controlled: scrub control chars at
+				// the emitter so a hostile name can't inject fake report lines.
+				const auto scrub = [](std::string s) {
+					for (char& c : s) {
+						const unsigned char u = static_cast<unsigned char>(c);
+						if (u < 0x20 || u == 0x7f) c = '.';
+					}
+					return s;
+				};
+				const auto now = std::chrono::steady_clock::now();
+				HostId selfId{};
+				g_settings.getHostID(selfId);
+				std::string report = "netmap v=1\n";
+				report += "self ver=" CLIPP_VERSION_STRING " id=" +
+					WideToUtf8String(selfId.ToHexWString()) + " name=" +
+					scrub(clipp::GetLocalPeerDisplayName("unknown", CryptoChannel::HOSTNAME_MAX_BYTES)) + "\n";
+				for (const PeerDisplayItem& item : g_peerDisplay.Query()) {
+					size_t inCount = item.incomingConnectionCount;
+					const size_t outCount = item.outgoingConnectionCount;
+					// The connection carrying this request is measurement
+					// apparatus, not mesh state: subtract it. (It is an established
+					// incoming connection from the requester's hostId — its
+					// NotifyPeer ran at handshake, before this handler.)
+					if (item.hostID == hostID() && inCount > 0) --inCount;
+					if (inCount == 0 && outCount == 0) continue;
+					const char* state = "connected";
+					switch (item.outgoingConnState) {
+					case PeerConnState::Connecting: state = "connecting"; break;
+					case PeerConnState::Connected:  state = "connected";  break;
+					case PeerConnState::Backoff:    state = "backoff";    break;
+					case PeerConnState::Failed:     state = "failed";     break;
+					}
+					const char* os = "unknown";
+					switch (item.osType) {
+					case OsType::Windows:    os = "windows"; break;
+					case OsType::MacOS:      os = "macos";   break;
+					case OsType::IOS_iPhone: os = "iphone";  break;
+					case OsType::IOS_iPad:   os = "ipad";    break;
+					case OsType::Linux:      os = "linux";   break;
+					default: break;
+					}
+					uint64_t ageSeconds = 0;
+					if (item.connectedSince != std::chrono::steady_clock::time_point{} &&
+						now > item.connectedSince) {
+						ageSeconds = static_cast<uint64_t>(
+							std::chrono::duration_cast<std::chrono::seconds>(now - item.connectedSince).count());
+					}
+					char fields[192];
+					std::snprintf(fields, sizeof(fields),
+						"conn in=%zu out=%zu state=%s age=%llu tx=%llu rx=%llu os=%s id=",
+						inCount, outCount, state,
+						static_cast<unsigned long long>(ageSeconds),
+						static_cast<unsigned long long>(item.bytesSent),
+						static_cast<unsigned long long>(item.bytesReceived), os);
+					report += fields;
+					report += WideToUtf8String(item.hostID.ToHexWString());
+					report += " name=" + scrub(WideToUtf8String(item.hostName)) + "\n";
+				}
+				if (!channel.SendFrame(io, "NMAP",
+						reinterpret_cast<const unsigned char*>(report.data()),
+						static_cast<uint32_t>(report.size()))) {
+					break;
+				}
+#else
+				// Non-daemon builds never advertise the cap; answer a confused
+				// client definitively rather than leaving it to time out.
+				if (!channel.SendFrame(io, "NONE")) {
+					break;
+				}
+#endif
 				continue;
 			}
 

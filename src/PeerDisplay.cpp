@@ -62,12 +62,12 @@ void PeerDisplay::NotifyPeer(const std::wstring& hostName, const HostId& hostID,
 		}
 
 		if (connType == Peer::ConnType::Incoming) {
-			++found->incomingConnectionCount;
+			++found->item.incomingConnectionCount;
 		} else {
-			++found->outgoingConnectionCount;
+			++found->item.outgoingConnectionCount;
 		}
-		found->item.hasIncomingConnection = found->incomingConnectionCount > 0;
-		found->item.hasOutgoingConnection = found->outgoingConnectionCount > 0;
+		found->item.hasIncomingConnection = found->item.incomingConnectionCount > 0;
+		found->item.hasOutgoingConnection = found->item.outgoingConnectionCount > 0;
 		if (found->item.connectedSince == std::chrono::steady_clock::time_point{} || connectedSince < found->item.connectedSince) {
 			found->item.connectedSince = connectedSince;
 		}
@@ -103,14 +103,14 @@ void PeerDisplay::NotifyPeerRemoved(const HostId& hostID, Peer::ConnType connTyp
 		}
 
 		if (connType == Peer::ConnType::Incoming) {
-			if (found->incomingConnectionCount > 0) --found->incomingConnectionCount;
+			if (found->item.incomingConnectionCount > 0) --found->item.incomingConnectionCount;
 		} else {
-			if (found->outgoingConnectionCount > 0) --found->outgoingConnectionCount;
+			if (found->item.outgoingConnectionCount > 0) --found->item.outgoingConnectionCount;
 		}
-		found->item.hasIncomingConnection = found->incomingConnectionCount > 0;
-		found->item.hasOutgoingConnection = found->outgoingConnectionCount > 0;
+		found->item.hasIncomingConnection = found->item.incomingConnectionCount > 0;
+		found->item.hasOutgoingConnection = found->item.outgoingConnectionCount > 0;
 
-		if (found->incomingConnectionCount > 0 || found->outgoingConnectionCount > 0) {
+		if (found->item.incomingConnectionCount > 0 || found->item.outgoingConnectionCount > 0) {
 			update.type = PeerDisplayUpdate::Type::Updated;
 			update.item = found->item;
 		} else {

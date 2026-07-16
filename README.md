@@ -241,14 +241,17 @@ Like the command-line clipboard, registers are text-only in this release; and li
 
 ### Discovery diagnostics
 
-To see what your device can find on the network, `clipp peers` lists every discovered device — its name, IP, port, and OS — without connecting to anything. `clipp probe` goes a step further and actually connects to each, reporting whether it's reachable and what it serves (clipboard paste, named registers):
+To see what your device can find on the network, `clipp peers` lists every discovered device — its name, IP, port, and OS — without connecting to anything. `clipp probe` goes a step further and actually connects to each, reporting whether it's reachable and what it serves (clipboard paste, named registers, put, map):
 
 ```sh
 clipp peers             # name / IP / port / OS of every discovered device
 clipp probe             # connect to each: reachable? serves paste? registers?
+clipp map               # each device's own connection table: name, in/out totals
 ```
 
-Both need a group key set (devices only appear once their announcements decrypt under your key).
+`clipp map` checks the health of the whole mesh, not just what this device can see: every device reports its own connection table, and each output line is one device with its total incoming/outgoing connection counts (in a healthy mesh of N desktops, every daemon shows N-1 of each). `-v` breaks the counts down per peer with state, age, and traffic; `-vv` appends each device's raw report. Devices running older builds show as `no map support`.
+
+All of these need a group key set (devices only appear once their announcements decrypt under your key).
 
 By default the network verbs use the first suitable peer they find. The **`--host`** option (on `copy`/`paste`/`ls`/`rm`) pins them to one device — but it's an **exact device-name or IP filter, not a hostname lookup**: pass a name or IP exactly as `clipp peers` prints it (e.g. `--host mbp` or `--host 192.168.1.140`), not a `.local`/`.lan`/`localhost` form, which won't match.
 

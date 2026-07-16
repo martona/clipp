@@ -156,8 +156,13 @@ namespace {
         CryptoChannel::Caps caps{};
         caps[0] |= CryptoChannel::CAP0_SERVES_RECENT;
 #if CLIPP_REGISTERS_DAEMON
+        // This macro is effectively the "desktop daemon build" predicate (see
+        // RegisterConfig.h) — NETMAP isn't register-related, but the population
+        // that can serve it (has g_peerDisplay and a live connection table) is
+        // exactly the same.
         caps[0] |= CryptoChannel::CAP0_SERVES_REGISTERS;
         caps[0] |= CryptoChannel::CAP0_SERVES_PUT;
+        caps[0] |= CryptoChannel::CAP0_SERVES_NETMAP;
 #endif
         return caps;
     }

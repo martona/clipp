@@ -33,6 +33,11 @@ struct PeerDisplayItem {
 	uint64_t bytesSent{};
 	uint64_t bytesReceived{};
 	std::chrono::steady_clock::time_point connectedSince{};
+	// Live connection counts behind the has* bools (a host normally holds one of
+	// each; extras are transient one-shot CLI sessions). Serialized by the NMAP
+	// responder for `clipp map`.
+	std::size_t incomingConnectionCount{};
+	std::size_t outgoingConnectionCount{};
 
 	// True when something looks off worth surfacing in the UI: outgoing not connected,
 	// or outgoing connected but no inbound (likely firewall/NAT keeping the peer from
@@ -78,9 +83,7 @@ public:
 
 private:
 	struct PeerDisplayEntry {
-		PeerDisplayItem item;
-		std::size_t incomingConnectionCount{};
-		std::size_t outgoingConnectionCount{};
+		PeerDisplayItem item;   // connection counts live on the item itself
 	};
 
 	static bool LessDisplayItem(const PeerDisplayItem& left, const PeerDisplayItem& right);
