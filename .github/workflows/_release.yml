@@ -149,6 +149,10 @@ jobs:
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
+          # The action's dependency cache keys are arch-agnostic, so the amd64 and
+          # arm64 matrix legs poison each other's TrustedSigning module cache
+          # (Azure/trusted-signing-action#146). Fresh install costs ~1 min per leg.
+          cache-dependencies: false
 
       - name: Verify signatures
         run: |
@@ -179,6 +183,10 @@ jobs:
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
+          # The action's dependency cache keys are arch-agnostic, so the amd64 and
+          # arm64 matrix legs poison each other's TrustedSigning module cache
+          # (Azure/trusted-signing-action#146). Fresh install costs ~1 min per leg.
+          cache-dependencies: false
 
       - name: Verify MSIX signature
         run: |
