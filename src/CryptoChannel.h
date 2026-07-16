@@ -31,6 +31,11 @@ public:
     // one-shot CLI and iOS don't serve. Gating register-frame sends on it keeps old
     // and non-serving peers from seeing frames they'd only log-and-ignore.
     static constexpr uint8_t CAP0_SERVES_REGISTERS = 0x02;
+    // SERVES_PUT means this peer answers "RPUT <name>" (CLI `put`) by promoting that
+    // named register to the live clipboard itself — apply + mesh broadcast + ""
+    // mirror — acked with ROKP/NONE. Against peers without it, the CLI falls back
+    // to doing the same via RGET followed by a relay CLIP.
+    static constexpr uint8_t CAP0_SERVES_PUT = 0x04;
 
     CryptoChannel();
 

@@ -24,6 +24,7 @@
 #include "LocalPeerName.h"
 #include "Logger.h"
 #include "MDNSDiscovery.h"
+#include "NetworkDefs.h"
 #include "OneShotPeer.h"
 #include "RegisterStore.h"
 #include "RegisterWire.h"
@@ -957,6 +958,144 @@ int RunRegisterPaste(const std::string& name) {
     return refusedPrivate ? 1 : 0;
 }
 
+// Promotes a named register to the live network clipboard — `clipp put <name>` is
+// the one-step form of `clipp paste <name> | clipp copy`. A gateway advertising
+// CAP0_SERVES_PUT does it server-side in one acked RPUT exchange (atomic; the value
+// never transits this box). An older register-capable gateway gets the same result
+// via that dance run here on the same connection: RGET the value, push it back as a
+// relay CLIP exactly as `copy` would, PING/PONG-fenced so our close can't outrun
+// the gateway's read (see OneShot::RelayPayloads).
+int RunPut(const std::string& name) {
+    if (!IsValidRegisterName(name)) {
+        ErrLine(L"Invalid register name. Use 1-64 characters of [a-z0-9._-].");
+        return 1;
+    }
+    if (!g_keyManager.HaveNetworkKey()) {
+        ErrLine(L"No group key configured. Run `clipp key set` first.");
+        return 1;
+    }
+    NetworkStartup net;
+    if (!net.ok) {
+        ErrLine(L"Failed to initialize networking.");
+        return 1;
+    }
+    HostId localHostId;
+    g_settings.ensureHostID(localHostId);
+    const std::string localHostName =
+        clipp::GetLocalPeerDisplayName("unknown", CryptoChannel::HOSTNAME_MAX_BYTES);
+    const std::vector<unsigned char> req = RegisterWire::EncodeName(name);
+
+    bool promoted = false;
+    bool absent = false;
+    bool filterMatched = false;
+    const bool reached = WithRegisterGateway(localHostId, localHostName, filterMatched, [&](OneShotPeer& conn) -> bool {
+        if ((conn.RemoteCaps()[0] & CryptoChannel::CAP0_SERVES_PUT) != 0) {
+            VerboseLine(L"  promoting at the gateway (RPUT).");
+            if (!conn.SendFrame("RPUT", req.data(), static_cast<uint32_t>(req.size()))) {
+                return false;
+            }
+            std::vector<unsigned char> frame;
+            while (conn.RecvFrame(frame)) {
+                if (frame.size() < 4) {
+                    break;
+                }
+                if (std::memcmp(frame.data(), "ROKP", 4) == 0) { promoted = true; return true; }
+                if (std::memcmp(frame.data(), "NONE", 4) == 0) { absent = true; return true; }
+                if (std::memcmp(frame.data(), "RERR", 4) == 0) { return false; }  // gateway hiccup; try another
+                if (std::memcmp(frame.data(), "SYNC", 4) == 0) {
+                    conn.SendFrame("EOSY");
+                    continue;
+                }
+                // Ignore RSYN/REGW/CLIP/REOS/PING crosstalk; keep waiting for the ack.
+            }
+            return false;
+        }
+
+        // Pre-put gateway: fetch the value, then hand it back as the clipboard.
+        VerboseLine(L"  gateway predates put; running get -> relay here.");
+        if (!conn.SendFrame("RGET", req.data(), static_cast<uint32_t>(req.size()))) {
+            return false;
+        }
+        std::optional<RegisterRecord> rec;
+        {
+            std::vector<unsigned char> frame;
+            while (conn.RecvFrame(frame)) {
+                if (frame.size() < 4) {
+                    break;
+                }
+                if (std::memcmp(frame.data(), "REGW", 4) == 0) {
+                    RegisterRecord candidate;
+                    uint8_t transport = 0;
+                    const std::vector<unsigned char> fbody(frame.begin() + 4, frame.end());
+                    if (!RegisterWire::TryDecodeRecord(fbody, candidate, transport)) {
+                        return false;
+                    }
+                    if (candidate.name != name) {
+                        continue;  // an unsolicited broadcast for another register; keep waiting
+                    }
+                    rec = std::move(candidate);
+                    break;
+                }
+                if (std::memcmp(frame.data(), "NONE", 4) == 0) { absent = true; return true; }
+                if (std::memcmp(frame.data(), "SYNC", 4) == 0) {
+                    conn.SendFrame("EOSY");
+                    continue;
+                }
+                // Ignore RSYN/REOS/PING and any other crosstalk; keep waiting.
+            }
+            if (!rec.has_value()) {
+                return false;  // transport died before an answer; try the next gateway
+            }
+        }
+
+        // The same item `clipp copy` would send: canonical-LF text plus the
+        // capture-convention trailing NUL, relayed for mesh-wide fan-out.
+        std::vector<unsigned char> bytes(rec->value.begin(), rec->value.end());
+        bytes.push_back('\0');
+        ClipboardPayload payload;
+        payload.meta.formatId = CLIPP_FORMAT_UTF8;
+        if (!payload.SetUncompressedBytes(std::move(bytes))) {
+            return false;
+        }
+        payload.StampOrigin(localHostId, localHostName.c_str(), g_settings.nextOriginSequenceNumber());
+        payload.meta.flags |= NetworkDefs::CLPM_FLAG_RELAY;
+        if (!conn.SendClipboardPayload(payload)) {
+            return false;
+        }
+        // Same delivery fence as RelayPayloads: the gateway's serial recv loop means
+        // a PONG proves the CLIP was consumed before we close.
+        if (!conn.SendFrame("PING")) {
+            return false;
+        }
+        std::vector<unsigned char> frame;
+        while (conn.RecvFrame(frame)) {
+            if (frame.size() < 4) {
+                break;
+            }
+            if (std::memcmp(frame.data(), "PONG", 4) == 0) { promoted = true; return true; }
+            if (std::memcmp(frame.data(), "SYNC", 4) == 0) {
+                if (!conn.SendFrame("EOSY")) {
+                    break;
+                }
+                continue;
+            }
+            // Ignore RSYN/REGW/CLIP crosstalk while waiting for the fence.
+        }
+        return false;
+    });
+
+    if (!reached) {
+        ReportNoGateway(L"Could not reach any register-capable device.", filterMatched);
+        return 1;
+    }
+    if (absent) {
+        ErrLine(L"No such register '" + ToWide(name) + L"'.");
+        return 1;
+    }
+    VerboseLine(L"Register '" + ToWide(name) + L"' is now the clipboard everywhere.");
+    return 0;
+}
+
 int RunRegisterLs(const std::string& pattern, bool verbose) {
     if (!g_keyManager.HaveNetworkKey()) {
         ErrLine(L"No group key configured. Run `clipp key set` first.");
@@ -1259,21 +1398,22 @@ int RunProbe() {
         const bool reachable = connection.Connect(peer.ip, peer.port, localHostId, localHostName,
                                                   peer.hostId, OneShot::kConnectTimeout,
                                                   OneShot::kSessionTimeout);
-        std::wstring paste = L"-", registers = L"-";
+        std::wstring paste = L"-", registers = L"-", put = L"-";
         if (reachable) {
             const auto& caps = connection.RemoteCaps();
             paste     = (caps[0] & CryptoChannel::CAP0_SERVES_RECENT)    ? L"yes" : L"no";
             registers = (caps[0] & CryptoChannel::CAP0_SERVES_REGISTERS) ? L"yes" : L"no";
+            put       = (caps[0] & CryptoChannel::CAP0_SERVES_PUT)       ? L"yes" : L"no";
         }
         const std::wstring name = peer.deviceName.empty() ? L"(unknown)" : SanitizePreview(peer.deviceName);
         const std::wstring tag = (peer.hostId == localHostId) ? L"[this device]" : L"";
-        rows.push_back({name, ToWide(peer.ip), reachable ? L"yes" : L"no", paste, registers, tag});
+        rows.push_back({name, ToWide(peer.ip), reachable ? L"yes" : L"no", paste, registers, put, tag});
     }
-    PrintTable({L"NAME", L"IP", L"REACHABLE", L"PASTE", L"REGISTERS", L""}, rows);
+    PrintTable({L"NAME", L"IP", L"REACHABLE", L"PASTE", L"REGISTERS", L"PUT", L""}, rows);
     return 0;
 }
 
-enum class Action { None, Gui, KeySet, KeyErase, KeyShow, HostIdShow, HostIdReset, Copy, Paste, RegLs, RegRm, Peers, Probe };
+enum class Action { None, Gui, KeySet, KeyErase, KeyShow, HostIdShow, HostIdReset, Copy, Paste, Put, RegLs, RegRm, Peers, Probe };
 
 }  // namespace
 
@@ -1340,6 +1480,11 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
     pasteCommand->alias("p");
     pasteCommand->add_option("name", pasteRegisterName, "Named register (default: the shared clipboard)");
     pasteCommand->callback([&]() { action = Action::Paste; });
+
+    std::string putRegisterName;
+    CLI::App* putCommand = app.add_subcommand("put", "Make a named register the current clipboard on all devices");
+    putCommand->add_option("name", putRegisterName, "Register to promote")->required();
+    putCommand->callback([&]() { action = Action::Put; });
 
     std::string lsPattern;
     CLI::App* lsCommand = app.add_subcommand("ls", "List named registers (-v for details; optional name/glob filter)");
@@ -1520,6 +1665,8 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
                                         : RunRegisterCopy(copyRegisterName, copyPrivate);
     case Action::Paste:
         return pasteRegisterName.empty() ? RunPaste() : RunRegisterPaste(pasteRegisterName);
+    case Action::Put:
+        return RunPut(putRegisterName);
     case Action::RegLs:
         return RunRegisterLs(lsPattern, verbose);
     case Action::RegRm:

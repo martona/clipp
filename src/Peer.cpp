@@ -431,6 +431,44 @@ bool Peer::HandleRegisterFrame(CryptoChannel& channel, const SocketIoContext& io
 		}
 		return true;
 	}
+	if (std::memcmp(frame.data(), "RPUT", 4) == 0) {
+		// `clipp put <name>`: promote a named register to the live clipboard as one
+		// atomic gateway-side op (the CLI's fallback is RGET -> CLIP relay). Reuses
+		// the relay intake: flag the item CLPM_FLAG_RELAY and hand it to the
+		// clipboard callback, which rebroadcasts to the mesh (flag cleared), applies
+		// it locally, and mirrors the "" register. ROKP is sent after that returns,
+		// so the ack means "applied here and queued to every peer"; NONE = no such
+		// register; RERR = couldn't build or route the item.
+		std::string name;
+		std::optional<RegisterRecord> rec;
+		if (RegisterWire::TryDecodeName(body, name) && IsValidRegisterName(name)) {
+			rec = g_registerStore.Read(name);  // touch side effect, like RGET
+		}
+		if (!rec.has_value()) {
+			channel.SendFrame(io, "NONE");
+			return true;
+		}
+		// The same item `clipp copy` would send: canonical-LF text plus the
+		// capture-convention trailing NUL. Origin = the requesting device (the put
+		// is user-initiated there); the sequence number is diagnostic and comes
+		// from our counter.
+		std::vector<unsigned char> bytes(rec->value.begin(), rec->value.end());
+		bytes.push_back('\0');
+		ClipboardPayload payload;
+		payload.meta.formatId = CLIPP_FORMAT_UTF8;
+		bool routed = false;
+		if (payload.SetUncompressedBytes(std::move(bytes))) {
+			payload.StampOrigin(hostID(), WideToUtf8String(hostName()).c_str(),
+				g_settings.nextOriginSequenceNumber());
+			payload.meta.flags |= NetworkDefs::CLPM_FLAG_RELAY;
+			if (clipboardReceivedCallback_) {
+				clipboardReceivedCallback_(std::make_shared<const ClipboardPayload>(std::move(payload)));
+				routed = true;
+			}
+		}
+		channel.SendFrame(io, routed ? "ROKP" : "RERR");
+		return true;
+	}
 	if (std::memcmp(frame.data(), "RLST", 4) == 0) {
 		// Rich list for `ls`/`ls -v`: live values + the default "" mirror, each with a
 		// capped preview (omitted for private records — their bytes never leave the

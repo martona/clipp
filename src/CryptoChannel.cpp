@@ -157,6 +157,7 @@ namespace {
         caps[0] |= CryptoChannel::CAP0_SERVES_RECENT;
 #if CLIPP_REGISTERS_DAEMON
         caps[0] |= CryptoChannel::CAP0_SERVES_REGISTERS;
+        caps[0] |= CryptoChannel::CAP0_SERVES_PUT;
 #endif
         return caps;
     }

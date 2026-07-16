@@ -37,7 +37,7 @@ Clipp syncs clipboard text and images between your own devices without a cloud s
 - Sends clipboard data directly between devices.
 - Shows recent clipboard activity so you can copy an earlier item again.
 - Pipes clipboard text to and from the network from the command line (`clipp copy` / `clipp paste`), including over SSH.
-- Keeps named, persistent clipboard registers that sync across devices (`clipp copy <name>` / `paste <name>`, listed and removed with `ls` / `rm`).
+- Keeps named, persistent clipboard registers that sync across devices (`clipp copy <name>` / `paste <name>`, listed and removed with `ls` / `rm`, promoted to the live clipboard with `put <name>`).
 
 ## Security Model
 
@@ -217,7 +217,10 @@ A note on macOS and using Clipp via SSH on a Mac host: Apps in an SSH session ar
 echo "ssh me@prod" | clipp copy login     # write the "login" register
 clipp paste login                         # read it back, on any device
 cat id_ed25519.pub | clipp copy ssh.pub   # names use [a-z0-9._-], up to 64 chars
+clipp put login                           # make "login" the live clipboard everywhere
 ```
+
+`put` promotes a register to the current clipboard on all devices in one step — the equivalent of `clipp paste <name> | clipp copy`, performed at the gateway.
 
 Registers stick around until you delete them or they go unused for 90 days. List and remove them with `ls` and `rm`:
 
