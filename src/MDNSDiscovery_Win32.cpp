@@ -133,10 +133,18 @@ DNS_SERVICE_INSTANCE* BuildLocalServiceInstance(const std::wstring& instanceName
 
     // Use the local machine hostname as the SRV target — DnsServiceConstructInstance accepts
     // nullptr to mean "this host" but some implementations are happier with explicit names.
+    // It MUST be the DNS hostname: the system's mDNS responder answers
+    // "<DNS hostname>.local", while GetComputerNameW returns the NetBIOS name, which
+    // silently truncates to 15 characters — a longer computer name then advertises an
+    // SRV target nobody answers, and every peer fails the resolve with "no IP
+    // available" (found live: APPZ-GAMEZ-WAREZ published as APPZ-GAMEZ-WARE).
     wchar_t hostName[256] = {};
     DWORD hostLen = static_cast<DWORD>(std::size(hostName));
-    if (!GetComputerNameW(hostName, &hostLen)) {
-        std::wcscpy(hostName, L"localhost");
+    if (!GetComputerNameExW(ComputerNamePhysicalDnsHostname, hostName, &hostLen)) {
+        hostLen = static_cast<DWORD>(std::size(hostName));
+        if (!GetComputerNameW(hostName, &hostLen)) {
+            wcscpy_s(hostName, L"localhost");
+        }
     }
     std::wstring hostFqdn = std::wstring(hostName) + L".local";
 
