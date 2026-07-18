@@ -5,7 +5,7 @@ This document covers cutting a release: versioning, the CI pipeline that builds,
 ## Contents
 
 - [Release channels](#release-channels)
-- [Versioning and bumping](#versioning-and-bumping)
+- [Versioning](#versioning)
 - [Cutting a GitHub release](#cutting-a-github-release)
 - [The CI pipeline](#the-ci-pipeline)
 - [Mac App Store](#mac-app-store)
@@ -26,24 +26,16 @@ Clipp ships through three independent channels. Only the first is automated.
 
 The GitHub Releases and Mac App Store macOS builds are *different binaries* from the same source: the former is a Developer ID, non-sandboxed bundle for direct download; the latter is sandboxed and signed for the store. Both carry the bundle ID `net.clipp.ios` (shared with iOS so the store listing is one Universal Purchase).
 
-## Versioning and bumping
+## Versioning
 
-The version is a 4-part `W.X.Y.Z` string whose canonical default is the `set(CLIPP_VERSION "...")` line in [`CMakeLists.txt`](CMakeLists.txt). To set it everywhere at once, run from macOS:
+The version is a 4-part `W.X.Y.Z` string and it is **tag-canonical**: no file in the tree carries it. It exists only at release time — derived from the `v`-prefixed tag by [`release-tag.yml`](.github/workflows/release-tag.yml), or typed into the manual dispatch form — and the pipeline injects it into every build (`-DCLIPP_VERSION=...` for the CMake platforms; `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` `xcodebuild` overrides for iOS). Each build job then asserts the built artifact actually carries the requested version, so a plumbing regression fails the release instead of shipping a mis-stamped binary.
 
-```sh
-./scripts/bump_version.sh 1.2.3.4
-```
+Unstamped builds — plain `cmake` runs, the build scripts without a version flag, local Xcode builds — come out as `0.0.0.0` (the CMake fallback, mirrored by the iOS project's placeholder build settings). A `0.0.0.0` binary is by definition a dev build. How the version reaches each platform's binary is documented in [BUILDING.md](BUILDING.md#versioning).
 
-This rewrites the `CLIPP_VERSION` default in `CMakeLists.txt` and stamps `CFBundleShortVersionString` (3-part `1.2.3`) and `CFBundleVersion` (full 4-part) in [`ios/Info.plist`](ios/Info.plist) and [`ios/ClippShareExtension/Info.plist`](ios/ClippShareExtension/Info.plist). It needs macOS for `/usr/libexec/PlistBuddy`, and it does **not** commit or tag — review first:
+Two conventions to keep when picking a version:
 
-```sh
-git diff
-git commit -am "Bump version to 1.2.3.4"
-git tag v1.2.3.4
-git push && git push --tags
-```
-
-Pushing the tag triggers the release pipeline (below). How the version reaches each platform's binary is documented in [BUILDING.md](BUILDING.md); note that the Mac App Store build rewrites `CFBundleVersion` down to the 4th component alone (e.g. `105`) because App Store Connect rejects a 4-integer value.
+- The 4th component (`Z`) is a build counter that increases **monotonically across all releases and never resets** when `W.X.Y` bumps. The Mac App Store build collapses `CFBundleVersion` down to that component alone (e.g. `105`) because App Store Connect rejects a 4-integer value there — so the store's "build number must increase" check is judged on `Z` in isolation.
+- `CFBundleShortVersionString` everywhere is the 3-part `W.X.Y` (Apple rejects 4-part values there); everything else gets the full 4-part string.
 
 ## Cutting a GitHub release
 
@@ -52,11 +44,11 @@ Two entry points, both ending in the same reusable pipeline, and **both default 
 ### By tag (the usual path)
 
 ```sh
-./scripts/bump_version.sh 1.2.3.4
-git commit -am "Bump version to 1.2.3.4"
 git tag v1.2.3.4
-git push && git push --tags
+git push --tags
 ```
+
+No version-bump commit exists — the tag itself is the version (see [Versioning](#versioning)), so tag whichever commit you want to release.
 
 [`release-tag.yml`](.github/workflows/release-tag.yml) fires on any `v*` tag, derives the version from the tag name (strips the leading `v`), and always builds a **draft**.
 
@@ -123,14 +115,22 @@ The script signs the sandboxed app with the Apple Distribution identity, embeds 
 
 ## iOS
 
-iOS releases are out of band; the CI pipeline does not touch them. The app and its share extension build only through Xcode:
+iOS releases are out of band; the CI pipeline does not touch them. The two iOS plists reference `$(MARKETING_VERSION)` / `$(CURRENT_PROJECT_VERSION)`, so the version is supplied at archive time — an archive made without overrides is a `0.0.0.0` dev build and App Store Connect would reject it:
 
-1. `./scripts/bump_version.sh W.X.Y.Z` — stamps the two iOS plists.
-2. Open `ios/Clipp.xcodeproj`, select a device destination, **Product → Archive**.
-3. From the Organizer, distribute to App Store Connect (or export the archive and upload with Transporter).
-4. Submit for review or push to TestFlight in App Store Connect.
+1. Archive with the version passed as build-setting overrides (one override stamps the app and the share extension in lockstep):
 
-iOS shares C++ with the desktop build but drives its own Xcode project and holds its version separately in the iOS plists; see [BUILDING.md](BUILDING.md) for the iOS build details.
+   ```sh
+   xcodebuild -project ios/Clipp.xcodeproj -scheme Clipp \
+       -destination 'generic/platform=iOS' \
+       MARKETING_VERSION=1.2.3 CURRENT_PROJECT_VERSION=1.2.3.4 \
+       archive
+   ```
+
+   `Clipp` is Xcode's auto-created scheme for the app target. Without `-archivePath` the archive lands in Xcode's default location and appears in the Organizer. (Setting the two values on both targets in Xcode and using **Product → Archive** works too — just don't commit them; the tree stays at the `0.0.0` / `0.0.0.0` placeholders.)
+2. From the Organizer, distribute to App Store Connect (or export the archive and upload with Transporter).
+3. Submit for review or push to TestFlight in App Store Connect.
+
+iOS shares C++ with the desktop build but drives its own Xcode project; see [BUILDING.md](BUILDING.md) for the iOS build details.
 
 ## Signing infrastructure
 

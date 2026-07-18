@@ -116,6 +116,15 @@ jobs:
           if (-not (Test-Path $shim)) {
             throw "Missing expected console shim: $shim"
           }
+          # The tree carries no version (CMake defaults to 0.0.0.0); the release
+          # version exists only in this workflow's input, so assert it actually
+          # reached both binaries' VERSIONINFO.
+          foreach ($f in @($exe, $shim)) {
+            $vi = [Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path $f))
+            if ($vi.FileVersion -ne "${{ inputs.version }}") {
+              throw "$f FileVersion '$($vi.FileVersion)' != requested '${{ inputs.version }}'"
+            }
+          }
 
       - name: Verify static dependency closure
         run: |
@@ -361,6 +370,20 @@ jobs:
           done
           if [[ ! -x "$app/Contents/MacOS/clipp" ]]; then
             echo "App executable is not executable: $app/Contents/MacOS/clipp" >&2
+            exit 1
+          fi
+          # The tree carries no version (CMake defaults to 0.0.0.0); the release
+          # version exists only in this workflow's input, so assert it actually
+          # reached the bundle plist.
+          want="${{ inputs.version }}"
+          bundle_ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")"
+          short_ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")"
+          if [[ "$bundle_ver" != "$want" ]]; then
+            echo "::error::CFBundleVersion '$bundle_ver' != requested '$want'"
+            exit 1
+          fi
+          if [[ "$short_ver" != "${want%.*}" ]]; then
+            echo "::error::CFBundleShortVersionString '$short_ver' != requested '${want%.*}'"
             exit 1
           fi
 

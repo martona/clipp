@@ -201,23 +201,19 @@ a fresh checkout already contains them.
 
 ## Versioning
 
-The project version is a 4-part `W.X.Y.Z` string. The canonical default lives in the `set(CLIPP_VERSION "...")` line near the top of [`CMakeLists.txt`](CMakeLists.txt); the build scripts pass that through to the compiler so all Windows/macOS builds pick it up automatically. Override per-invocation with `--version W.X.Y.Z` on macOS or `-Version W.X.Y.Z` on Windows.
+The project version is a 4-part `W.X.Y.Z` string. The tree carries **no canonical version**: `CLIPP_VERSION` defaults to `0.0.0.0` in [`CMakeLists.txt`](CMakeLists.txt), so every unstamped build self-identifies as a dev build. Real versions are injected per-invocation — `--version W.X.Y.Z` on macOS/Linux, `-Version W.X.Y.Z` on Windows — which is what the release pipeline does with the version it derives from the tag or dispatch input (see [RELEASING.md](RELEASING.md#versioning)).
 
 Where it ends up:
 
-| Platform | Build-time source                                    | Stamped into                                                          |
-|----------|------------------------------------------------------|-----------------------------------------------------------------------|
-| Windows  | `-DCLIPP_VERSION=...` from build script              | `clipp.exe` / `clipp.com` `VERSIONINFO` resource; `version.h`         |
-| macOS    | same                                                 | `Clipp.app/Contents/Info.plist` `CFBundle*Version`; `version.h`       |
-| iOS      | `ios/Info.plist` (read at runtime via `Bundle.main`) | The two iOS bundles' `CFBundleShortVersionString` / `CFBundleVersion` |
+| Platform | Build-time source                                          | Stamped into                                                          |
+|----------|------------------------------------------------------------|-----------------------------------------------------------------------|
+| Windows  | `-DCLIPP_VERSION=...` from build script                    | `clipp.exe` / `clipp.com` `VERSIONINFO` resource; `version.h`         |
+| macOS    | same                                                       | `Clipp.app/Contents/Info.plist` `CFBundle*Version`; `version.h`       |
+| iOS      | `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` build settings | The two iOS bundles' `CFBundleShortVersionString` / `CFBundleVersion` |
 
-iOS doesn't share the CMake pipeline (Xcode drives the iOS build), so its version is held separately in [`ios/Info.plist`](ios/Info.plist) and [`ios/ClippShareExtension/Info.plist`](ios/ClippShareExtension/Info.plist). The iOS app reads `CFBundleShortVersionString` at runtime via `Bundle.main`, so updating the plist is all that's required to refresh the About screen.
+iOS doesn't share the CMake pipeline (Xcode drives the iOS build): [`ios/Info.plist`](ios/Info.plist) and [`ios/ClippShareExtension/Info.plist`](ios/ClippShareExtension/Info.plist) both reference `$(MARKETING_VERSION)` / `$(CURRENT_PROJECT_VERSION)`, whose in-project defaults are the same dev-build placeholders (`0.0.0` / `0.0.0.0`). Release archives override them on the `xcodebuild` command line, which stamps the app and the share extension in lockstep — App Store validation requires the two `CFBundleShortVersionString`s to match. The app reads the result at runtime via `Bundle.main` for the About screen.
 
-The Mac App Store build (`build_macos_mas.sh`) is an exception: App Store Connect rejects a `CFBundleVersion` with more than three integers, so the script rewrites it down to the 4th component alone (`105` from `1.0.4.105`) — a value that still increments per release. `CFBundleShortVersionString` (the user-visible `1.0.4`) is left untouched. The Developer ID build from `build_macos.sh` keeps the full 4-part `CFBundleVersion`.
-
-### Bumping for a release
-
-Setting the version across every file (`./scripts/bump_version.sh W.X.Y.Z`), tagging, and the pipeline a tag triggers are covered in [RELEASING.md](RELEASING.md#versioning-and-bumping).
+The Mac App Store build (`build_macos_mas.sh`) is an exception: App Store Connect rejects a `CFBundleVersion` with more than three integers, so the script rewrites it down to the 4th component alone (`105` from `1.0.4.105`) — a value that still increments per release because the 4th component is a never-resetting build counter (see [RELEASING.md](RELEASING.md#versioning)). `CFBundleShortVersionString` (the user-visible `1.0.4`) is left untouched. The Developer ID build from `build_macos.sh` keeps the full 4-part `CFBundleVersion`.
 
 ## Environment variables
 
