@@ -95,10 +95,14 @@ jobs:
           echo "Verifying app bundle: $app"
           find "$app" -maxdepth 2 -print | sed -n '1,160p'
 
+          # PrivacyInfo.xcprivacy rides the Clipp file-system-synchronized
+          # folder; its presence here proves the sync-group pickup works
+          # before a release run depends on it.
           for path in \
             "$app/Clipp" \
             "$app/Info.plist" \
-            "$app/Assets.car"
+            "$app/Assets.car" \
+            "$app/PrivacyInfo.xcprivacy"
           do
             if [[ ! -e "$path" ]]; then
               echo "Missing expected bundle path: $path" >&2

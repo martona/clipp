@@ -258,6 +258,16 @@ if [[ "$ARCHIVED_APPEX_BUNDLE_ID" != "$APPEX_BUNDLE_ID" ]]; then
     exit 1
 fi
 
+# Belt-and-braces: the privacy manifest must sit at the app bundle root for
+# App Store validation; cheaper to fail here. It lives in the Clipp
+# file-system-synchronized folder (ios/Clipp/PrivacyInfo.xcprivacy), so Xcode
+# bundles it automatically -- this catches it falling out of the folder.
+if [[ ! -f "$ARCHIVED_APP/PrivacyInfo.xcprivacy" ]]; then
+    echo "[!] Fatal: PrivacyInfo.xcprivacy missing from the archived app bundle root." >&2
+    echo "    Expected: $ARCHIVED_APP/PrivacyInfo.xcprivacy" >&2
+    exit 1
+fi
+
 # The plists reference $(MARKETING_VERSION)/$(CURRENT_PROJECT_VERSION); assert
 # the command-line overrides actually landed in BOTH bundles (App Store
 # validation also requires the two CFBundleShortVersionStrings to match).
