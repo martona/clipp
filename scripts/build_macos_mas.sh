@@ -96,6 +96,12 @@ if [[ "$package" == "1" ]]; then
         echo "[!] Fatal: --package/--upload require APPLE_CODESIGN_INSTALLER_IDENTITY_3RDPARTY ('3rd Party Mac Developer Installer' cert)." >&2
         exit 2
     fi
+    # The version is tag-canonical (no in-tree stamp); a .pkg is a store
+    # artifact, so without --version it would ship as 0.0.0.0.
+    if [[ -z "$VERSION" ]]; then
+        echo "[!] Fatal: --package/--upload require --version W.X.Y.Z (should match the release tag)." >&2
+        exit 2
+    fi
 fi
 if [[ "$upload" == "1" ]]; then
     : "${APPLE_API_KEY_PATH:?--upload requires APPLE_API_KEY_PATH (path to .p8)}"

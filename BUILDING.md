@@ -137,7 +137,9 @@ The script delegates dependency setup to [`scripts/setup_ios_vcpkg.sh`](scripts/
 
 ### iOS device
 
-CI does not currently build for physical devices; device builds are produced manually from Xcode:
+App Store archives are scripted and headless: [`scripts/build_ios_appstore.sh`](scripts/build_ios_appstore.sh) archives the app + share extension, re-signs for distribution, and exports (or uploads) the `.ipa`. It is what CI's `appstore-ios` job runs; the certificates, the two provisioning profiles, and the submission flow are covered in [RELEASING.md](RELEASING.md#ios).
+
+For interactive development on a physical device, Xcode drives everything:
 
 1. Run dependency setup once:
    ```sh
@@ -145,9 +147,7 @@ CI does not currently build for physical devices; device builds are produced man
    ```
 2. Open `ios/Clipp.xcodeproj` in Xcode.
 3. Select your development team under **Signing & Capabilities** for the `Clipp` target.
-4. Choose a connected device (or "Any iOS Device") and **Product → Build / Archive**.
-
-Use XCode -> Product -> Archive after selecting "Any iOS Device" in Run Destinations. Click Distribute, then "App Store Connect" for the store upload, or "Release Testing" for ad-hoc devices. For the latter, you can deploy them with XCode -> Window -> Devices and Simulators (same place where you get the device UDIDs).
+4. Choose a connected device and **Product → Run**; or archive via **Product → Archive** after selecting "Any iOS Device", then use **Distribute → Release Testing** for ad-hoc installs (deploy through **Window → Devices and Simulators**, same place the device UDIDs live).
 
 ### Regenerating the device-type symbol font
 

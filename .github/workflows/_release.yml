@@ -601,6 +601,258 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # ---- App Store uploads --------------------------------------------------
+  #
+  # Mac App Store (.pkg -> App Store Connect) + iOS (TestFlight), riding the
+  # same release: both call the repo's own build scripts with the same env
+  # contract they use locally (RELEASING.md), so CI and a laptop produce the
+  # build the same way. Deliberately NOT in publish's `needs`: a store-side
+  # hiccup never blocks the GitHub release -- re-run just the failed job.
+  # Uploads happen at build time even when the release is a DRAFT; the binary
+  # lands in App Store Connect processing, and releasing to the store stays a
+  # manual App Store Connect action either way. Until the App Store secrets
+  # are configured both jobs skip cleanly with a notice.
+  #
+  # Runner keychain contents come from ONE p12 (APPLE_APPSTORE_P12) that must
+  # bundle every App Store identity + private key:
+  #   - Apple Distribution            (iOS export; also usable for MAS app signing)
+  #   - Mac Installer Distribution / 3rd Party Mac Developer Installer (the .pkg)
+  #   - 3rd Party Mac Developer Application (only if APPLE_CODESIGN_IDENTITY_3RDPARTY
+  #     names the legacy cert rather than Apple Distribution)
+  #   - Apple Development             (the iOS ARCHIVE signs with automatic dev
+  #     signing before the export re-signs manually -- build_ios_appstore.sh's
+  #     deliberate signing model)
+  # Export them together from Keychain Access (select all -> export as one .p12).
+  #
+  # iOS needs TWO provisioning profiles: the share extension is its own bundle
+  # id (net.clipp.ios.ShareExtension next to net.clipp.ios), and App Groups on
+  # both targets rules out a wildcard profile.
+
+  appstore-macos:
+    name: Mac App Store upload
+    runs-on: macos-latest
+    environment: release-signing
+    env:
+      CLIPP_CACHE_DIR: ${{ github.workspace }}/clipp-cache
+      VCPKG_ROOT: ${{ github.workspace }}/v
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-cache
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/vcpkg-cache,readwrite
+    steps:
+      - name: Are the App Store secrets configured?
+        id: guard
+        env:
+          APPLE_APPSTORE_P12: ${{ secrets.APPLE_APPSTORE_P12 }}
+          MAS_PROFILE_B64: ${{ secrets.APPLE_MAS_CLIPP_PROVISIONING_PROFILE_B64 }}
+        run: |
+          if [[ -n "$APPLE_APPSTORE_P12" && -n "$MAS_PROFILE_B64" ]]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::APPLE_APPSTORE_P12 / APPLE_MAS_CLIPP_PROVISIONING_PROFILE_B64 not set -- skipping the Mac App Store upload."
+          fi
+
+      - name: Checkout clipp
+        if: steps.guard.outputs.ok == 'true'
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        if: steps.guard.outputs.ok == 'true'
+        run: brew install autoconf autoconf-archive automake libtool ninja
+
+      - name: Prepare vcpkg (baseline checkout + bootstrap)
+        if: steps.guard.outputs.ok == 'true'
+        run: |
+          baseline="$(python3 - <<'PY'
+          import json
+          with open("src/vcpkg.json", encoding="utf-8") as manifest_file:
+              manifest = json.load(manifest_file)
+          print(manifest.get("builtin-baseline", ""))
+          PY
+          )"
+          if [[ -z "$baseline" ]]; then
+            echo "src/vcpkg.json must define builtin-baseline for CI." >&2
+            exit 1
+          fi
+          git clone --no-tags https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" checkout --detach "$baseline"
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+
+      # Same key as build-macos on purpose: build_macos_mas.sh uses the same
+      # deps + triplet (only sandbox entitlements and post-build signing
+      # differ), so the Developer ID job's cache serves this one too.
+      - name: Cache vcpkg binaries
+        if: steps.guard.outputs.ok == 'true'
+        uses: actions/cache@v5
+        with:
+          path: vcpkg-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-vcpkg-
+
+      - name: Import App Store signing certificates
+        if: steps.guard.outputs.ok == 'true'
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_APPSTORE_P12 }}
+          p12-password: ${{ secrets.APPLE_APPSTORE_P12_PASSWORD }}
+          keychain-password: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+
+      - name: Write App Store Connect API key + provisioning profile
+        if: steps.guard.outputs.ok == 'true'
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          MAS_PROFILE_B64: ${{ secrets.APPLE_MAS_CLIPP_PROVISIONING_PROFILE_B64 }}
+        run: |
+          umask 077
+          printf '%s' "$APPLE_API_KEY_P8" > "${{ runner.temp }}/authkey.p8"
+          if ! grep -q "BEGIN PRIVATE KEY" "${{ runner.temp }}/authkey.p8"; then
+            echo "::error::APPLE_API_KEY_P8 secret doesn't look like a PEM .p8 file"
+            exit 1
+          fi
+          printf '%s' "$MAS_PROFILE_B64" | base64 --decode > "${{ runner.temp }}/clipp-mas.provisionprofile"
+          # Profiles are CMS blobs; a failed decode here beats ITMS errors later.
+          security cms -D -i "${{ runner.temp }}/clipp-mas.provisionprofile" > /dev/null
+
+      - name: Build, sign, package, upload (Mac App Store)
+        if: steps.guard.outputs.ok == 'true'
+        env:
+          APPLE_CODESIGN_IDENTITY_3RDPARTY: ${{ vars.APPLE_CODESIGN_IDENTITY_3RDPARTY }}
+          APPLE_CODESIGN_INSTALLER_IDENTITY_3RDPARTY: ${{ vars.APPLE_CODESIGN_INSTALLER_IDENTITY_3RDPARTY }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          APPLE_MAS_CLIPP_PROVISIONING_PROFILE: ${{ runner.temp }}/clipp-mas.provisionprofile
+          APPLE_API_KEY_PATH: ${{ runner.temp }}/authkey.p8
+          APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ vars.APPLE_API_ISSUER_ID }}
+        run: ./scripts/build_macos_mas.sh --version "${{ inputs.version }}" --upload
+
+      # The vcpkg port logs live only on the runner; without this a dependency
+      # build failure is undiagnosable after the fact.
+      - name: Upload vcpkg failure logs
+        if: failure() && steps.guard.outputs.ok == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vcpkg-failure-logs-appstore-macos
+          path: |
+            v/buildtrees/**/*.log
+            build-mas/**/vcpkg-manifest-install.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  appstore-ios:
+    name: iOS App Store upload
+    runs-on: macos-latest
+    environment: release-signing
+    env:
+      CLIPP_CACHE_DIR: ${{ github.workspace }}/clipp-cache
+      VCPKG_ROOT: ${{ github.workspace }}/v
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-cache
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/vcpkg-cache,readwrite
+    steps:
+      - name: Are the App Store secrets configured?
+        id: guard
+        env:
+          APPLE_APPSTORE_P12: ${{ secrets.APPLE_APPSTORE_P12 }}
+          IOS_PROFILE_B64: ${{ secrets.APPLE_IOS_CLIPP_PROVISIONING_PROFILE_B64 }}
+          IOS_APPEX_PROFILE_B64: ${{ secrets.APPLE_IOS_CLIPPSE_PROVISIONING_PROFILE_B64 }}
+        run: |
+          if [[ -n "$APPLE_APPSTORE_P12" && -n "$IOS_PROFILE_B64" && -n "$IOS_APPEX_PROFILE_B64" ]]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::APPLE_APPSTORE_P12 / APPLE_IOS_CLIPP_PROVISIONING_PROFILE_B64 / APPLE_IOS_CLIPPSE_PROVISIONING_PROFILE_B64 not set -- skipping the iOS App Store upload."
+          fi
+
+      - name: Checkout clipp
+        if: steps.guard.outputs.ok == 'true'
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        if: steps.guard.outputs.ok == 'true'
+        run: brew install autoconf autoconf-archive automake libtool
+
+      - name: Prepare vcpkg (baseline checkout + bootstrap)
+        if: steps.guard.outputs.ok == 'true'
+        run: |
+          baseline="$(python3 - <<'PY'
+          import json
+          with open("src/vcpkg.json", encoding="utf-8") as manifest_file:
+              manifest = json.load(manifest_file)
+          print(manifest.get("builtin-baseline", ""))
+          PY
+          )"
+          if [[ -z "$baseline" ]]; then
+            echo "src/vcpkg.json must define builtin-baseline for CI." >&2
+            exit 1
+          fi
+          git clone --no-tags https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" checkout --detach "$baseline"
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+
+      # DEVICE triplet (arm64-ios), distinct from ios-ci.yml's simulator cache.
+      - name: Cache vcpkg binaries
+        if: steps.guard.outputs.ok == 'true'
+        uses: actions/cache@v5
+        with:
+          path: vcpkg-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-ios-device-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-vcpkg-ios-device-
+
+      - name: Import App Store signing certificates
+        if: steps.guard.outputs.ok == 'true'
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_APPSTORE_P12 }}
+          p12-password: ${{ secrets.APPLE_APPSTORE_P12_PASSWORD }}
+          keychain-password: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+
+      - name: Write App Store Connect API key + provisioning profiles
+        if: steps.guard.outputs.ok == 'true'
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          IOS_PROFILE_B64: ${{ secrets.APPLE_IOS_CLIPP_PROVISIONING_PROFILE_B64 }}
+          IOS_APPEX_PROFILE_B64: ${{ secrets.APPLE_IOS_CLIPPSE_PROVISIONING_PROFILE_B64 }}
+        run: |
+          umask 077
+          printf '%s' "$APPLE_API_KEY_P8" > "${{ runner.temp }}/authkey.p8"
+          if ! grep -q "BEGIN PRIVATE KEY" "${{ runner.temp }}/authkey.p8"; then
+            echo "::error::APPLE_API_KEY_P8 secret doesn't look like a PEM .p8 file"
+            exit 1
+          fi
+          printf '%s' "$IOS_PROFILE_B64" | base64 --decode > "${{ runner.temp }}/clipp-ios.mobileprovision"
+          printf '%s' "$IOS_APPEX_PROFILE_B64" | base64 --decode > "${{ runner.temp }}/clippse-ios.mobileprovision"
+          # Profiles are CMS blobs; a failed decode here beats ITMS errors later.
+          security cms -D -i "${{ runner.temp }}/clipp-ios.mobileprovision" > /dev/null
+          security cms -D -i "${{ runner.temp }}/clippse-ios.mobileprovision" > /dev/null
+
+      - name: Archive, export, upload (iOS App Store)
+        if: steps.guard.outputs.ok == 'true'
+        env:
+          APPLE_IOS_CLIPP_PROVISIONING_PROFILE: ${{ runner.temp }}/clipp-ios.mobileprovision
+          APPLE_IOS_CLIPPSE_PROVISIONING_PROFILE: ${{ runner.temp }}/clippse-ios.mobileprovision
+          APPLE_CODESIGN_IDENTITY_IOS: ${{ vars.APPLE_CODESIGN_IDENTITY_IOS }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          APPLE_API_KEY_PATH: ${{ runner.temp }}/authkey.p8
+          APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ vars.APPLE_API_ISSUER_ID }}
+        run: bash ./scripts/build_ios_appstore.sh --version "${{ inputs.version }}" --upload
+
+      - name: Upload vcpkg failure logs
+        if: failure() && steps.guard.outputs.ok == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vcpkg-failure-logs-appstore-ios
+          path: |
+            v/buildtrees/**/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
   publish:
     name: Create release
     needs: [build-windows, build-macos, build-linux]
