@@ -13,6 +13,15 @@ if (APPLE AND (NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET OR CMAKE_OSX_DEPLOYMENT_T
 endif()
 
 if (APPLE)
+    # Info.plist.in reads ${MACOSX_DEPLOYMENT_TARGET} for LSMinimumSystemVersion.
+    # Under the Xcode generator that's an Xcode build setting and resolves by
+    # itself; under Ninja it's a plain CMake variable in configure_file -- and an
+    # undefined one substitutes as EMPTY, which App Store Connect rejects
+    # (90263/90262, plus 90869: an arm64-only bundle needs a visible >=12.0
+    # minimum), while a MISSING key makes altool refuse the upload locally
+    # ("Cannot determine the 'platform' from the info.plist"). Define it so BOTH
+    # generators stamp the same value. Mirrors ../gig.
+    set(MACOSX_DEPLOYMENT_TARGET "${CMAKE_OSX_DEPLOYMENT_TARGET}")
     set(VCPKG_OVERLAY_TRIPLETS "${CMAKE_CURRENT_SOURCE_DIR}/src/vcpkg-triplets" CACHE PATH "vcpkg overlay triplet directory")
 
     if (NOT DEFINED VCPKG_TARGET_TRIPLET OR VCPKG_TARGET_TRIPLET STREQUAL "")

@@ -128,13 +128,7 @@ DEV_DIR="$(xcode-select -p 2>/dev/null)" || {
 
 # Separate build dir from build_macos.sh so the two flows can coexist without
 # cmake reconfigure thrash when switching between Developer ID and MAS.
-# Match ANY full Xcode (*.app), not just "Xcode.app": GitHub runners install
-# versioned bundles (e.g. Xcode_26.5.app), which the narrower glob missed --
-# dropping CI to the Ninja path, whose bare CMake Info.plist lacks the platform
-# keys Xcode's build system injects (LSMinimumSystemVersion,
-# CFBundleSupportedPlatforms, DT*), and altool then failed the upload with
-# "Cannot determine the 'platform' from the info.plist".
-if [[ "$DEV_DIR" == *.app/Contents/Developer ]]; then
+if [[ "$DEV_DIR" == */Xcode.app/Contents/Developer ]]; then
     USE_XCODE=1
     BUILD_DIR="build-mas"
     APP_PATH="$BUILD_DIR/$CONFIG/Clipp.app"
@@ -261,6 +255,22 @@ if [[ "$MAS_BUNDLE_VERSION" != "$FULL_BUNDLE_VERSION" ]]; then
 fi
 echo "[*] CFBundleVersion in bundle is now: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO_PLIST")"
 
+# ASC rejects an empty LSMinimumSystemVersion three ways at once (90263 invalid
+# value, 90262 invalid product-definition min, 90869 "arm64-only needs >=12.0"),
+# and with the key MISSING entirely altool dies even earlier, locally, with
+# "Cannot determine the 'platform' from the info.plist" -- the key's presence is
+# how it tells a macOS upload from an iOS one. Info.plist.in's
+# ${MACOSX_DEPLOYMENT_TARGET} is an Xcode build setting that resolves by itself
+# under the Xcode generator; the NINJA path substitutes it as a plain CMake
+# variable, which CMakeLists must define or it lands empty (same war story,
+# error for error, as ../gig). Cheaper to die here than after the upload.
+MIN_OS="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$INFO_PLIST" 2>/dev/null || true)"
+if [[ -z "$MIN_OS" ]]; then
+    echo "[!] Fatal: LSMinimumSystemVersion is empty/missing in the built Info.plist." >&2
+    exit 1
+fi
+echo "[*] LSMinimumSystemVersion: $MIN_OS"
+
 if [[ "$sign_for_distribution" == "1" ]]; then
     echo "[*] Embedding provisioning profile from $PROVISION_PROFILE..."
     cp "$PROVISION_PROFILE" "$APP_PATH/Contents/embedded.provisionprofile"
@@ -352,17 +362,6 @@ if [[ "$sign_for_distribution" == "1" ]]; then
 fi
 
 if [[ "$package" == "1" ]]; then
-    # altool infers the upload platform from the app's Info.plist. Xcode-generator
-    # builds get these keys from Xcode's plist post-processing; Ninja builds only
-    # from Info.plist.in. Assert here so a regression fails with a named cause
-    # instead of altool's "Cannot determine the 'platform' from the info.plist".
-    for key in LSMinimumSystemVersion CFBundleSupportedPlatforms; do
-        if ! /usr/libexec/PlistBuddy -c "Print :$key" "$APP_PATH/Contents/Info.plist" > /dev/null 2>&1; then
-            echo "[!] Fatal: $key missing from $APP_PATH/Contents/Info.plist -- altool cannot determine the upload platform without it." >&2
-            exit 1
-        fi
-    done
-
     PKG_PATH="$BUILD_DIR/Clipp.pkg"
     echo "[*] Wrapping signed app in .pkg via productbuild: $PKG_PATH"
     rm -f "$PKG_PATH"
