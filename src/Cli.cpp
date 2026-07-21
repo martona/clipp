@@ -1777,7 +1777,16 @@ int RunMap(int verbosity) {
     return 0;
 }
 
-enum class Action { None, Gui, KeySet, KeyErase, KeyShow, HostIdShow, HostIdReset, Copy, Paste, Put, RegLs, RegRm, RegTouch, Peers, Probe, Map };
+// `version`: the full 4-part W.X.Y.Z build stamp on stdout. --help's header and
+// the GUI About screens show the 3-part marketing form; this is the diagnostic
+// that includes the build counter (0.0.0.0 = unstamped dev build — the release
+// version is tag-canonical, injected at build time; see RELEASING.md).
+int RunVersion() {
+    OutLine(L"clipp " + ToWide(CLIPP_VERSION_STRING));
+    return 0;
+}
+
+enum class Action { None, Gui, KeySet, KeyErase, KeyShow, HostIdShow, HostIdReset, Copy, Paste, Put, RegLs, RegRm, RegTouch, Peers, Probe, Map, Version };
 
 }  // namespace
 
@@ -1828,6 +1837,10 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
     std::string hostFilter;
     app.add_option("--host", hostFilter,
         "Talk only to the device with this name (case-insensitive) or IP, instead of the first peer found (copy/paste/ls/rm)");
+
+    // Same text as the `version` subcommand. Routed through CLI11's version
+    // machinery, so like --help it prints and exits 0 via app.exit() below.
+    app.set_version_flag("--version", "clipp " CLIPP_VERSION_STRING);
 
     Action action = Action::None;
 
@@ -1899,6 +1912,9 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
 
     CLI::App* hostIdReset = hostIdCommand->add_subcommand("reset", "Reset this device's host ID");
     hostIdReset->callback([&]() { action = Action::HostIdReset; });
+
+    CLI::App* versionCommand = app.add_subcommand("version", "Print the clipp version (full 4-part build stamp)");
+    versionCommand->callback([&]() { action = Action::Version; });
 
 #ifndef CLIPP_HEADLESS
     // Explicit opt-in to the GUI from a terminal (a bare launch there prints usage
@@ -2052,6 +2068,8 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
         return RunProbe();
     case Action::Map:
         return RunMap(verbose);
+    case Action::Version:
+        return RunVersion();
     case Action::Gui:
     case Action::None:
         break;
