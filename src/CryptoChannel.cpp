@@ -155,14 +155,14 @@ namespace {
         // the iOS share extension) simply never get asked.
         CryptoChannel::Caps caps{};
         caps[0] |= CryptoChannel::CAP0_SERVES_RECENT;
+#if CLIPP_SERVES_NETMAP
+        // Wider than the registers gate: the iOS app also has g_peerDisplay and
+        // a listener, so it serves its connection table too (see RegisterConfig.h).
+        caps[0] |= CryptoChannel::CAP0_SERVES_NETMAP;
+#endif
 #if CLIPP_REGISTERS_DAEMON
-        // This macro is effectively the "desktop daemon build" predicate (see
-        // RegisterConfig.h) — NETMAP isn't register-related, but the population
-        // that can serve it (has g_peerDisplay and a live connection table) is
-        // exactly the same.
         caps[0] |= CryptoChannel::CAP0_SERVES_REGISTERS;
         caps[0] |= CryptoChannel::CAP0_SERVES_PUT;
-        caps[0] |= CryptoChannel::CAP0_SERVES_NETMAP;
 #endif
         return caps;
     }

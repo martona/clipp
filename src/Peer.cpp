@@ -27,10 +27,14 @@
 #include "RegisterStore.h"
 #include "RegisterWire.h"
 
-#if CLIPP_REGISTERS_DAEMON
-// Generated into the CMake build tree; only the desktop daemon builds have it on
-// the include path (iOS compiles this file via the .mm bridge with no generated
-// headers). Sole consumer is the NMAP responder's self line, same gate.
+#if defined(__APPLE__) && (TARGET_OS_IPHONE || TARGET_OS_SIMULATOR)
+// The iOS xcodeproj build has no CMake pass, so no generated version.h on its
+// include path; the NMAP responder's self line reads CFBundleVersion at runtime
+// instead (stamped from CURRENT_PROJECT_VERSION — the same 4-part form).
+#include <CoreFoundation/CoreFoundation.h>
+#else
+// Generated into the CMake build tree. Sole consumer is the NMAP responder's
+// self line.
 #include "version.h"
 #endif
 
@@ -41,6 +45,27 @@
 
 extern PeerManager g_peerManager;
 extern PeerDisplay g_peerDisplay;
+
+#if CLIPP_SERVES_NETMAP
+// The NMAP self line's version: version.h's stamp on the CMake-built platforms,
+// CFBundleVersion on iOS (no generated headers there; see the include above).
+static std::string BuildVersionUtf8() {
+#if defined(__APPLE__) && (TARGET_OS_IPHONE || TARGET_OS_SIMULATOR)
+    std::string version = "unknown";
+    if (CFTypeRef value = CFBundleGetValueForInfoDictionaryKey(CFBundleGetMainBundle(), CFSTR("CFBundleVersion"))) {
+        if (CFGetTypeID(value) == CFStringGetTypeID()) {
+            char buffer[64] = {};
+            if (CFStringGetCString(static_cast<CFStringRef>(value), buffer, sizeof(buffer), kCFStringEncodingUTF8)) {
+                version = buffer;
+            }
+        }
+    }
+    return version;
+#else
+    return CLIPP_VERSION_STRING;
+#endif
+}
+#endif
 
 static std::atomic<uint64_t> g_nextPeerLogId{ 1 };
 
@@ -925,7 +950,7 @@ void Peer::ThreadProcRecv() {
 			}
 
 			if (std::memcmp(frame.data(), "NMAP", 4) == 0) {
-#if CLIPP_REGISTERS_DAEMON
+#if CLIPP_SERVES_NETMAP
 				// `clipp map`: this daemon's connection table (the same per-host
 				// aggregates the GUI peer list renders) as extensible key=value
 				// text. One record per line; `name=` is always the LAST key and
@@ -944,7 +969,7 @@ void Peer::ThreadProcRecv() {
 				HostId selfId{};
 				g_settings.getHostID(selfId);
 				std::string report = "netmap v=1\n";
-				report += "self ver=" CLIPP_VERSION_STRING " id=" +
+				report += "self ver=" + BuildVersionUtf8() + " id=" +
 					WideToUtf8String(selfId.ToHexWString()) + " name=" +
 					scrub(clipp::GetLocalPeerDisplayName("unknown", CryptoChannel::HOSTNAME_MAX_BYTES)) + "\n";
 				for (const PeerDisplayItem& item : g_peerDisplay.Query()) {
