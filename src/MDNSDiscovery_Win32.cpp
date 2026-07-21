@@ -198,14 +198,6 @@ std::string FormatIpv4(IP4_ADDRESS addr) {
     return buf;
 }
 
-std::string FormatIpv6(const IP6_ADDRESS& addr) {
-    char buf[INET6_ADDRSTRLEN] = {};
-    in6_addr in6;
-    std::memcpy(&in6, addr.IP6Byte, sizeof(in6.s6_addr));
-    inet_ntop(AF_INET6, &in6, buf, sizeof(buf));
-    return buf;
-}
-
 // ============================================================================
 // Resolve flow
 // ============================================================================
@@ -246,12 +238,10 @@ void HandleResolved(const DNS_SERVICE_INSTANCE* instance) {
 
     if (instance->ip4Address) {
         peer.ip = FormatIpv4(*instance->ip4Address);
-    } else if (instance->ip6Address) {
-        peer.ip = FormatIpv6(*instance->ip6Address);
     }
     if (peer.ip.empty()) {
         g_logger.log(__FUNCTION__, Logger::Level::Debug,
-            L"Discovery: resolved '%ls' but no IP available.", instance->pszInstanceName);
+            L"Discovery: resolved '%ls' but no IPv4 available.", instance->pszInstanceName);
         return;
     }
 

@@ -458,22 +458,14 @@ static std::string LowerCaseUtf8FromNSString(NSString* s) {
     peer.osType = static_cast<OsType>(ntohs(packet.osType));
     std::memcpy(peer.caps, packet.caps, sizeof(peer.caps));
 
-    // Pick the first IPv4 address from service.addresses; fall back to IPv6.
     for (NSData* addrData in service.addresses) {
         const struct sockaddr* sa = static_cast<const struct sockaddr*>(addrData.bytes);
-        char ipBuf[INET6_ADDRSTRLEN] = {};
         if (sa->sa_family == AF_INET) {
+            char ipBuf[INET_ADDRSTRLEN] = {};
             const struct sockaddr_in* sin = reinterpret_cast<const struct sockaddr_in*>(sa);
             if (inet_ntop(AF_INET, &sin->sin_addr, ipBuf, sizeof(ipBuf))) {
                 peer.ip = ipBuf;
                 break;
-            }
-        } else if (sa->sa_family == AF_INET6) {
-            if (peer.ip.empty()) {
-                const struct sockaddr_in6* sin6 = reinterpret_cast<const struct sockaddr_in6*>(sa);
-                if (inet_ntop(AF_INET6, &sin6->sin6_addr, ipBuf, sizeof(ipBuf))) {
-                    peer.ip = ipBuf;
-                }
             }
         }
     }
