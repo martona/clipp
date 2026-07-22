@@ -338,6 +338,14 @@ static std::string LowerCaseUtf8FromNSString(NSString* s) {
                 moreComing:(BOOL)moreComing {
     (void)browser; (void)moreComing;
 
+    // A service we were still resolving (window kept open waiting for a usable
+    // address batch) can vanish before completing; drop the resolve with it.
+    if ([self.resolving containsObject:service]) {
+        [self.resolving removeObject:service];
+        service.delegate = nil;
+        [service stop];
+    }
+
     auto& s = MDNSDiscovery::GlobalState();
     MDNSDiscovery::Callback cb = nullptr;
     {
@@ -383,18 +391,45 @@ static std::string LowerCaseUtf8FromNSString(NSString* s) {
 
 - (void)netServiceDidResolveAddress:(NSNetService*)service {
     @autoreleasepool {
-        [self handleResolvedService:service];
-        [self.resolving removeObject:service];
-        service.delegate = nil;
-        [service stop];
+        // NSNetService delivers addresses in PER-INTERFACE batches, and
+        // service.addresses accumulates across callbacks. Tear down only once
+        // the handler is DONE with this service (emitted an endpoint, or
+        // decided it never will); otherwise keep the resolve open so a later
+        // batch can complete it — stopping on the first batch turned a
+        // v6-only-first resolve into a permanent silent miss (the daemon
+        // never dialed devbox2). resolveWithTimeout still bounds the wait.
+        if ([self handleResolvedService:service]) {
+            [self.resolving removeObject:service];
+            service.delegate = nil;
+            [service stop];
+        }
     }
 }
 
 - (void)netService:(NSNetService*)service didNotResolve:(NSDictionary<NSString*, NSNumber*>*)errorDict {
-    (void)errorDict;
+    // This was a SILENT drop path — a host that failed to resolve simply never
+    // existed as far as the reconciler knew, with nothing in the log.
+    const long code = [errorDict[NSNetServicesErrorCode] integerValue];
+    g_logger.log("MDNSDiscovery::resolve", Logger::Level::Debug,
+        "DNS-SD: resolve failed for '%s' (error=%ld).",
+        service.name.UTF8String ? service.name.UTF8String : "?", code);
     [self.resolving removeObject:service];
     service.delegate = nil;
     [service stop];
+}
+
+- (void)netServiceDidStop:(NSNetService*)service {
+    // Our own teardown paths nil the delegate before calling stop, so this
+    // only fires when the OS ends the resolve itself (resolveWithTimeout
+    // expiring). Still being tracked here means the whole window closed
+    // without a usable endpoint — the terminal form of the miss; log it.
+    if ([self.resolving containsObject:service]) {
+        g_logger.log("MDNSDiscovery::resolve", Logger::Level::Debug,
+            "DNS-SD: resolve window for '%s' closed without a usable IPv4 endpoint.",
+            service.name.UTF8String ? service.name.UTF8String : "?");
+        [self.resolving removeObject:service];
+        service.delegate = nil;
+    }
 }
 
 - (void)netService:(NSNetService*)service didNotPublish:(NSDictionary<NSString*, NSNumber*>*)errorDict {
@@ -419,9 +454,17 @@ static std::string LowerCaseUtf8FromNSString(NSString* s) {
 
 #pragma mark - Resolve handler
 
-- (void)handleResolvedService:(NSNetService*)service {
+// Returns YES when this service needs no further resolving (an endpoint was
+// emitted, or it will never produce one we want); NO keeps the resolve open so
+// a later per-interface address/TXT batch can complete it.
+- (BOOL)handleResolvedService:(NSNetService*)service {
     NSData* txtData = service.TXTRecordData;
-    if (!txtData) return;
+    if (!txtData) {
+        g_logger.log("MDNSDiscovery::resolve", Logger::Level::DDebug,
+            "DNS-SD: '%s' resolved without TXT data yet; keeping the resolve open.",
+            service.name.UTF8String ? service.name.UTF8String : "?");
+        return NO;
+    }
     std::map<std::string, std::string> txt = MDNSDiscovery::ParseTxtRecordData(txtData);
 
     MDNSProtocol::PacketV1 packet;
@@ -429,7 +472,7 @@ static std::string LowerCaseUtf8FromNSString(NSString* s) {
         g_logger.log("MDNSDiscovery::resolve", Logger::Level::DDebug,
             "DNS-SD: ignoring '%s' (TXT did not decrypt).",
             service.name.UTF8String ? service.name.UTF8String : "?");
-        return;
+        return YES;  // present but not ours (another group's clipp) — done
     }
 
     auto& s = MDNSDiscovery::GlobalState();
@@ -447,7 +490,7 @@ static std::string LowerCaseUtf8FromNSString(NSString* s) {
                     "DNS-SD: possible host ID collision (peer '%s' shares our host ID).",
                     service.name.UTF8String ? service.name.UTF8String : "?");
             }
-            return;
+            return YES;  // deliberately ignored — done with this service
         }
     }
 
@@ -469,7 +512,17 @@ static std::string LowerCaseUtf8FromNSString(NSString* s) {
             }
         }
     }
-    if (peer.ip.empty()) return;
+    if (peer.ip.empty()) {
+        // v4-less batch (e.g. awdl0's link-local v6 arriving first): keep the
+        // resolve open — service.addresses accumulates, and the batch carrying
+        // the v4 completes the peer. Stopping here was the permanent silent
+        // miss that left the daemon with no outgoing connection to devbox2.
+        g_logger.log("MDNSDiscovery::resolve", Logger::Level::DDebug,
+            "DNS-SD: '%s' has no IPv4 address yet (%lu so far); keeping the resolve open.",
+            service.name.UTF8String ? service.name.UTF8String : "?",
+            static_cast<unsigned long>(service.addresses.count));
+        return NO;
+    }
 
     if (self.liveInstances && self.liveInstancesMutex) {
         const std::string nameKey = LowerCaseUtf8FromNSString(service.name);
@@ -498,10 +551,11 @@ static std::string LowerCaseUtf8FromNSString(NSString* s) {
     if (self.captureVector && self.captureMutex) {
         std::lock_guard<std::mutex> lock(*self.captureMutex);
         for (const auto& existing : *self.captureVector) {
-            if (existing.hostId == peer.hostId) return;
+            if (existing.hostId == peer.hostId) return YES;
         }
         self.captureVector->push_back(peer);
     }
+    return YES;  // endpoint emitted — this service is done resolving
 }
 
 @end
