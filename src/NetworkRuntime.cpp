@@ -20,6 +20,7 @@ void CLPIOSReceiveClipboardPayload(std::shared_ptr<const ClipboardPayload> paylo
 #else
 #include "ClipboardActivityStore.h"
 #include "Clipboard.h"
+#include "ClipboardFlowUi.h"
 #include "ClipboardFormat.h"
 #include "RegisterStore.h"
 #define CLIPP_IOS_CLIPBOARD_RECEIVE_STUB 0
@@ -431,6 +432,10 @@ void NetworkRuntime::OnClipboardReceived(std::shared_ptr<const ClipboardPayload>
     g_clipboardActivityStore.Add(payload);
     if (!isReplay && !isPrivatePlaceholder) {
         SetClipboardData(payload, true);
+        // Ambient GUI feedback (tray / menu-bar nudge + last-event tooltip):
+        // fire only on the path that actually replaced the OS clipboard.
+        clipp::NotifyClipboardFlow(clipp::ClipboardFlowDirection::Received,
+                                   payload->meta.originHostName);
         // Mirror the now-current clipboard into the default ("") register for `ls`.
         if (IsClippTextFormat(payload->meta.formatId)) {
             const std::vector<unsigned char>* bytes = payload->TryGetUncompressedBytes();

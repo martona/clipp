@@ -25,6 +25,7 @@
 #include "PeerDisplay.h"
 #include "Clipboard.h"
 #include "ClipboardActivityStore.h"
+#include "ClipboardFlowUi.h"
 #include "ClipboardWire.h"
 #include "ClipboardFormat.h"
 #include "RegisterStore.h"
@@ -297,7 +298,13 @@ void OnClipboardNotification(PlatformWindowHandle hwnd) {
     auto payload = std::make_shared<const ClipboardPayload>(std::move(clipboardData));
     g_clipboardActivityStore.Add(payload);
     MirrorClipboardToDefaultRegister(payload);
-    g_peerManager.BroadcastClipboard(payload);
+    const size_t queuedToPeers = g_peerManager.BroadcastClipboard(payload);
+    if (queuedToPeers > 0) {
+        // Ambient GUI feedback: only when the copy was actually handed to a
+        // peer connection — a copy with nobody connected stays visibly silent,
+        // which is itself the signal that something is wrong.
+        clipp::NotifyClipboardFlow(clipp::ClipboardFlowDirection::Sent, {});
+    }
     g_logger.log(__FUNCTION__, Logger::Level::Debug, "Broadcast clipboard data to peers (format: %s, ID: %u, encoded size: %zu bytes, uncompressed size: %llu bytes)",
         ClippClipboardFormatName(payload->meta.formatId),
         payload->meta.formatId,

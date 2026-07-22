@@ -122,11 +122,12 @@ void PeerManager::ClearPeers() {
 	peers_.clear();
 }
 
-void PeerManager::BroadcastClipboard(std::shared_ptr<const ClipboardPayload> payload) {
+size_t PeerManager::BroadcastClipboard(std::shared_ptr<const ClipboardPayload> payload) {
 	std::lock_guard<std::mutex> lock(peersMutex_);
 	for (const auto& peer : peers_) {
 		peer->PushMessage(payload);
 	}
+	return peers_.size();
 }
 
 void PeerManager::BroadcastRegisterFrame(const std::array<char, 4>& tag, const std::vector<unsigned char>& body) {

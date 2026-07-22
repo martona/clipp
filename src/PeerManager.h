@@ -20,7 +20,9 @@ public:
 	void RemoveOutgoingPeer(const HostId& hostID);
 	void CullPeers();
 	void ClearPeers();
-	void BroadcastClipboard(std::shared_ptr<const ClipboardPayload> payload);
+	// Returns the number of live peer connections the payload was queued to
+	// (0 = nobody to hand it to — callers use this to keep send feedback honest).
+	size_t BroadcastClipboard(std::shared_ptr<const ClipboardPayload> payload);
 	// Send a pre-encoded register frame to every connected peer advertising
 	// CAP0_SERVES_REGISTERS — rebroadcasts a re-stamped relay write to the mesh.
 	void BroadcastRegisterFrame(const std::array<char, 4>& tag, const std::vector<unsigned char>& body);

@@ -1,10 +1,22 @@
+// platform.h first: it brings WinSock2.h before Windows.h can pull the legacy
+// winsock.h (redefinition soup otherwise), and declares the utf8/utf16
+// converters utils.h depends on.
+#include "platform.h"
+
 #include <Windows.h>
 #include <shellapi.h>
 #include <cwchar>
+#include <chrono>
+#include <cstring>
+#include <mutex>
+#include <string>
+#include <vector>
 
 #include "Logger.h"
 #include "AutoStart.h"
+#include "ClipboardFlowUi.h"
 #include "resource.h"
+#include "utils.h"
 #include "xaml_dialog.h"
 #include "platform/uistrings.h"
 #include "version.h"
@@ -23,9 +35,13 @@
 
 // Custom message ID for our tray icon events
 #define WM_TRAYICON (WM_USER + 1)
+// Posted by the clipboard-flow handler (network/clipboard threads) to run the
+// icon nudge on the tray thread. wParam = ClipboardFlowDirection.
+#define WM_CLIPFLOW (WM_USER + 2)
 #define ID_TRAY_OPEN  1000
 #define ID_TRAY_ABOUT 1001
 #define ID_TRAY_EXIT  1002
+#define IDT_NUDGE 1
 
 static constexpr wchar_t kTrayWindowClassName[] = L"ClippHiddenTrayWindow";
 static constexpr wchar_t kShowMainWindowMessageName[] = L"ClippShowMainWindow";
@@ -37,6 +53,188 @@ static const UINT g_taskbarCreatedMessage = RegisterWindowMessageW(L"TaskbarCrea
 // Global handle for cleanup
 static NOTIFYICONDATAW g_nid = {};
 static HWND g_trayWindow = NULL;
+
+// ---- Clipboard-flow feedback (icon nudge + last-event tooltip) --------------
+// The registered handler runs on network/clipboard threads: it records the
+// event under g_flowMutex and posts WM_CLIPFLOW; everything visual happens on
+// the tray thread. The nudge is the base icon re-blitted at a vertical pixel
+// offset (up = sent, down = received), one pass, then back to the base icon —
+// no residual state; the tooltip carries "what happened recently" instead.
+static std::mutex g_flowMutex;
+static bool g_flowValid = false;
+static clipp::ClipboardFlowDirection g_flowDirection = clipp::ClipboardFlowDirection::Sent;
+static std::wstring g_flowPeerName;
+static std::chrono::steady_clock::time_point g_flowWhen{};
+
+static constexpr int  kNudgeOffsets[] = { 1, 2, 1 };  // travel magnitudes; sign = direction
+static constexpr UINT kNudgeFrameMs = 90;
+static HICON g_nudgeFrames[2][3] = {};  // [Sent][frame], [Received][frame]
+static int   g_nudgeFrameIndex = -1;    // -1 = idle
+
+// Re-blit `base`'s pixels shifted by rowDelta rows (dst[y] = src[y + rowDelta],
+// so positive = content moves UP) into a fresh icon. Works on the raw 32bpp
+// pixels so per-pixel alpha survives — DrawIconEx onto a DIB scrambles the
+// alpha channel on some GDI paths.
+static HICON ComposeOffsetIcon(HICON base, int rowDelta) {
+    ICONINFO info{};
+    if (!GetIconInfo(base, &info)) {
+        return nullptr;
+    }
+    HICON result = nullptr;
+    BITMAP bm{};
+    if (info.hbmColor != nullptr &&
+        GetObjectW(info.hbmColor, sizeof(bm), &bm) != 0 && bm.bmWidth > 0 && bm.bmHeight > 0) {
+        const int width = bm.bmWidth;
+        const int height = bm.bmHeight;
+        const size_t stride = static_cast<size_t>(width) * 4;
+        std::vector<unsigned char> src(stride * height);
+        std::vector<unsigned char> dst(stride * height, 0);
+
+        BITMAPINFO query{};
+        query.bmiHeader.biSize = sizeof(query.bmiHeader);
+        query.bmiHeader.biWidth = width;
+        query.bmiHeader.biHeight = -height;  // top-down
+        query.bmiHeader.biPlanes = 1;
+        query.bmiHeader.biBitCount = 32;
+        query.bmiHeader.biCompression = BI_RGB;
+
+        HDC screenDc = GetDC(nullptr);
+        if (screenDc != nullptr &&
+            GetDIBits(screenDc, info.hbmColor, 0, height, src.data(), &query, DIB_RGB_COLORS) == height) {
+            for (int y = 0; y < height; ++y) {
+                const int from = y + rowDelta;
+                if (from >= 0 && from < height) {
+                    std::memcpy(&dst[y * stride], &src[from * stride], stride);
+                }
+            }
+
+            BITMAPINFO create{};
+            create.bmiHeader = query.bmiHeader;
+            create.bmiHeader.biHeight = -height;
+            void* bits = nullptr;
+            HBITMAP color = CreateDIBSection(screenDc, &create, DIB_RGB_COLORS, &bits, nullptr, 0);
+            if (color != nullptr && bits != nullptr) {
+                std::memcpy(bits, dst.data(), dst.size());
+                // All-zero mono mask: 32bpp icons with alpha ignore it, and the
+                // shipped clipp.ico carries proper alpha at tray sizes.
+                HBITMAP mask = CreateBitmap(width, height, 1, 1, nullptr);
+                if (mask != nullptr) {
+                    ICONINFO out{};
+                    out.fIcon = TRUE;
+                    out.hbmColor = color;
+                    out.hbmMask = mask;
+                    result = CreateIconIndirect(&out);
+                    DeleteObject(mask);
+                }
+            }
+            if (color != nullptr) {
+                DeleteObject(color);
+            }
+        }
+        if (screenDc != nullptr) {
+            ReleaseDC(nullptr, screenDc);
+        }
+    }
+    if (info.hbmColor != nullptr) DeleteObject(info.hbmColor);
+    if (info.hbmMask != nullptr) DeleteObject(info.hbmMask);
+    return result;
+}
+
+static void EnsureNudgeFrames() {
+    if (g_nudgeFrames[0][0] != nullptr || g_nid.hIcon == nullptr) {
+        return;
+    }
+    for (size_t i = 0; i < 3; ++i) {
+        // Screen y grows downward, and ComposeOffsetIcon's positive rowDelta
+        // moves content up — so Sent gets +offset (up), Received −offset (down).
+        g_nudgeFrames[0][i] = ComposeOffsetIcon(g_nid.hIcon, kNudgeOffsets[i]);
+        g_nudgeFrames[1][i] = ComposeOffsetIcon(g_nid.hIcon, -kNudgeOffsets[i]);
+    }
+}
+
+// NIM_MODIFY through a local copy so g_nid.hIcon permanently holds the base
+// icon (the TaskbarCreated re-add path reads it).
+static void ShowTrayIconFrame(HICON icon) {
+    if (icon == nullptr) {
+        return;
+    }
+    NOTIFYICONDATAW nid = g_nid;
+    nid.uFlags = NIF_ICON;
+    nid.hIcon = icon;
+    Shell_NotifyIconW(NIM_MODIFY, &nid);
+}
+
+static void StartNudge(HWND hwnd, clipp::ClipboardFlowDirection direction) {
+    EnsureNudgeFrames();
+    const int dir = (direction == clipp::ClipboardFlowDirection::Received) ? 1 : 0;
+    if (g_nudgeFrames[dir][0] == nullptr) {
+        return;  // composition failed; skip the animation, tooltip still updates
+    }
+    // A new event mid-animation restarts the pass (coalescing: a burst of
+    // copies re-nudges instead of strobing through queued passes).
+    g_nudgeFrameIndex = 0;
+    ShowTrayIconFrame(g_nudgeFrames[dir][0]);
+    // Subsequent WM_TIMER ticks read the direction back from g_flow*.
+    SetTimer(hwnd, IDT_NUDGE, kNudgeFrameMs, nullptr);
+}
+
+static void AdvanceNudge(HWND hwnd) {
+    int dir = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_flowMutex);
+        dir = (g_flowDirection == clipp::ClipboardFlowDirection::Received) ? 1 : 0;
+    }
+    ++g_nudgeFrameIndex;
+    if (g_nudgeFrameIndex >= 0 && g_nudgeFrameIndex < 3 && g_nudgeFrames[dir][g_nudgeFrameIndex] != nullptr) {
+        ShowTrayIconFrame(g_nudgeFrames[dir][g_nudgeFrameIndex]);
+        return;
+    }
+    KillTimer(hwnd, IDT_NUDGE);
+    g_nudgeFrameIndex = -1;
+    ShowTrayIconFrame(g_nid.hIcon);  // back to the byte-identical idle state
+}
+
+// Rebuild the tooltip just-in-time on hover, so the relative age ("12s ago")
+// is computed at read time and never goes stale. Rate-limited by only calling
+// NIM_MODIFY when the rendered text actually changed (the age string ticks at
+// most once a second; hover mouse-moves arrive far more often).
+static void UpdateTrayTooltip() {
+    std::wstring tip = CLP_W(CLP_UI_STATUS_TOOLTIP);
+    {
+        std::lock_guard<std::mutex> lock(g_flowMutex);
+        if (g_flowValid) {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::steady_clock::now() - g_flowWhen).count();
+            const std::wstring age = Utf8ToWideString(
+                clipp::FormatRelativeAgeUtf8(elapsed > 0 ? static_cast<uint64_t>(elapsed) : 0));
+            if (g_flowDirection == clipp::ClipboardFlowDirection::Received) {
+                tip += L"\nReceived from " + g_flowPeerName + L" " + age;
+            } else {
+                tip += L"\nSent " + age;
+            }
+        }
+    }
+    static std::wstring lastSetTip;
+    if (tip == lastSetTip) {
+        return;
+    }
+    lastSetTip = tip;
+    NOTIFYICONDATAW nid = g_nid;
+    nid.uFlags = NIF_TIP;
+    wcsncpy_s(nid.szTip, tip.c_str(), _TRUNCATE);
+    Shell_NotifyIconW(NIM_MODIFY, &nid);
+}
+
+static void DestroyNudgeFrames() {
+    for (auto& perDirection : g_nudgeFrames) {
+        for (HICON& frame : perDirection) {
+            if (frame != nullptr) {
+                DestroyIcon(frame);
+                frame = nullptr;
+            }
+        }
+    }
+}
 
 // The core event callback for the hidden window
 LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -59,7 +257,21 @@ LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             DarkMode::setWindowEraseBgSubclass(hwnd);
             DarkMode::setDarkWndNotifySafe(hwnd, true);
 			break;
+        case WM_CLIPFLOW:
+            StartNudge(hwnd, static_cast<clipp::ClipboardFlowDirection>(wParam));
+            break;
+
+        case WM_TIMER:
+            if (wParam == IDT_NUDGE) {
+                AdvanceNudge(hwnd);
+            }
+            break;
+
         case WM_TRAYICON:
+            if (LOWORD(lParam) == WM_MOUSEMOVE) {
+                // Hovering: refresh the tooltip just before the shell shows it.
+                UpdateTrayTooltip();
+            }
             // When the user right-clicks the tray icon...
             if (LOWORD(lParam) == WM_LBUTTONDBLCLK) {
                 ShowClippMainDialog(hwnd);
@@ -121,6 +333,9 @@ LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
 		    break;
 
         case WM_DESTROY:
+            clipp::SetClipboardFlowHandler(nullptr);
+            KillTimer(hwnd, IDT_NUDGE);
+            DestroyNudgeFrames();
             CloseClippMainDialog();
             Shell_NotifyIconW(NIM_DELETE, &g_nid);
             g_trayWindow = NULL;
@@ -172,6 +387,21 @@ void TrayIconMessageLoop(bool showNetworkPageOnStartup) {
     wcscpy_s(g_nid.szTip, CLP_W(CLP_UI_STATUS_TOOLTIP));
 
     Shell_NotifyIconW(NIM_ADD, &g_nid);
+
+    // Ambient send/receive feedback: the handler runs on network/clipboard
+    // threads, so it just records the event and bounces to this thread.
+    clipp::SetClipboardFlowHandler([](clipp::ClipboardFlowDirection direction, const std::string& peerNameUtf8) {
+        {
+            std::lock_guard<std::mutex> lock(g_flowMutex);
+            g_flowValid = true;
+            g_flowDirection = direction;
+            g_flowPeerName = Utf8ToWideString(peerNameUtf8);
+            g_flowWhen = std::chrono::steady_clock::now();
+        }
+        if (g_trayWindow != NULL) {
+            PostMessageW(g_trayWindow, WM_CLIPFLOW, static_cast<WPARAM>(direction), 0);
+        }
+    });
 
     if (showNetworkPageOnStartup) {
         ShowClippMainDialog(g_trayWindow, ClippMainDialogPage::Network);

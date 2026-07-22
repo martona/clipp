@@ -3,6 +3,7 @@
 #ifdef __APPLE__
 
 #include "Clipboard.h"
+#include "ClipboardFlowUi.h"
 #include "Logger.h"
 #include "AboutPage.h"
 #include "ClippPage.h"
@@ -229,11 +230,26 @@ bool UnregisterClippAutoStart() {
 - (void)cliBannerTick;
 @end
 
-@interface ClippStatusMenuController : NSObject <NSApplicationDelegate>
+@interface ClippStatusMenuController : NSObject <NSApplicationDelegate, NSMenuDelegate>
 @property(nonatomic, strong) NSStatusItem* statusItem;
 @property(nonatomic, strong) ClippMainWindowController* mainWindowController;
+// Clipboard-flow feedback: the status-item glyph nudges up on send / down on
+// receive (frames are the base image re-drawn at a vertical offset — no extra
+// art), and the menu's header line shows the last event with a relative age
+// computed at menu-open time so it never goes stale.
+@property(nonatomic, strong) NSImage* statusBaseImage;
+@property(nonatomic, strong) NSArray<NSImage*>* nudgeFrames;
+@property(nonatomic, strong) NSTimer* nudgeTimer;
+@property(nonatomic, assign) NSUInteger nudgeFrameIndex;
+@property(nonatomic, strong) NSMenuItem* lastFlowItem;
+@property(nonatomic, strong) NSMenuItem* lastFlowSeparator;
+@property(nonatomic, assign) BOOL lastFlowValid;
+@property(nonatomic, assign) BOOL lastFlowReceived;
+@property(nonatomic, copy) NSString* lastFlowPeer;
+@property(nonatomic, strong) NSDate* lastFlowWhen;
 - (void)openClipp:(id)sender;
 - (void)openClippPage:(NSInteger)pageIndex;
+- (void)noteClipboardFlowReceived:(BOOL)received peer:(NSString*)peer;
 @end
 
 void RequestMacOSShowMainWindow(bool showNetworkPage) {
@@ -928,12 +944,23 @@ static void LogReflectorCallback(const std::wstring& line) {
     }
 }
 
+// Trampoline for clipp::SetClipboardFlowHandler (a plain function pointer):
+// invoked on network/clipboard threads, marshals to the main queue.
+static void MacClipboardFlowHandler(clipp::ClipboardFlowDirection direction, const std::string& peerNameUtf8) {
+    NSString* peer = [NSString stringWithUTF8String:peerNameUtf8.c_str()];
+    const BOOL received = (direction == clipp::ClipboardFlowDirection::Received);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [g_statusMenuController noteClipboardFlowReceived:received peer:(peer != nil ? peer : @"")];
+    });
+}
+
 @implementation ClippStatusMenuController
 
 - (instancetype)init {
     self = [super init];
     if (self) {
         [self buildMenu];
+        clipp::SetClipboardFlowHandler(&MacClipboardFlowHandler);
     }
     return self;
 }
@@ -952,7 +979,20 @@ static void LogReflectorCallback(const std::wstring& line) {
     }
     button.toolTip = CLP_NS(CLP_UI_STATUS_TOOLTIP);
 
+    self.statusBaseImage = button.image;
+
     NSMenu* menu = [[NSMenu alloc] initWithTitle:CLP_NS(CLP_UI_APP_NAME)];
+    menu.delegate = self;  // menuWillOpen: refreshes the last-event header
+
+    // Last-event header ("Received from mbp · 12s ago"), hidden until the
+    // first flow event; the title is recomputed at open time.
+    self.lastFlowItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
+    self.lastFlowItem.enabled = NO;
+    self.lastFlowItem.hidden = YES;
+    [menu addItem:self.lastFlowItem];
+    self.lastFlowSeparator = [NSMenuItem separatorItem];
+    self.lastFlowSeparator.hidden = YES;
+    [menu addItem:self.lastFlowSeparator];
 
     NSMenuItem* openItem = [[NSMenuItem alloc] initWithTitle:CLP_NS(CLP_UI_OPEN_CLIPP)
                                                       action:@selector(openClipp:)
@@ -977,6 +1017,98 @@ static void LogReflectorCallback(const std::wstring& line) {
     [menu addItem:exitItem];
 
     self.statusItem.menu = menu;
+}
+
+// The base status image re-drawn at a vertical offset (NSImage coordinates are
+// y-up, so positive dy = up = send). Template-ness is copied from the base so
+// the frames render exactly like the idle glyph.
+- (NSImage*)offsetStatusImage:(CGFloat)dy {
+    NSImage* base = self.statusBaseImage;
+    if (base == nil) {
+        return nil;
+    }
+    const NSSize size = base.size;
+    NSImage* frame = [NSImage imageWithSize:size
+                                    flipped:NO
+                             drawingHandler:^BOOL(NSRect rect) {
+        (void)rect;
+        [base drawInRect:NSMakeRect(0, dy, size.width, size.height)
+                fromRect:NSZeroRect
+               operation:NSCompositingOperationSourceOver
+                fraction:1.0];
+        return YES;
+    }];
+    [frame setTemplate:[base isTemplate]];
+    return frame;
+}
+
+- (void)noteClipboardFlowReceived:(BOOL)received peer:(NSString*)peer {
+    self.lastFlowValid = YES;
+    self.lastFlowReceived = received;
+    self.lastFlowPeer = peer;
+    self.lastFlowWhen = [NSDate date];
+    [self runNudgeReceived:received];
+}
+
+- (void)runNudgeReceived:(BOOL)received {
+    NSStatusBarButton* button = [self.statusItem button];
+    if (button == nil || self.statusBaseImage == nil) {
+        return;
+    }
+    // One pass of 1-2-1 px travel, up for send / down for receive, then back to
+    // the byte-identical idle image. A new event mid-animation restarts the
+    // pass (coalescing: a burst re-nudges instead of queuing passes).
+    const CGFloat sign = received ? -1.0 : 1.0;
+    self.nudgeFrames = @[
+        [self offsetStatusImage:sign * 1.0],
+        [self offsetStatusImage:sign * 2.0],
+        [self offsetStatusImage:sign * 1.0],
+    ];
+    self.nudgeFrameIndex = 0;
+    [self.nudgeTimer invalidate];
+    button.image = self.nudgeFrames[0];
+
+    __weak ClippStatusMenuController* weakSelf = self;
+    self.nudgeTimer = [NSTimer scheduledTimerWithTimeInterval:0.09
+                                                      repeats:YES
+                                                        block:^(NSTimer* timer) {
+        ClippStatusMenuController* strongSelf = weakSelf;
+        if (strongSelf == nil) {
+            [timer invalidate];
+            return;
+        }
+        strongSelf.nudgeFrameIndex += 1;
+        NSStatusBarButton* timerButton = [strongSelf.statusItem button];
+        if (strongSelf.nudgeFrameIndex < strongSelf.nudgeFrames.count) {
+            timerButton.image = strongSelf.nudgeFrames[strongSelf.nudgeFrameIndex];
+            return;
+        }
+        timerButton.image = strongSelf.statusBaseImage;
+        [timer invalidate];
+        strongSelf.nudgeTimer = nil;
+    }];
+}
+
+- (void)menuWillOpen:(NSMenu*)menu {
+    (void)menu;
+    if (!self.lastFlowValid) {
+        return;
+    }
+    const NSTimeInterval elapsed = -[self.lastFlowWhen timeIntervalSinceNow];
+    const std::string age = clipp::FormatRelativeAgeUtf8(
+        elapsed > 0 ? static_cast<uint64_t>(elapsed) : 0);
+    NSString* ageText = [NSString stringWithUTF8String:age.c_str()];
+    NSString* title;
+    if (self.lastFlowReceived && self.lastFlowPeer.length > 0) {
+        title = [NSString stringWithFormat:@"Received from %@ · %@", self.lastFlowPeer, ageText];
+    } else if (self.lastFlowReceived) {
+        title = [NSString stringWithFormat:@"Received · %@", ageText];
+    } else {
+        title = [NSString stringWithFormat:@"Sent · %@", ageText];
+    }
+    self.lastFlowItem.title = title;
+    self.lastFlowItem.hidden = NO;
+    self.lastFlowSeparator.hidden = NO;
 }
 
 - (void)openClipp:(id)sender {
