@@ -5,6 +5,7 @@
 #include "Clipboard.h"
 #include "ClipboardFlowUi.h"
 #include "Logger.h"
+#include "Settings.h"
 #include "AboutPage.h"
 #include "ClippPage.h"
 #include "NetworkPage.h"
@@ -80,6 +81,7 @@ static ClippStatusMenuController* g_statusMenuController = nil;
 static ClippMainWindowController* g_logReflectorTarget = nil;
 extern ClipboardActivityStore g_clipboardActivityStore;
 extern PeerDisplay g_peerDisplay;
+extern Settings g_settings;
 
 static void LogReflectorCallback(const std::wstring& line);
 
@@ -1051,6 +1053,11 @@ static void MacClipboardFlowHandler(clipp::ClipboardFlowDirection direction, con
 }
 
 - (void)runNudgeReceived:(BOOL)received {
+    // Setting gates the MOTION only: noteClipboardFlowReceived already stored
+    // the event for the menu's last-event header.
+    if (!g_settings.animateFlowFeedback()) {
+        return;
+    }
     NSStatusBarButton* button = [self.statusItem button];
     if (button == nil || self.statusBaseImage == nil) {
         return;

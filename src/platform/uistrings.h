@@ -92,6 +92,11 @@
 #define CLP_UI_HONOR_PRIVACY_MARKERS_HELP "When other apps mark clipboard items as private (passwords from Chrome, password managers, etc.), Clipp will not sync the content to your other devices."
 #define CLP_UI_PRIVACY_SETTINGS_APPLIED "Privacy settings applied."
 
+#define CLP_UI_FEEDBACK "Feedback"
+#define CLP_UI_ANIMATE_FLOW_FEEDBACK "Animate the Clipp icon on send and receive"
+#define CLP_UI_ANIMATE_FLOW_FEEDBACK_HELP "The status icon gives a quick nudge whenever a copied item leaves for your other devices or arrives from one."
+#define CLP_UI_FEEDBACK_SETTINGS_APPLIED "Feedback setting applied."
+
 // Mac App Store flavor only (guideline 2.4.5(iii)): login items there require
 // explicit consent, so the MAS build swaps autostart-by-default for this toggle.
 #define CLP_UI_STARTUP "Startup"

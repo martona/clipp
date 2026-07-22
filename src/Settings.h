@@ -38,6 +38,10 @@ public:
     // single-token text (the might-be-a-password heuristic). Display-only —
     // never affects what syncs.
     static constexpr bool DefaultMaskShortTextPreviews = true;
+    // Default for animateFlowFeedback: nudge the tray / menu bar icon when a
+    // clipboard item is sent to or received from the group. Display-only; the
+    // last-event tooltip / menu line stays available either way.
+    static constexpr bool DefaultAnimateFlowFeedback = true;
 
     Settings();
 
@@ -53,6 +57,7 @@ public:
     uint64_t clipboardSyncMaxItems() const;
     bool honorExternalPrivacyMarkers() const;
     bool maskShortTextPreviews() const;
+    bool animateFlowFeedback() const;
 
 	bool set_listenerIp(const std::string& value);
     bool set_tcpPort(int value);
@@ -63,6 +68,7 @@ public:
     bool set_clipboardSyncMaxItems(uint64_t value);
     bool set_honorExternalPrivacyMarkers(bool value);
     bool set_maskShortTextPreviews(bool value);
+    bool set_animateFlowFeedback(bool value);
 
     // Atomically increments the per-origin sequence counter and returns the next
     // value. Persists every OriginSequenceBatchSize calls. On startup the counter
@@ -107,6 +113,7 @@ private:
     uint64_t clipboardSyncMaxItems_;
     bool honorExternalPrivacyMarkers_;
     bool maskShortTextPreviews_;
+    bool animateFlowFeedback_;
     // In-memory origin sequence counter. Highest value yielded so far.
     uint64_t originSequenceCounter_{ 0 };
     // The next persisted floor — counter values up to (but not including) this

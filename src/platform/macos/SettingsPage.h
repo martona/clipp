@@ -25,6 +25,7 @@ public:
     void OnResetHostID();
     void OnHonorPrivacyMarkersChanged();
     void OnMaskShortTextPreviewsChanged();
+    void OnAnimateFlowFeedbackChanged();
     void OnLaunchAtLoginChanged();
 
 private:
@@ -43,6 +44,8 @@ private:
     void ApplyClipboardHistorySettingChange();
     void RefreshPrivacyControls();
     void ApplyPrivacySettingChange();
+    void RefreshFeedbackControls();
+    void ApplyFeedbackSettingChange();
     void RefreshLaunchAtLoginControls();
     void ApplyLaunchAtLoginChange();
 
@@ -62,6 +65,7 @@ private:
     NSButton* resetHostIDButton_ = nullptr;
     NSButton* maskShortTextPreviewsCheckbox_ = nullptr;
     NSButton* honorPrivacyMarkersCheckbox_ = nullptr;
+    NSButton* animateFlowFeedbackCheckbox_ = nullptr;
     NSButton* launchAtLoginCheckbox_ = nullptr;
     NSTextField* statusMessage_ = nullptr;
     MacOSSettingsPageFieldDelegate* fieldDelegate_ = nullptr;

@@ -31,6 +31,7 @@ extern ClipboardActivityStore g_clipboardActivityStore;
 - (void)resetHostID:(id)sender;
 - (void)honorPrivacyMarkersChanged:(id)sender;
 - (void)maskShortTextPreviewsChanged:(id)sender;
+- (void)animateFlowFeedbackChanged:(id)sender;
 - (void)launchAtLoginChanged:(id)sender;
 @end
 
@@ -77,6 +78,13 @@ extern ClipboardActivityStore g_clipboardActivityStore;
     (void)sender;
     if (owner_ != nullptr) {
         owner_->OnMaskShortTextPreviewsChanged();
+    }
+}
+
+- (void)animateFlowFeedbackChanged:(id)sender {
+    (void)sender;
+    if (owner_ != nullptr) {
+        owner_->OnAnimateFlowFeedbackChanged();
     }
 }
 
@@ -368,6 +376,10 @@ void MacOSSettingsPage::OnMaskShortTextPreviewsChanged() {
     ApplyPrivacySettingChange();
 }
 
+void MacOSSettingsPage::OnAnimateFlowFeedbackChanged() {
+    ApplyFeedbackSettingChange();
+}
+
 void MacOSSettingsPage::OnLaunchAtLoginChanged() {
     ApplyLaunchAtLoginChange();
 }
@@ -505,6 +517,36 @@ void MacOSSettingsPage::BuildView() {
         [privacyHelp.bottomAnchor constraintEqualToAnchor:privacySection.bottomAnchor constant:-kSectionInsetY],
     ]];
 
+    NSTextField* feedbackHeader = [NSTextField labelWithString:CLP_NS(CLP_UI_FEEDBACK)];
+    feedbackHeader.translatesAutoresizingMaskIntoConstraints = NO;
+    feedbackHeader.font = [NSFont systemFontOfSize:16 weight:NSFontWeightSemibold];
+    feedbackHeader.textColor = [NSColor labelColor];
+
+    NSBox* feedbackSection = MacOSMakeGroupBox();
+
+    animateFlowFeedbackCheckbox_ = [NSButton checkboxWithTitle:CLP_NS(CLP_UI_ANIMATE_FLOW_FEEDBACK)
+                                                        target:fieldDelegate_
+                                                        action:@selector(animateFlowFeedbackChanged:)];
+    animateFlowFeedbackCheckbox_.translatesAutoresizingMaskIntoConstraints = NO;
+    [feedbackSection addSubview:animateFlowFeedbackCheckbox_];
+
+    NSTextField* animateHelp = MacOSMakeWrappingLabel(CLP_NS(CLP_UI_ANIMATE_FLOW_FEEDBACK_HELP),
+                                                      12.0,
+                                                      [NSColor secondaryLabelColor]);
+    [feedbackSection addSubview:animateHelp];
+
+    NSMutableArray<NSLayoutConstraint*>* feedbackConstraints = [NSMutableArray array];
+    [feedbackConstraints addObjectsFromArray:@[
+        [animateFlowFeedbackCheckbox_.leadingAnchor constraintEqualToAnchor:feedbackSection.leadingAnchor constant:kSectionInsetX],
+        [animateFlowFeedbackCheckbox_.trailingAnchor constraintLessThanOrEqualToAnchor:feedbackSection.trailingAnchor constant:-kSectionInsetX],
+        [animateFlowFeedbackCheckbox_.topAnchor constraintEqualToAnchor:feedbackSection.topAnchor constant:kSectionInsetY],
+
+        [animateHelp.leadingAnchor constraintEqualToAnchor:feedbackSection.leadingAnchor constant:kSectionInsetX],
+        [animateHelp.trailingAnchor constraintEqualToAnchor:feedbackSection.trailingAnchor constant:-kSectionInsetX],
+        [animateHelp.topAnchor constraintEqualToAnchor:animateFlowFeedbackCheckbox_.bottomAnchor constant:6.0],
+        [animateHelp.bottomAnchor constraintEqualToAnchor:feedbackSection.bottomAnchor constant:-kSectionInsetY],
+    ]];
+
     NSTextField* hostIDHeader = [NSTextField labelWithString:CLP_NS(CLP_UI_HOST_ID)];
     hostIDHeader.translatesAutoresizingMaskIntoConstraints = NO;
     hostIDHeader.font = [NSFont systemFontOfSize:16 weight:NSFontWeightSemibold];
@@ -534,6 +576,8 @@ void MacOSSettingsPage::BuildView() {
     [contentRoot addSubview:historySection];
     [contentRoot addSubview:privacyHeader];
     [contentRoot addSubview:privacySection];
+    [contentRoot addSubview:feedbackHeader];
+    [contentRoot addSubview:feedbackSection];
     [contentRoot addSubview:networkHeader];
     [contentRoot addSubview:section];
     [contentRoot addSubview:hostIDHeader];
@@ -587,9 +631,17 @@ void MacOSSettingsPage::BuildView() {
         [privacySection.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
         [privacySection.topAnchor constraintEqualToAnchor:privacyHeader.bottomAnchor constant:16.0],
 
+        [feedbackHeader.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
+        [feedbackHeader.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
+        [feedbackHeader.topAnchor constraintEqualToAnchor:privacySection.bottomAnchor constant:18.0],
+
+        [feedbackSection.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
+        [feedbackSection.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
+        [feedbackSection.topAnchor constraintEqualToAnchor:feedbackHeader.bottomAnchor constant:16.0],
+
         [networkHeader.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
         [networkHeader.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
-        [networkHeader.topAnchor constraintEqualToAnchor:privacySection.bottomAnchor constant:18.0],
+        [networkHeader.topAnchor constraintEqualToAnchor:feedbackSection.bottomAnchor constant:18.0],
 
         [section.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
         [section.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
@@ -626,6 +678,7 @@ void MacOSSettingsPage::BuildView() {
     [NSLayoutConstraint activateConstraints:historyConstraints];
     [NSLayoutConstraint activateConstraints:rowConstraints];
     [NSLayoutConstraint activateConstraints:privacyConstraints];
+    [NSLayoutConstraint activateConstraints:feedbackConstraints];
     [NSLayoutConstraint activateConstraints:hostIDConstraints];
 }
 
@@ -639,6 +692,7 @@ void MacOSSettingsPage::LoadSettingsIntoFields() {
     MacOSSetFieldText(listenerIpField_, g_settings.listenerIp());
     RefreshClipboardHistoryControls();
     RefreshPrivacyControls();
+    RefreshFeedbackControls();
     RefreshLaunchAtLoginControls();
     loadingSettings_ = false;
 
@@ -813,6 +867,33 @@ void MacOSSettingsPage::ApplyPrivacySettingChange() {
     }
 
     MacOSSetFieldText(statusMessage_, CLP_NS(CLP_UI_PRIVACY_SETTINGS_APPLIED));
+    ShowStatusMessage();
+}
+
+void MacOSSettingsPage::RefreshFeedbackControls() {
+    if (animateFlowFeedbackCheckbox_ == nil) {
+        return;
+    }
+
+    animateFlowFeedbackCheckbox_.state = g_settings.animateFlowFeedback()
+        ? NSControlStateValueOn
+        : NSControlStateValueOff;
+}
+
+void MacOSSettingsPage::ApplyFeedbackSettingChange() {
+    if (loadingSettings_ || animateFlowFeedbackCheckbox_ == nil) {
+        return;
+    }
+
+    const bool desiredAnimate = animateFlowFeedbackCheckbox_.state == NSControlStateValueOn;
+    if (desiredAnimate == g_settings.animateFlowFeedback()) {
+        return;
+    }
+    if (!g_settings.set_animateFlowFeedback(desiredAnimate)) {
+        return;
+    }
+
+    MacOSSetFieldText(statusMessage_, CLP_NS(CLP_UI_FEEDBACK_SETTINGS_APPLIED));
     ShowStatusMessage();
 }
 

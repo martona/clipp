@@ -15,6 +15,7 @@
 #include "Logger.h"
 #include "AutoStart.h"
 #include "ClipboardFlowUi.h"
+#include "Settings.h"
 #include "resource.h"
 #include "utils.h"
 #include "xaml_dialog.h"
@@ -49,6 +50,8 @@ static const UINT g_showMainWindowMessage = RegisterWindowMessageW(kShowMainWind
 // Broadcast by the shell to all top-level windows when the taskbar / notification area is
 // (re)created -- e.g. after Explorer crashes or is restarted, which drops all tray icons.
 static const UINT g_taskbarCreatedMessage = RegisterWindowMessageW(L"TaskbarCreated");
+
+extern Settings g_settings;
 
 // Global handle for cleanup
 static NOTIFYICONDATAW g_nid = {};
@@ -165,6 +168,11 @@ static void ShowTrayIconFrame(HICON icon) {
 }
 
 static void StartNudge(HWND hwnd, clipp::ClipboardFlowDirection direction) {
+    // Setting gates the MOTION only: the event was already recorded for the
+    // hover tooltip before this was posted.
+    if (!g_settings.animateFlowFeedback()) {
+        return;
+    }
     EnsureNudgeFrames();
     const int dir = (direction == clipp::ClipboardFlowDirection::Received) ? 1 : 0;
     if (g_nudgeFrames[dir][0] == nullptr) {

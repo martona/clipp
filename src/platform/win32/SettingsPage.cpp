@@ -434,6 +434,54 @@ void SettingsPage::BuildView() {
     content.Children().InsertAt(3, privacyHeader);
     content.Children().InsertAt(4, privacySection);
 
+    TextBlock feedbackHeader;
+    feedbackHeader.Text(CLP_W(CLP_UI_FEEDBACK));
+    feedbackHeader.FontSize(16);
+    feedbackHeader.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+
+    Grid feedbackSection;
+    feedbackSection.CornerRadius(CornerRadius{ 4 });
+    feedbackSection.BorderThickness(ThicknessHelper::FromLengths(1, 1, 1, 1));
+    feedbackSection.BorderBrush(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(50, 150, 150, 150)));
+    feedbackSection.Padding(ThicknessHelper::FromLengths(16, 12, 16, 12));
+    feedbackSection.RowSpacing(6);
+
+    ColumnDefinition feedbackColumn;
+    feedbackColumn.Width(GridLength{ 1, GridUnitType::Star });
+    feedbackSection.ColumnDefinitions().Append(feedbackColumn);
+
+    for (int i = 0; i < 2; ++i) {
+        RowDefinition feedbackRow;
+        feedbackRow.Height(GridLength{ 1, GridUnitType::Auto });
+        feedbackSection.RowDefinitions().Append(feedbackRow);
+    }
+
+    animateFlowFeedbackCheck_ = CheckBox();
+    animateFlowFeedbackCheck_.Content(winrt::box_value(winrt::hstring(CLP_W(CLP_UI_ANIMATE_FLOW_FEEDBACK))));
+    animateFlowFeedbackCheck_.Checked([this](auto const&, auto const&) {
+        ApplyFeedbackSettingChange();
+    });
+    animateFlowFeedbackCheck_.Unchecked([this](auto const&, auto const&) {
+        ApplyFeedbackSettingChange();
+    });
+    Grid::SetRow(animateFlowFeedbackCheck_, 0);
+    Grid::SetColumn(animateFlowFeedbackCheck_, 0);
+    feedbackSection.Children().Append(animateFlowFeedbackCheck_);
+
+    TextBlock animateHelp;
+    animateHelp.Text(CLP_W(CLP_UI_ANIMATE_FLOW_FEEDBACK_HELP));
+    animateHelp.FontSize(12);
+    animateHelp.Opacity(0.75);
+    animateHelp.TextWrapping(TextWrapping::WrapWholeWords);
+    Grid::SetRow(animateHelp, 1);
+    Grid::SetColumn(animateHelp, 0);
+    feedbackSection.Children().Append(animateHelp);
+
+    // Runs after the InsertAt(3/4) above and before the host-ID Appends below,
+    // so appending here lands the section between privacy and host ID.
+    content.Children().Append(feedbackHeader);
+    content.Children().Append(feedbackSection);
+
     TextBlock hostIDHeader;
     hostIDHeader.Text(CLP_W(CLP_UI_HOST_ID));
     hostIDHeader.FontSize(16);
@@ -509,6 +557,7 @@ void SettingsPage::LoadSettingsIntoFields() {
     listenerIpField_.Text(ToHString(g_settings.listenerIp()));
     RefreshClipboardHistoryControls();
     RefreshPrivacyControls();
+    RefreshFeedbackControls();
     loadingSettings_ = false;
 
     RefreshHostIDDisplay();
@@ -661,6 +710,32 @@ void SettingsPage::RefreshPrivacyControls() {
 
     maskShortTextPreviewsCheck_.IsChecked(winrt::Windows::Foundation::IReference<bool>(g_settings.maskShortTextPreviews()));
     honorPrivacyMarkersCheck_.IsChecked(winrt::Windows::Foundation::IReference<bool>(g_settings.honorExternalPrivacyMarkers()));
+}
+
+void SettingsPage::RefreshFeedbackControls() {
+    if (!animateFlowFeedbackCheck_) {
+        return;
+    }
+
+    animateFlowFeedbackCheck_.IsChecked(winrt::Windows::Foundation::IReference<bool>(g_settings.animateFlowFeedback()));
+}
+
+void SettingsPage::ApplyFeedbackSettingChange() {
+    if (loadingSettings_ || !animateFlowFeedbackCheck_) {
+        return;
+    }
+
+    const auto animateRef = animateFlowFeedbackCheck_.IsChecked();
+    const bool desiredAnimate = animateRef ? animateRef.Value() : false;
+    if (desiredAnimate == g_settings.animateFlowFeedback()) {
+        return;
+    }
+    if (!g_settings.set_animateFlowFeedback(desiredAnimate)) {
+        return;
+    }
+
+    statusMessage_.Text(CLP_W(CLP_UI_FEEDBACK_SETTINGS_APPLIED));
+    ShowStatusMessage();
 }
 
 void SettingsPage::ApplyPrivacySettingChange() {
