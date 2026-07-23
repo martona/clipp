@@ -90,6 +90,7 @@ extern KeyManager g_keyManager;
     SEL copyAction_;
     id deleteTarget_;
     SEL deleteAction_;
+    NSButton* deleteButton_;
     BOOL mouseInside_;
     BOOL copiedFeedbackVisible_;
     NSUInteger copiedFeedbackGeneration_;
@@ -104,6 +105,7 @@ extern KeyManager g_keyManager;
 }
 - (void)setCopyButton:(NSButton*)button target:(id)target action:(SEL)action bubble:(NSBox*)bubble normalFillColor:(NSColor*)normalFillColor;
 - (void)setDeleteTarget:(id)target action:(SEL)action;
+- (void)setDeleteButton:(NSButton*)button;
 - (void)deleteActivityItemFromMenu:(id)sender;
 - (void)invokeDelete:(id)sender;
 - (void)setPeekButton:(NSButton*)button
@@ -137,6 +139,10 @@ static __weak MacOSActivityRowView* g_hoveredActivityRow = nil;
 - (void)setDeleteTarget:(id)target action:(SEL)action {
     deleteTarget_ = target;
     deleteAction_ = action;
+}
+
+- (void)setDeleteButton:(NSButton*)button {
+    deleteButton_ = button;
 }
 
 - (void)setPeekButton:(NSButton*)button
@@ -359,6 +365,11 @@ static __weak MacOSActivityRowView* g_hoveredActivityRow = nil;
     const BOOL visible = copiedFeedbackVisible_ || mouseInside_ || self.window.firstResponder == self;
     copyButton_.alphaValue = visible ? 1.0 : 0.0;
     copyButton_.enabled = visible;
+    if (deleteButton_ != nil) {
+        const BOOL deleteVisible = mouseInside_ || self.window.firstResponder == self;
+        deleteButton_.alphaValue = deleteVisible ? 1.0 : 0.0;
+        deleteButton_.enabled = deleteVisible;
+    }
     if (peekButton_ != nil) {
         // An active peek keeps its toggle visible so the revealed state is
         // never ambiguous.
@@ -609,9 +620,6 @@ NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
 
     MacOSActivityRowView* row = [[MacOSActivityRowView alloc] initWithFrame:NSZeroRect];
     row.translatesAutoresizingMaskIntoConstraints = NO;
-    if (showCopyAction) {
-        row.toolTip = CLP_NS(CLP_UI_COPY);
-    }
 
     NSBox* bubble = MacOSMakeGroupBox();
     NSColor* bubbleFillColor = ActivityBubbleColor(isOutgoing);
@@ -642,8 +650,12 @@ NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
     // the whole point — so the delete wiring sits outside the copy gate.
     [row setDeleteTarget:target action:@selector(deleteActivityItem:)];
     if (showCopyAction) {
+        // Double-click only: a single row click must not copy — an MRU
+        // re-share reorders every list on the mesh, far too intrusive for a
+        // stray click. The copy glyph stays the one-click affordance.
         NSClickGestureRecognizer* copyGesture = [[NSClickGestureRecognizer alloc] initWithTarget:row
                                                                                            action:@selector(copyActivityItem:)];
+        copyGesture.numberOfClicksRequired = 2;
         // Lets the row decline clicks the action buttons handle themselves.
         copyGesture.delegate = row;
         [row addGestureRecognizer:copyGesture];
@@ -713,14 +725,14 @@ NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
         }
     }
 
-    if (showCopyAction) {
-        NSStackView* actionRail = [[NSStackView alloc] initWithFrame:NSZeroRect];
-        actionRail.translatesAutoresizingMaskIntoConstraints = NO;
-        actionRail.orientation = NSUserInterfaceLayoutOrientationVertical;
-        actionRail.alignment = NSLayoutAttributeCenterX;
-        actionRail.spacing = 4.0;
-        [actionRail setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
+    NSStackView* actionRail = [[NSStackView alloc] initWithFrame:NSZeroRect];
+    actionRail.translatesAutoresizingMaskIntoConstraints = NO;
+    actionRail.orientation = NSUserInterfaceLayoutOrientationVertical;
+    actionRail.alignment = NSLayoutAttributeCenterX;
+    actionRail.spacing = 4.0;
+    [actionRail setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
 
+    if (showCopyAction) {
         NSButton* copyButton = MacOSMakeIconButton(@"doc.on.doc", CLP_NS(CLP_UI_COPY), row, @selector(copyActivityItem:));
         copyButton.alphaValue = 0.0;
         copyButton.enabled = NO;
@@ -740,9 +752,18 @@ NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
                     maskedText:MacOSToNSString(display->previewText)
                   revealedText:MacOSToNSString(display->revealedPreviewText)];
         }
-
-        [outer addArrangedSubview:actionRail];
     }
+
+    // Delete rides every row — placeholders included; removing the trace
+    // everywhere is the whole point of the affordance.
+    NSButton* deleteButton = MacOSMakeIconButton(@"trash", CLP_NS(CLP_UI_DELETE), row, @selector(deleteActivityItemFromMenu:));
+    deleteButton.alphaValue = 0.0;
+    deleteButton.enabled = NO;
+    deleteButton.refusesFirstResponder = YES;
+    [row setDeleteButton:deleteButton];
+    [actionRail addArrangedSubview:deleteButton];
+
+    [outer addArrangedSubview:actionRail];
 
     [bubble addSubview:outer];
     [row addSubview:bubble];

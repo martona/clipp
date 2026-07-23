@@ -37,6 +37,7 @@
 #define CLP_UI_TRAY_POPUP "Clipboard history"
 #define CLP_UI_POPUP_FILTER_HINT "Type to filter..."
 #define CLP_UI_POPUP_MORE "Keep typing to narrow the list..."
+#define CLP_UI_POPUP_EMPTY "No data to display."
 #define CLP_UI_LINK "Link"
 #define CLP_UI_TEXT "Text"
 #define CLP_UI_IMAGE "Image"

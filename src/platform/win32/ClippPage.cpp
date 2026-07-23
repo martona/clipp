@@ -263,25 +263,52 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t it
     meta.TextWrapping(TextWrapping::WrapWholeWords);
     content.Children().Append(meta);
 
-    FontIcon copyIcon;
-    copyIcon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
-    copyIcon.Glyph(L"\xE8C8");
-    copyIcon.FontSize(13);
-    copyIcon.Width(28);
-    copyIcon.Height(28);
-    copyIcon.VerticalAlignment(VerticalAlignment::Center);
-    copyIcon.HorizontalAlignment(HorizontalAlignment::Center);
-    copyIcon.Opacity(0.0);
-    copyIcon.IsHitTestVisible(false);
-    // Placeholder rows have no copyable content; suppress the hover affordance.
-    copyIcon.Visibility(showCopyAction ? Visibility::Visible : Visibility::Collapsed);
+    const auto makeRailButton = [](const wchar_t* glyph, const wchar_t* label) {
+        FontIcon icon;
+        icon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
+        icon.Glyph(glyph);
+        icon.FontSize(13);
+        Button button;
+        button.Content(icon);
+        button.Width(28);
+        button.Height(28);
+        button.MinWidth(0);
+        button.MinHeight(0);
+        button.Padding(ThicknessHelper::FromLengths(0, 0, 0, 0));
+        button.BorderThickness(ThicknessHelper::FromLengths(0, 0, 0, 0));
+        button.Background(MakeBrush(0, 0, 0, 0));
+        button.Opacity(0.0);
+        button.IsHitTestVisible(false);
+        const winrt::hstring name{ label };
+        ToolTipService::SetToolTip(button, winrt::box_value(name));
+        Automation::AutomationProperties::SetName(button, name);
+        return button;
+    };
+
+    // The rail glyphs are the one-click affordances; a plain row click does
+    // NOTHING on purpose — copy is an MRU re-share that reorders every list
+    // on the mesh, far too intrusive for a stray click. Double-click and the
+    // copy glyph share the action.
+    Button copyButton{ nullptr };
+    if (showCopyAction) {
+        copyButton = makeRailButton(L"\xE8C8", CLP_W(CLP_UI_COPY));
+        copyButton.Click([this, itemID](auto const&, auto const&) {
+            CopyActivityItem(itemID);
+        });
+    }
+    Button deleteButton = makeRailButton(L"\xE74D", CLP_W(CLP_UI_DELETE));
+    deleteButton.Click([itemID](auto const&, auto const&) {
+        clipp::DeleteActivityItemEverywhere(itemID);
+    });
 
     StackPanel actionRail;
     actionRail.Orientation(Orientation::Vertical);
     actionRail.Spacing(4);
     actionRail.VerticalAlignment(VerticalAlignment::Top);
     Grid::SetColumn(actionRail, 1);
-    actionRail.Children().Append(copyIcon);
+    if (copyButton) {
+        actionRail.Children().Append(copyButton);
+    }
 
     Button peekButton{ nullptr };
     FontIcon peekIcon{ nullptr };
@@ -303,6 +330,10 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t it
         peekButton.IsHitTestVisible(false);
         actionRail.Children().Append(peekButton);
     }
+
+    // Delete rides every row — placeholders included; removing the trace
+    // everywhere is the whole point of the affordance.
+    actionRail.Children().Append(deleteButton);
 
     TextBlock preview{ nullptr };
 
@@ -384,17 +415,21 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t it
         }
     }
 
-    // Hover/focus state shared by the row and the nested peek button. The rail
-    // icons follow it, except that an active peek stays visible so its toggled
-    // state is never ambiguous.
+    // Hover/focus state shared by the row and the rail buttons, which follow
+    // it — except that an active peek stays visible so its toggled state is
+    // never ambiguous.
     auto pointerOverRow = std::make_shared<bool>(false);
-    const auto updateActionIcons = [copyIcon, peekButton, itemID, pointerOverRow]() {
-        copyIcon.Opacity(*pointerOverRow ? 1.0 : 0.0);
+    const auto updateActionIcons = [copyButton, deleteButton, peekButton, itemID, pointerOverRow]() {
+        const bool over = *pointerOverRow;
+        if (copyButton) {
+            copyButton.Opacity(over ? 1.0 : 0.0);
+            copyButton.IsHitTestVisible(over);
+        }
+        deleteButton.Opacity(over ? 1.0 : 0.0);
+        deleteButton.IsHitTestVisible(over);
         if (peekButton) {
-            const bool show = *pointerOverRow || uiClippPage::IsItemPeeked(itemID);
+            const bool show = over || uiClippPage::IsItemPeeked(itemID);
             peekButton.Opacity(show ? 1.0 : 0.0);
-            // While invisible it must not be a surprise click target (a row
-            // click means copy); keyboard focus still reaches it via tab.
             peekButton.IsHitTestVisible(show);
         }
     };
@@ -409,25 +444,28 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t it
     rowButton.Background(MakeBrush(0, 0, 0, 0));
     rowButton.Content(bubble);
 
+    // Hover affordances apply to every row — delete is universal; the copy
+    // wiring below stays gated on copyable content.
+    rowButton.PointerEntered([updateActionIcons, pointerOverRow](auto const&, auto const&) {
+        *pointerOverRow = true;
+        updateActionIcons();
+    });
+    rowButton.PointerExited([updateActionIcons, pointerOverRow](auto const&, auto const&) {
+        *pointerOverRow = false;
+        updateActionIcons();
+    });
+    rowButton.GotFocus([updateActionIcons, pointerOverRow](auto const&, auto const&) {
+        *pointerOverRow = true;
+        updateActionIcons();
+    });
+    rowButton.LostFocus([updateActionIcons, pointerOverRow](auto const&, auto const&) {
+        *pointerOverRow = false;
+        updateActionIcons();
+    });
+
     if (showCopyAction) {
-        rowButton.Click([this, itemID](auto const&, auto const&) {
+        rowButton.DoubleTapped([this, itemID](auto const&, auto const&) {
             CopyActivityItem(itemID);
-        });
-        rowButton.PointerEntered([updateActionIcons, pointerOverRow](auto const&, auto const&) {
-            *pointerOverRow = true;
-            updateActionIcons();
-        });
-        rowButton.PointerExited([updateActionIcons, pointerOverRow](auto const&, auto const&) {
-            *pointerOverRow = false;
-            updateActionIcons();
-        });
-        rowButton.GotFocus([updateActionIcons, pointerOverRow](auto const&, auto const&) {
-            *pointerOverRow = true;
-            updateActionIcons();
-        });
-        rowButton.LostFocus([updateActionIcons, pointerOverRow](auto const&, auto const&) {
-            *pointerOverRow = false;
-            updateActionIcons();
         });
 
         MenuFlyout contextMenu;
@@ -494,9 +532,7 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t it
         });
 
         rowButton.ContextFlyout(contextMenu);
-        ToolTipService::SetToolTip(rowButton, winrt::box_value(winrt::hstring{ CLP_W(CLP_UI_COPY) }));
         Automation::AutomationProperties::SetName(rowButton, winrt::hstring{ metaText });
-        Automation::AutomationProperties::SetHelpText(rowButton, winrt::hstring{ CLP_W(CLP_UI_COPY) });
     } else {
         // Placeholder rows are informational — no click, no copy, no tooltip.
         // Still deletable, so the trace can be removed everywhere.
@@ -578,6 +614,19 @@ void ClippPage::RemoveActivityItem(uint64_t itemID) {
     activityItemsPanel_.Children().RemoveAt(index);
     activityItemIDs_.erase(found);
     SetActivityEmptyMessageVisible(activityItemIDs_.empty());
+
+    // Same focus re-anchor as MoveActivityItem: a removed focused row would
+    // otherwise leave the island with null focus and a dead mouse wheel.
+    if (!activityItemIDs_.empty()
+        && winrt::Windows::UI::Xaml::Input::FocusManager::GetFocusedElement() == nullptr) {
+        const uint32_t focusIndex =
+            (std::min)(index, static_cast<uint32_t>(activityItemIDs_.size() - 1));
+        if (const auto nextRow = activityItemsPanel_.Children().GetAt(focusIndex).try_as<winrt::Windows::UI::Xaml::Controls::Grid>()) {
+            if (const auto control = nextRow.Children().GetAt(0).try_as<winrt::Windows::UI::Xaml::Controls::Control>()) {
+                control.Focus(winrt::Windows::UI::Xaml::FocusState::Programmatic);
+            }
+        }
+    }
 }
 
 void ClippPage::MoveActivityItem(uint64_t itemID) {
@@ -622,6 +671,15 @@ void ClippPage::MoveActivityItem(uint64_t itemID) {
     activityItemsPanel_.Children().InsertAt(insertIndex, row);
     activityItemIDs_.insert(activityItemIDs_.begin() + insertIndex, itemID);
     SetActivityEmptyMessageVisible(false);
+
+    // Removing the (typically just-clicked, focused) old row drops XAML focus
+    // to null, which kills mouse-wheel routing in the island until something
+    // takes focus again. Re-anchor on the row's replacement.
+    if (winrt::Windows::UI::Xaml::Input::FocusManager::GetFocusedElement() == nullptr) {
+        if (const auto control = row.Children().GetAt(0).try_as<winrt::Windows::UI::Xaml::Controls::Control>()) {
+            control.Focus(winrt::Windows::UI::Xaml::FocusState::Programmatic);
+        }
+    }
 
     if (shouldFollow) {
         ScrollActivityToTop();

@@ -29,9 +29,11 @@
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.System.h>
 #include <winrt/Windows.UI.h>
+#include <winrt/Windows.UI.Input.h>
 #include <winrt/Windows.UI.Text.h>
 #include <winrt/Windows.UI.Xaml.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
+#include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Windows.UI.Xaml.Hosting.h>
 #include <winrt/Windows.UI.Xaml.Input.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
@@ -73,6 +75,54 @@ Brush PopupBackgroundBrush() {
     return DarkMode::isEnabled() ? ArgbBrush(255, 32, 32, 32) : ArgbBrush(255, 243, 243, 243);
 }
 
+Brush LookupThemeBrush(const wchar_t* resourceName) {
+    const auto app = Application::Current();
+    if (!app) {
+        return nullptr;
+    }
+    const auto resources = app.Resources();
+    const auto key = winrt::box_value(winrt::hstring{ resourceName });
+    if (!resources.HasKey(key)) {
+        return nullptr;
+    }
+    return resources.Lookup(key).as<Brush>();
+}
+
+// Same fix the settings window carries: focused text controls otherwise flip
+// to their light-theme brushes inside an island. Alias the focused-state
+// resources to the unfocused ones.
+void ApplyTextControlThemeResources(FrameworkElement const& element) {
+    struct BrushAlias {
+        const wchar_t* target;
+        const wchar_t* source;
+    };
+    const BrushAlias aliases[] = {
+        { L"TextControlBackgroundFocused", L"TextControlBackground" },
+        { L"TextControlForegroundFocused", L"TextControlForeground" },
+        { L"TextControlPlaceholderForegroundFocused", L"TextControlPlaceholderForeground" },
+    };
+    const auto resources = element.Resources();
+    for (const auto& alias : aliases) {
+        if (const auto brush = LookupThemeBrush(alias.source)) {
+            resources.Insert(winrt::box_value(winrt::hstring{ alias.target }), brush);
+        }
+    }
+}
+
+std::wstring RelativeAgeText(std::chrono::system_clock::time_point when) {
+    using namespace std::chrono;
+    const auto now = system_clock::now();
+    const long long secs = when <= now ? duration_cast<seconds>(now - when).count() : 0;
+    if (secs < 5)      return L"just now";
+    if (secs < 60)     return std::to_wstring(secs) + L" seconds ago";
+    if (secs < 120)    return L"a minute ago";
+    if (secs < 3600)   return std::to_wstring(secs / 60) + L" minutes ago";
+    if (secs < 7200)   return L"an hour ago";
+    if (secs < 86400)  return std::to_wstring(secs / 3600) + L" hours ago";
+    if (secs < 172800) return L"yesterday";
+    return std::to_wstring(secs / 86400) + L" days ago";
+}
+
 class PopupWindow {
 public:
     void Toggle() {
@@ -87,6 +137,33 @@ public:
         if (hwnd_ == nullptr || !IsWindowVisible(hwnd_) || !xamlSource_) {
             return false;
         }
+        // Wheel input doesn't reliably reach the island's ScrollViewer in this
+        // hosting setup; when the cursor is over the popup, drive the list
+        // scroll ourselves and swallow the message. The island's input HWND
+        // receives wheel as POINTER messages on current Windows (the framework
+        // enables mouse-in-pointer), so WM_MOUSEWHEEL alone never matches —
+        // intercept both spellings. Delta lives in the same wParam word.
+#ifndef WM_POINTERWHEEL
+#define WM_POINTERWHEEL 0x024E
+#endif
+        if ((msg->message == WM_MOUSEWHEEL || msg->message == WM_POINTERWHEEL) && listScroll_) {
+            RECT rect{};
+            GetWindowRect(hwnd_, &rect);
+            const POINT cursor{
+                static_cast<LONG>(static_cast<SHORT>(LOWORD(msg->lParam))),
+                static_cast<LONG>(static_cast<SHORT>(HIWORD(msg->lParam))),
+            };
+            if (PtInRect(&rect, cursor)) {
+                const int delta = GET_WHEEL_DELTA_WPARAM(msg->wParam);
+                constexpr double kPixelsPerNotch = 96.0;
+                const double offset =
+                    listScroll_.VerticalOffset() - (static_cast<double>(delta) / WHEEL_DELTA) * kPixelsPerNotch;
+                listScroll_.ChangeView(nullptr,
+                    winrt::Windows::Foundation::IReference<double>{ offset }, nullptr, true);
+                return true;
+            }
+        }
+
         auto native2 = xamlSource_.try_as<IDesktopWindowXamlSourceNative2>();
         if (!native2) {
             return false;
@@ -132,10 +209,32 @@ private:
         PositionOnCursorMonitor();
         ShowWindow(hwnd_, SW_SHOW);
         SetForegroundWindow(hwnd_);
-        if (filterBox_) {
-            filterBox_.Focus(FocusState::Programmatic);
-        }
+        FocusFilterBox();
         BeginActivityNotifications();
+    }
+
+    // Keyboard must land in the filter box every single time, or the popup is
+    // dead to arrows/Esc. Belt and suspenders: Win32 focus onto the island's
+    // HWND, XAML focus navigated into the island, and a deferred explicit
+    // Focus() once layout has settled.
+    void FocusFilterBox() {
+        if (xamlHost_ != nullptr) {
+            SetFocus(xamlHost_);
+        }
+        if (xamlSource_) {
+            try {
+                xamlSource_.NavigateFocus(Hosting::XamlSourceFocusNavigationRequest(
+                    Hosting::XamlSourceFocusNavigationReason::Programmatic));
+            } catch (...) {
+            }
+        }
+        if (dispatcher_ && filterBox_) {
+            dispatcher_.TryEnqueue([this]() {
+                if (filterBox_ && hwnd_ != nullptr && IsWindowVisible(hwnd_)) {
+                    filterBox_.Focus(FocusState::Programmatic);
+                }
+            });
+        }
     }
 
     void Dismiss(bool restoreFocus) {
@@ -170,6 +269,13 @@ private:
             return;
         }
 
+        // Same anti-flashbang the main dialog runs at WM_CREATE: the erase-bg
+        // subclass paints the window in the dark dialog color instead of the
+        // class's white brush while the island is still warming up. Installed
+        // before the first ShowWindow, so no white frame ever reaches glass.
+        DarkMode::setWindowEraseBgSubclass(hwnd_);
+        DarkMode::setDarkWndNotifySafe(hwnd_, true);
+
         BOOL dark = DarkMode::isEnabled() ? TRUE : FALSE;
         DwmSetWindowAttribute(hwnd_, 20 /*DWMWA_USE_IMMERSIVE_DARK_MODE*/, &dark, sizeof(dark));
         const DWORD cornerRound = 2 /*DWMWCP_ROUND*/;
@@ -189,6 +295,9 @@ private:
         if (!xamlManager_) {
             xamlManager_ = Hosting::WindowsXamlManager::InitializeForCurrentThread();
         }
+        if (!dispatcher_) {
+            dispatcher_ = winrt::Windows::System::DispatcherQueue::GetForCurrentThread();
+        }
         xamlSource_ = Hosting::DesktopWindowXamlSource{};
         auto nativeSource = xamlSource_.as<IDesktopWindowXamlSourceNative>();
         winrt::check_hresult(nativeSource->AttachToWindow(hwnd_));
@@ -203,18 +312,88 @@ private:
         Grid root;
         root.RequestedTheme(CurrentTheme());
         root.Background(PopupBackgroundBrush());
+        ApplyTextControlThemeResources(root);
 
+        RowDefinition headerRow;
+        headerRow.Height(GridLength{ 0, GridUnitType::Auto });
         RowDefinition filterRow;
         filterRow.Height(GridLength{ 0, GridUnitType::Auto });
         RowDefinition listRow;
         listRow.Height(GridLength{ 1, GridUnitType::Star });
+        root.RowDefinitions().Append(headerRow);
         root.RowDefinitions().Append(filterRow);
         root.RowDefinitions().Append(listRow);
 
+        // Identity bar: a surprise borderless window on a stray keystroke
+        // should say what it is, and offer an obvious way out.
+        Grid header;
+        header.Padding(ThicknessHelper::FromLengths(14, 10, 8, 0));
+        ColumnDefinition titleColumn;
+        titleColumn.Width(GridLength{ 1, GridUnitType::Star });
+        ColumnDefinition closeColumn;
+        closeColumn.Width(GridLength{ 0, GridUnitType::Auto });
+        header.ColumnDefinitions().Append(titleColumn);
+        header.ColumnDefinitions().Append(closeColumn);
+
+        TextBlock title;
+        title.Text(winrt::hstring{ CLP_W(CLP_UI_APP_NAME) L" — " CLP_W(CLP_UI_TRAY_POPUP) });
+        title.FontSize(13);
+        title.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+        title.Opacity(0.75);
+        title.VerticalAlignment(VerticalAlignment::Center);
+        Grid::SetColumn(title, 0);
+        header.Children().Append(title);
+
+        FontIcon closeIcon;
+        closeIcon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
+        closeIcon.Glyph(L"\xE711");
+        closeIcon.FontSize(12);
+        Button closeButton;
+        closeButton.Content(closeIcon);
+        closeButton.Width(30);
+        closeButton.Height(26);
+        closeButton.MinWidth(0);
+        closeButton.MinHeight(0);
+        closeButton.Padding(ThicknessHelper::FromLengths(0, 0, 0, 0));
+        closeButton.BorderThickness(ThicknessHelper::FromLengths(0, 0, 0, 0));
+        closeButton.Background(ArgbBrush(0, 0, 0, 0));
+        closeButton.IsTabStop(false);
+        closeButton.Click([this](auto const&, auto const&) {
+            Dismiss(/*restoreFocus=*/true);
+        });
+        Grid::SetColumn(closeButton, 1);
+        header.Children().Append(closeButton);
+
+        Grid::SetRow(header, 0);
+        root.Children().Append(header);
+
+        // The template's placeholder machinery is a lost cause inside an
+        // island (its state brushes resolve to invisible colors), so the hint
+        // is our own overlay TextBlock instead — visible exactly while the
+        // filter is empty, in a color we control.
         filterBox_ = TextBox();
-        filterBox_.PlaceholderText(winrt::hstring{ CLP_W(CLP_UI_POPUP_FILTER_HINT) });
         filterBox_.Margin(ThicknessHelper::FromLengths(12, 12, 12, 8));
+        // The race-free half of first-summon focus: on a cold open the island
+        // content isn't in the live tree yet when Summon's deferred Focus()
+        // runs (very visible under gflags heap checking, but the race exists
+        // everywhere), so Focus() no-ops and the keyboard lands nowhere.
+        // Loaded fires exactly when the box becomes focusable — take it then.
+        filterBox_.Loaded([this](auto const&, auto const&) {
+            if (filterBox_ && hwnd_ != nullptr && IsWindowVisible(hwnd_)) {
+                filterBox_.Focus(FocusState::Programmatic);
+            }
+        });
+        filterHint_ = TextBlock();
+        filterHint_.Text(winrt::hstring{ CLP_W(CLP_UI_POPUP_FILTER_HINT) });
+        filterHint_.Opacity(0.55);
+        filterHint_.IsHitTestVisible(false);
+        filterHint_.VerticalAlignment(VerticalAlignment::Center);
+        filterHint_.Margin(ThicknessHelper::FromLengths(24, 12, 24, 8));
         filterBox_.TextChanged([this](auto const&, auto const&) {
+            if (filterHint_) {
+                filterHint_.Visibility(filterBox_.Text().empty()
+                    ? Visibility::Visible : Visibility::Collapsed);
+            }
             model_.SetFilter(std::wstring{ filterBox_.Text() });
             RenderList();
         });
@@ -224,16 +403,58 @@ private:
         filterBox_.PreviewKeyDown([this](auto const&, Input::KeyRoutedEventArgs const& args) {
             OnFilterKey(args);
         });
-        Grid::SetRow(filterBox_, 0);
-        root.Children().Append(filterBox_);
+        Grid filterHost;
+        filterHost.Children().Append(filterBox_);
+        filterHost.Children().Append(filterHint_);
+        Grid::SetRow(filterHost, 1);
+        root.Children().Append(filterHost);
 
         listScroll_ = ScrollViewer();
         listScroll_.Margin(ThicknessHelper::FromLengths(8, 0, 8, 8));
         listPanel_ = StackPanel();
         listPanel_.Spacing(2);
         listScroll_.Content(listPanel_);
-        Grid::SetRow(listScroll_, 1);
+        Grid::SetRow(listScroll_, 2);
         root.Children().Append(listScroll_);
+
+        // Second wheel net, this one inside XAML: wherever the island routes
+        // the wheel (focused element, pointer target), it bubbles here —
+        // handledEventsToo so a consuming control can't hide it.
+        root.AddHandler(
+            UIElement::PointerWheelChangedEvent(),
+            winrt::box_value(Input::PointerEventHandler(
+                [this](winrt::Windows::Foundation::IInspectable const&,
+                       Input::PointerRoutedEventArgs const& args) {
+                    if (!listScroll_) {
+                        return;
+                    }
+                    const int delta = args.GetCurrentPoint(nullptr).Properties().MouseWheelDelta();
+                    if (delta == 0) {
+                        return;
+                    }
+                    constexpr double kPixelsPerNotch = 96.0;
+                    const double offset = listScroll_.VerticalOffset()
+                        - (static_cast<double>(delta) / WHEEL_DELTA) * kPixelsPerNotch;
+                    listScroll_.ChangeView(nullptr,
+                        winrt::Windows::Foundation::IReference<double>{ offset }, nullptr, true);
+                    args.Handled(true);
+                })),
+            true /* handledEventsToo */);
+
+        // The filter box is the popup's only keyboard home; any click that
+        // lands on chrome (header, gaps, scrollbar margins) would otherwise
+        // strand XAML focus and kill arrows/Esc. Re-anchor after every click
+        // that bubbles this far (rows bubble too — selection still works, and
+        // typing keeps flowing).
+        root.PointerReleased([this](auto const&, auto const&) {
+            if (dispatcher_) {
+                dispatcher_.TryEnqueue([this]() {
+                    if (filterBox_ && hwnd_ != nullptr && IsWindowVisible(hwnd_)) {
+                        filterBox_.Focus(FocusState::Programmatic);
+                    }
+                });
+            }
+        });
 
         return root;
     }
@@ -346,10 +567,12 @@ private:
             listPanel_.Children().Append(more);
         }
         if (history.empty()) {
+            // Covers both "nothing synced yet" and "filter matched nothing".
             TextBlock empty;
-            empty.Text(winrt::hstring{ CLP_W(CLP_UI_CLIPBOARD_EMPTY) });
+            empty.Text(winrt::hstring{ CLP_W(CLP_UI_POPUP_EMPTY) });
             empty.Opacity(0.55);
             empty.Margin(ThicknessHelper::FromLengths(10, 16, 10, 6));
+            empty.TextWrapping(TextWrapping::Wrap);
             empty.HorizontalAlignment(HorizontalAlignment::Center);
             listPanel_.Children().Append(empty);
         }
@@ -378,7 +601,10 @@ private:
                 previewText = display.previewText;
                 break;
             }
-            metaText = display.deviceName;
+            // "Mars11 14 seconds ago" — who it came from, and how fresh.
+            metaText = display.deviceName.empty()
+                ? RelativeAgeText(display.header.timestamp)
+                : display.deviceName + L" " + RelativeAgeText(display.header.timestamp);
         }
         if (previewText.empty()) {
             previewText = L" ";
@@ -555,6 +781,11 @@ private:
         case WM_SIZE:
             ResizeXamlHost();
             return 0;
+        case WM_SETFOCUS:
+            // Win32 focus on the top-level must flow into the island — and all
+            // the way back to the filter box, or the keyboard lands nowhere.
+            FocusFilterBox();
+            return 0;
         case WM_DPICHANGED: {
             const RECT* suggested = reinterpret_cast<const RECT*>(lParam);
             SetWindowPos(hwnd_, nullptr, suggested->left, suggested->top,
@@ -614,6 +845,7 @@ private:
     Hosting::DesktopWindowXamlSource xamlSource_{ nullptr };
     winrt::Windows::System::DispatcherQueue dispatcher_{ nullptr };
     TextBox filterBox_{ nullptr };
+    TextBlock filterHint_{ nullptr };
     ScrollViewer listScroll_{ nullptr };
     StackPanel listPanel_{ nullptr };
     std::vector<Border> rowBorders_;

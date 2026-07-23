@@ -448,10 +448,14 @@ void TrayIconMessageLoop(bool showNetworkPageOnStartup) {
 
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0)) {
-        if (ClippMainDialogPreTranslateMessage(&msg)) {
+        // Popup first: the main dialog object stays alive (hidden) after its
+        // first open, and its island's PreTranslateMessage can claim input
+        // meant for the popup's island. The popup hook self-gates on
+        // visibility, so this order costs the dialog nothing.
+        if (clipp::PopupPreTranslateMessage(&msg)) {
             continue;
         }
-        if (clipp::PopupPreTranslateMessage(&msg)) {
+        if (ClippMainDialogPreTranslateMessage(&msg)) {
             continue;
         }
 
