@@ -24,6 +24,7 @@
 #include "PeerManager.h"
 #include "PeerDisplay.h"
 #include "Clipboard.h"
+#include "ClipboardActions.h"
 #include "ClipboardActivityStore.h"
 #include "ClipboardFlowUi.h"
 #include "ClipboardWire.h"
@@ -59,26 +60,6 @@ PeerManager g_peerManager;
 NetworkRuntime g_networkRuntime;
 ClipboardActivityStore g_clipboardActivityStore;
 RegisterStore g_registerStore;
-
-// Reflect a text clipboard payload into the default ("") register so `ls` can show
-// the live clipboard. Observational, local-only, text-only — a no-op for images or
-// undecodable payloads. Also advances the persisted HLC floor (batched).
-static void MirrorClipboardToDefaultRegister(const std::shared_ptr<const ClipboardPayload>& payload) {
-    if (!payload || !IsClippTextFormat(payload->meta.formatId)) {
-        return;
-    }
-    const std::vector<unsigned char>* bytes = payload->TryGetUncompressedBytes();
-    if (bytes == nullptr) {
-        return;
-    }
-    // Clipboard text carries a convention NUL terminator (see SetUncompressedBytes / capture).
-    // Mirror the logical content -- what `clipp paste` emits -- so `ls` reports the same length
-    // as a named register instead of counting the terminator.
-    size_t n = bytes->size();
-    if (n > 0 && bytes->back() == '\0') --n;
-    g_registerStore.MirrorDefault(std::string(bytes->begin(), bytes->begin() + n));
-    g_settings.noteRegisterHlcWallMs(g_registerStore.ClockHighWater().wallMs);
-}
 #endif
 
 #ifdef _WIN32
@@ -297,7 +278,7 @@ void OnClipboardNotification(PlatformWindowHandle hwnd) {
     clipboardData.StampOrigin(localHostId, localHostName.c_str(), g_settings.nextOriginSequenceNumber());
     auto payload = std::make_shared<const ClipboardPayload>(std::move(clipboardData));
     g_clipboardActivityStore.Add(payload);
-    MirrorClipboardToDefaultRegister(payload);
+    clipp::MirrorClipboardToDefaultRegister(payload);
     const size_t queuedToPeers = g_peerManager.BroadcastClipboard(payload);
     if (queuedToPeers > 0) {
         // Ambient GUI feedback: only when the copy was actually handed to a

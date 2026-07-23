@@ -740,6 +740,21 @@ std::wstring PadLeft(const std::wstring& s, size_t w) {
     return s.size() >= w ? s : std::wstring(w - s.size(), L' ') + s;
 }
 
+// Contents label for a binary register in `ls -v`, parsed from the preview's
+// typed header (new daemons ship exactly the header as the preview; old daemons
+// ship the first 256 value bytes, which begin with the same header).
+std::wstring BinaryContentsLabel(const RegisterWire::RegisterListEntry& e) {
+    RegisterWire::BinaryValueInfo info{};
+    std::wstring kind = L"binary";
+    uint64_t streamSize = e.valueSize;
+    if (RegisterWire::TryParseBinaryValue(e.preview, info)) {
+        if (info.formatId == CLIPP_FORMAT_PNG) kind = L"image/png";
+        else if (info.formatId == CLIPP_FORMAT_JPEG) kind = L"image/jpeg";
+        if (e.valueSize >= info.streamOffset) streamSize = e.valueSize - info.streamOffset;
+    }
+    return L"[" + kind + L", " + HumanizeSize(streamSize) + L"]";
+}
+
 // `ls -v`: an aligned name / age / size / origin / contents table, contents
 // sanitized + width-capped with an overflow marker on a tty; private masked.
 void FormatListVerbose(const std::vector<const RegisterWire::RegisterListEntry*>& entries) {
@@ -759,7 +774,9 @@ void FormatListVerbose(const std::vector<const RegisterWire::RegisterListEntry*>
                             PadLeft(HumanizeSize(e->valueSize), wSize) + L"  " +
                             PadRight(OriginLabel(*e), wOrigin) + L"  ";
         std::wstring contents =
-            (e->flags & RegisterFlags::Private) ? L"[private]" : SanitizePreview(e->preview);
+            (e->flags & RegisterFlags::Private)      ? L"[private]"
+            : (e->flags & RegisterFlags::BinaryHeader) ? BinaryContentsLabel(*e)
+                                                       : SanitizePreview(e->preview);
         int remain = termW - static_cast<int>(line.size());
         if (remain < 4) remain = 4;
         bool overflow = false;
@@ -800,9 +817,12 @@ bool WithRegisterGateway(const HostId& localHostId, const std::string& localHost
         });
 }
 
-int RunRegisterCopy(const std::string& name, bool isPrivate) {
+int RunRegisterCopy(const std::string& nameArg, bool isPrivate) {
+    // NFC at ingress: macOS input methods can produce decomposed sequences; the
+    // same visual name must address the same register from every platform.
+    const std::string name = clipp_platform_detail::NormalizeUtf8Canonical(nameArg);
     if (!IsValidRegisterName(name)) {
-        ErrLine(L"Invalid register name. Use 1-64 characters of [a-z0-9._-].");
+        ErrLine(L"Invalid register name: up to 64 bytes of printable UTF-8; '?' '*' '/' are reserved; no leading/trailing space.");
         return 1;
     }
     if (!g_keyManager.HaveNetworkKey()) {
@@ -878,9 +898,10 @@ int RunRegisterCopy(const std::string& name, bool isPrivate) {
     return 0;
 }
 
-int RunRegisterPaste(const std::string& name) {
+int RunRegisterPaste(const std::string& nameArg) {
+    const std::string name = clipp_platform_detail::NormalizeUtf8Canonical(nameArg);
     if (!IsValidRegisterName(name)) {
-        ErrLine(L"Invalid register name. Use 1-64 characters of [a-z0-9._-].");
+        ErrLine(L"Invalid register name: up to 64 bytes of printable UTF-8; '?' '*' '/' are reserved; no leading/trailing space.");
         return 1;
     }
     if (!g_keyManager.HaveNetworkKey()) {
@@ -899,7 +920,7 @@ int RunRegisterPaste(const std::string& name) {
     const std::vector<unsigned char> req = RegisterWire::EncodeName(name);
 
     bool present = false;
-    bool refusedPrivate = false;
+    bool refusedTty = false;
     bool filterMatched = false;
     const bool reached = WithRegisterGateway(localHostId, localHostName, filterMatched, [&](OneShotPeer& conn) -> bool {
         if (!conn.SendFrame("RGET", req.data(), static_cast<uint32_t>(req.size()))) {
@@ -921,10 +942,26 @@ int RunRegisterPaste(const std::string& name) {
                     continue;  // an unsolicited broadcast for another register; keep waiting
                 }
                 present = true;
+                RegisterWire::BinaryValueInfo binInfo{};
+                const bool isBinary = rec.IsBinary();
+                if (isBinary && !RegisterWire::TryParseBinaryValue(rec.value, binInfo)) {
+                    binInfo.streamOffset = 0;  // malformed header: emit the whole value
+                }
                 if (rec.IsPrivate() && StdoutIsTty()) {
                     ErrLine(L"Register '" + ToWide(name) +
                             L"' is private; refusing to print to a terminal. Pipe it to read.");
-                    refusedPrivate = true;
+                    refusedTty = true;
+                } else if (isBinary && StdoutIsTty()) {
+                    ErrLine(L"Register '" + ToWide(name) +
+                            L"' holds binary data; refusing to print to a terminal. Pipe or redirect it.");
+                    refusedTty = true;
+                } else if (isBinary) {
+                    // Header stripped, stream bytes verbatim — line-ending
+                    // expansion is a text-only convention.
+                    const size_t off = binInfo.streamOffset <= rec.value.size()
+                        ? binInfo.streamOffset : 0;
+                    WriteAllStdout(reinterpret_cast<const unsigned char*>(rec.value.data()) + off,
+                                   rec.value.size() - off);
                 } else {
 #ifdef _WIN32
                     // Registers store canonical LF; expand to the native ending on egress
@@ -958,19 +995,23 @@ int RunRegisterPaste(const std::string& name) {
         ErrLine(L"No such register '" + ToWide(name) + L"'.");
         return 1;
     }
-    return refusedPrivate ? 1 : 0;
+    return refusedTty ? 1 : 0;
 }
 
 // Promotes a named register to the live network clipboard — `clipp put <name>` is
-// the one-step form of `clipp paste <name> | clipp copy`. A gateway advertising
-// CAP0_SERVES_PUT does it server-side in one acked RPUT exchange (atomic; the value
-// never transits this box). An older register-capable gateway gets the same result
-// via that dance run here on the same connection: RGET the value, push it back as a
-// relay CLIP exactly as `copy` would, PING/PONG-fenced so our close can't outrun
-// the gateway's read (see OneShot::RelayPayloads).
-int RunPut(const std::string& name) {
+// the one-step form of `clipp paste <name> | clipp copy`. One uniform path for
+// every gateway: RGET the record here, then push it back as a relay CLIP built
+// with the right format (text = canonical LF + trailing NUL; binary = the raw
+// stream with the header's CLIPP_FORMAT_*), PING/PONG-fenced so our close can't
+// outrun the gateway's read (see OneShot::RelayPayloads). RPUT is no longer
+// requested by this CLI: a binary register needs the record inspected
+// client-side anyway, and no capability distinguishes a header-aware gateway
+// from an older SERVES_PUT one that would relay a binary value as garbage
+// text. Gateways keep serving RPUT (header-aware now) for older CLIs.
+int RunPut(const std::string& nameArg) {
+    const std::string name = clipp_platform_detail::NormalizeUtf8Canonical(nameArg);
     if (!IsValidRegisterName(name)) {
-        ErrLine(L"Invalid register name. Use 1-64 characters of [a-z0-9._-].");
+        ErrLine(L"Invalid register name: up to 64 bytes of printable UTF-8; '?' '*' '/' are reserved; no leading/trailing space.");
         return 1;
     }
     if (!g_keyManager.HaveNetworkKey()) {
@@ -990,32 +1031,11 @@ int RunPut(const std::string& name) {
 
     bool promoted = false;
     bool absent = false;
+    bool malformed = false;
     bool filterMatched = false;
     const bool reached = WithRegisterGateway(localHostId, localHostName, filterMatched, [&](OneShotPeer& conn) -> bool {
-        if ((conn.RemoteCaps()[0] & CryptoChannel::CAP0_SERVES_PUT) != 0) {
-            VerboseLine(L"  promoting at the gateway (RPUT).");
-            if (!conn.SendFrame("RPUT", req.data(), static_cast<uint32_t>(req.size()))) {
-                return false;
-            }
-            std::vector<unsigned char> frame;
-            while (conn.RecvFrame(frame)) {
-                if (frame.size() < 4) {
-                    break;
-                }
-                if (std::memcmp(frame.data(), "ROKP", 4) == 0) { promoted = true; return true; }
-                if (std::memcmp(frame.data(), "NONE", 4) == 0) { absent = true; return true; }
-                if (std::memcmp(frame.data(), "RERR", 4) == 0) { return false; }  // gateway hiccup; try another
-                if (std::memcmp(frame.data(), "SYNC", 4) == 0) {
-                    conn.SendFrame("EOSY");
-                    continue;
-                }
-                // Ignore RSYN/REGW/CLIP/REOS/PING crosstalk; keep waiting for the ack.
-            }
-            return false;
-        }
-
-        // Pre-put gateway: fetch the value, then hand it back as the clipboard.
-        VerboseLine(L"  gateway predates put; running get -> relay here.");
+        // Fetch the record, then hand it back as the clipboard.
+        VerboseLine(L"  running get -> relay.");
         if (!conn.SendFrame("RGET", req.data(), static_cast<uint32_t>(req.size()))) {
             return false;
         }
@@ -1051,12 +1071,25 @@ int RunPut(const std::string& name) {
             }
         }
 
-        // The same item `clipp copy` would send: canonical-LF text plus the
-        // capture-convention trailing NUL, relayed for mesh-wide fan-out.
-        std::vector<unsigned char> bytes(rec->value.begin(), rec->value.end());
-        bytes.push_back('\0');
+        // The same item `clipp copy` would send — canonical-LF text plus the
+        // capture-convention trailing NUL — or, for a binary register, the raw
+        // stream with the header's format. Relayed for mesh-wide fan-out.
         ClipboardPayload payload;
-        payload.meta.formatId = CLIPP_FORMAT_UTF8;
+        std::vector<unsigned char> bytes;
+        if (rec->IsBinary()) {
+            RegisterWire::BinaryValueInfo info{};
+            if (!RegisterWire::TryParseBinaryValue(rec->value, info)) {
+                malformed = true;  // flagged but unparseable: never relay garbage
+                return true;
+            }
+            payload.meta.formatId = info.formatId;
+            bytes.assign(rec->value.begin() + static_cast<std::ptrdiff_t>(info.streamOffset),
+                         rec->value.end());
+        } else {
+            payload.meta.formatId = CLIPP_FORMAT_UTF8;
+            bytes.assign(rec->value.begin(), rec->value.end());
+            bytes.push_back('\0');
+        }
         if (!payload.SetUncompressedBytes(std::move(bytes))) {
             return false;
         }
@@ -1095,11 +1128,16 @@ int RunPut(const std::string& name) {
         ErrLine(L"No such register '" + ToWide(name) + L"'.");
         return 1;
     }
+    if (malformed) {
+        ErrLine(L"Register '" + ToWide(name) + L"' has a malformed binary header; not promoted.");
+        return 1;
+    }
     VerboseLine(L"Register '" + ToWide(name) + L"' is now the clipboard everywhere.");
     return 0;
 }
 
-int RunRegisterLs(const std::string& pattern, bool verbose) {
+int RunRegisterLs(const std::string& patternArg, bool verbose) {
+    const std::string pattern = clipp_platform_detail::NormalizeUtf8Canonical(patternArg);
     if (!g_keyManager.HaveNetworkKey()) {
         ErrLine(L"No group key configured. Run `clipp key set` first.");
         return 1;
@@ -1167,10 +1205,11 @@ int RunRegisterLs(const std::string& pattern, bool verbose) {
     return 0;
 }
 
-int RunRegisterRm(const std::string& pattern) {
+int RunRegisterRm(const std::string& patternArg) {
+    const std::string pattern = clipp_platform_detail::NormalizeUtf8Canonical(patternArg);
     const bool wildcard = HasWildcard(pattern);
     if (!wildcard && !IsValidRegisterName(pattern)) {
-        ErrLine(L"Invalid register name. Use 1-64 characters of [a-z0-9._-].");
+        ErrLine(L"Invalid register name: up to 64 bytes of printable UTF-8; '?' '*' '/' are reserved; no leading/trailing space.");
         return 1;
     }
     if (!g_keyManager.HaveNetworkKey()) {
@@ -1284,10 +1323,11 @@ int RunRegisterRm(const std::string& pattern) {
 // peers holding a staler one get the record pushed — so it works against every
 // deployed gateway. (Transport::TouchOnly stays reserved for a value-free gateway
 // op if register sizes ever make shipping the bytes matter.)
-int RunTouch(const std::string& pattern) {
+int RunTouch(const std::string& patternArg) {
+    const std::string pattern = clipp_platform_detail::NormalizeUtf8Canonical(patternArg);
     const bool wildcard = HasWildcard(pattern);
     if (!wildcard && !IsValidRegisterName(pattern)) {
-        ErrLine(L"Invalid register name. Use 1-64 characters of [a-z0-9._-].");
+        ErrLine(L"Invalid register name: up to 64 bytes of printable UTF-8; '?' '*' '/' are reserved; no leading/trailing space.");
         return 1;
     }
     if (!g_keyManager.HaveNetworkKey()) {

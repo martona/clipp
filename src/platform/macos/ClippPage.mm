@@ -3,6 +3,7 @@
 #ifdef __APPLE__
 
 #include "Clipboard.h"
+#include "ClipboardActions.h"
 #include "KeyManager.h"
 #include "platform/uiClippPage.h"
 #include "platform/uistrings.h"
@@ -28,6 +29,7 @@ extern KeyManager g_keyManager;
 }
 - (instancetype)initWithOwner:(MacOSClippPage*)owner itemID:(uint64_t)itemID;
 - (void)copyActivityItem:(id)sender;
+- (void)deleteActivityItem:(id)sender;
 - (void)showNetworkPage:(id)sender;
 @end
 
@@ -46,6 +48,13 @@ extern KeyManager g_keyManager;
     (void)sender;
     if (owner_ != nullptr) {
         owner_->CopyActivityItem(itemID_);
+    }
+}
+
+- (void)deleteActivityItem:(id)sender {
+    (void)sender;
+    if (owner_ != nullptr) {
+        owner_->DeleteActivityItem(itemID_);
     }
 }
 
@@ -79,6 +88,8 @@ extern KeyManager g_keyManager;
     NSImage* copiedImage_;
     id copyTarget_;
     SEL copyAction_;
+    id deleteTarget_;
+    SEL deleteAction_;
     BOOL mouseInside_;
     BOOL copiedFeedbackVisible_;
     NSUInteger copiedFeedbackGeneration_;
@@ -92,6 +103,9 @@ extern KeyManager g_keyManager;
     BOOL peekRevealed_;
 }
 - (void)setCopyButton:(NSButton*)button target:(id)target action:(SEL)action bubble:(NSBox*)bubble normalFillColor:(NSColor*)normalFillColor;
+- (void)setDeleteTarget:(id)target action:(SEL)action;
+- (void)deleteActivityItemFromMenu:(id)sender;
+- (void)invokeDelete:(id)sender;
 - (void)setPeekButton:(NSButton*)button
          previewLabel:(NSTextField*)previewLabel
                itemID:(uint64_t)itemID
@@ -118,6 +132,11 @@ static __weak MacOSActivityRowView* g_hoveredActivityRow = nil;
     copyTarget_ = target;
     copyAction_ = action;
     [self updateCopyButtonVisibility];
+}
+
+- (void)setDeleteTarget:(id)target action:(SEL)action {
+    deleteTarget_ = target;
+    deleteAction_ = action;
 }
 
 - (void)setPeekButton:(NSButton*)button
@@ -245,6 +264,14 @@ static __weak MacOSActivityRowView* g_hoveredActivityRow = nil;
         return;
     }
 
+    if (characters.length > 0) {
+        const unichar key = [characters characterAtIndex:0];
+        if (key == NSDeleteCharacter || key == NSDeleteFunctionKey) {
+            [self invokeDelete:self];
+            return;
+        }
+    }
+
     [super keyDown:event];
 }
 
@@ -264,11 +291,29 @@ static __weak MacOSActivityRowView* g_hoveredActivityRow = nil;
         peekItem.target = self;
         [menu addItem:peekItem];
     }
+
+    if (deleteTarget_ != nil) {
+        NSMenuItem* deleteItem = [[NSMenuItem alloc] initWithTitle:CLP_NS(CLP_UI_DELETE)
+                                                            action:@selector(deleteActivityItemFromMenu:)
+                                                     keyEquivalent:@""];
+        deleteItem.target = self;
+        [menu addItem:deleteItem];
+    }
     return menu;
 }
 
 - (void)copyActivityItem:(id)sender {
     [self invokeCopy:sender];
+}
+
+- (void)deleteActivityItemFromMenu:(id)sender {
+    [self invokeDelete:sender];
+}
+
+- (void)invokeDelete:(id)sender {
+    if (deleteTarget_ != nil && deleteAction_ != nullptr) {
+        [NSApp sendAction:deleteAction_ to:deleteTarget_ from:sender];
+    }
 }
 
 - (void)invokeCopy:(id)sender {
@@ -593,6 +638,9 @@ NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
 
     MacOSClippPageTarget* target = [[MacOSClippPageTarget alloc] initWithOwner:this itemID:itemID];
     [activityItemTargets_ addObject:target];
+    // Every row is deletable — placeholders included; removing the trace is
+    // the whole point — so the delete wiring sits outside the copy gate.
+    [row setDeleteTarget:target action:@selector(deleteActivityItem:)];
     if (showCopyAction) {
         NSClickGestureRecognizer* copyGesture = [[NSClickGestureRecognizer alloc] initWithTarget:row
                                                                                            action:@selector(copyActivityItem:)];
@@ -757,6 +805,15 @@ void MacOSClippPage::AddActivityItem(uint64_t itemID) {
     }
 
     [activityItemsPanel_ insertArrangedSubview:row atIndex:0];
+    // BuildActivityRow APPENDED the row's action target; move it to the front
+    // so activityItemTargets_ stays index-aligned with activityItemIDs_ —
+    // RemoveActivityItem releases targets by index, and a misaligned array
+    // would release a live row's target instead of the removed one's.
+    if (activityItemTargets_.count > 1) {
+        id movedTarget = activityItemTargets_.lastObject;
+        [activityItemTargets_ removeLastObject];
+        [activityItemTargets_ insertObject:movedTarget atIndex:0];
+    }
     activityItemIDs_.insert(activityItemIDs_.begin(), itemID);
     SetActivityEmptyMessageVisible(false);
 
@@ -788,6 +845,67 @@ void MacOSClippPage::RemoveActivityItem(uint64_t itemID) {
     }
     activityItemIDs_.erase(found);
     SetActivityEmptyMessageVisible(activityItemIDs_.empty());
+}
+
+void MacOSClippPage::MoveActivityItem(uint64_t itemID) {
+    if (activityItemsPanel_ == nil) {
+        return;
+    }
+
+    const auto movedPayload = activityStore_.PayloadReference(itemID);
+    if (!movedPayload) {
+        RemoveActivityItem(itemID);
+        return;
+    }
+
+    // Take the old row out WITHOUT forgetting peek state — the id (and the
+    // user's peek choice) survives a relocation.
+    const auto found = std::find(activityItemIDs_.begin(), activityItemIDs_.end(), itemID);
+    if (found != activityItemIDs_.end()) {
+        const NSUInteger index = static_cast<NSUInteger>(found - activityItemIDs_.begin());
+        NSArray<NSView*>* rows = activityItemsPanel_.arrangedSubviews;
+        if (index < rows.count) {
+            NSView* row = rows[index];
+            [activityItemsPanel_ removeArrangedSubview:row];
+            [row removeFromSuperview];
+        }
+        if (index < activityItemTargets_.count) {
+            [activityItemTargets_ removeObjectAtIndex:index];
+        }
+        activityItemIDs_.erase(found);
+    }
+
+    const bool shouldFollow = IsActivityNearTop();
+    NSView* row = BuildActivityRow(itemID);  // appends the fresh action target
+    if (row == nil) {
+        SetActivityEmptyMessageVisible(activityItemIDs_.empty());
+        return;
+    }
+
+    // Panel is newest-first; insert before the first row whose payload
+    // timestamp is at-or-below the moved one (ties: moved item on top).
+    const uint64_t movedTs = movedPayload->meta.timestamp;
+    NSUInteger insertIndex = activityItemIDs_.size();
+    for (NSUInteger i = 0; i < activityItemIDs_.size(); ++i) {
+        const auto payload = activityStore_.PayloadReference(activityItemIDs_[i]);
+        if (payload && payload->meta.timestamp <= movedTs) {
+            insertIndex = i;
+            break;
+        }
+    }
+
+    [activityItemsPanel_ insertArrangedSubview:row atIndex:insertIndex];
+    if (activityItemTargets_.count > 0) {
+        id movedTarget = activityItemTargets_.lastObject;
+        [activityItemTargets_ removeLastObject];
+        [activityItemTargets_ insertObject:movedTarget atIndex:insertIndex];
+    }
+    activityItemIDs_.insert(activityItemIDs_.begin() + static_cast<std::ptrdiff_t>(insertIndex), itemID);
+    SetActivityEmptyMessageVisible(false);
+
+    if (shouldFollow) {
+        ScrollActivityToTop();
+    }
 }
 
 void MacOSClippPage::ClearActivityItems() {
@@ -856,19 +974,15 @@ void MacOSClippPage::ScrollActivityToTop() const {
 }
 
 void MacOSClippPage::CopyActivityItem(uint64_t itemID) {
-    auto payload = activityStore_.PayloadReference(itemID);
-    if (!payload) {
-        return;
-    }
+    // Copy-from-history is an MRU re-share: it sets the local clipboard AND
+    // makes the item current mesh-wide (peer clipboards follow, lists
+    // relocate). The placeholder/no-content guards live inside the helper.
+    clipp::ReshareActivityItem(itemID);
+}
 
-    // Placeholder payloads carry no content; clicking them must not zap
-    // whatever's on the user's clipboard with empty bytes.
-    if ((payload->meta.flags & NetworkDefs::CLPM_FLAG_SOURCE_MARKED_PRIVATE) != 0
-        && payload->EncodedBytes().empty()) {
-        return;
-    }
-
-    SetClipboardData(std::move(payload));
+void MacOSClippPage::DeleteActivityItem(uint64_t itemID) {
+    // Mesh-wide, best-effort; the store's Removed event tears the row down.
+    clipp::DeleteActivityItemEverywhere(itemID);
 }
 
 void MacOSClippPage::ShowNetworkPage() {
@@ -906,6 +1020,9 @@ void MacOSClippPage::OnDestroy() {
         pageState_->alive.store(false);
     }
     OnHidden();
+    // Peeks are session-scoped: revealing a private item lasts until the
+    // window goes away, then must be redone.
+    uiClippPage::ForgetAllPeekedItems();
     [activityItemTargets_ removeAllObjects];
     actionTarget_ = nil;
     root_ = nullptr;
@@ -980,6 +1097,9 @@ void MacOSClippPage::ClipboardActivityWatcher(const ClipboardActivityUpdate& upd
             break;
         case ClipboardActivityUpdate::Type::Cleared:
             page->ClearActivityItems();
+            break;
+        case ClipboardActivityUpdate::Type::Moved:
+            page->MoveActivityItem(updateCopy.itemID);
             break;
         }
     });

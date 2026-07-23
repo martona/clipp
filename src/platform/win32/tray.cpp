@@ -18,6 +18,7 @@
 #include "Settings.h"
 #include "resource.h"
 #include "utils.h"
+#include "PopupWindow.h"
 #include "xaml_dialog.h"
 #include "platform/uistrings.h"
 #include "version.h"
@@ -36,12 +37,15 @@
 
 // Custom message ID for our tray icon events
 #define WM_TRAYICON (WM_USER + 1)
+// Global summon hotkey for the visual-paste popup (RegisterHotKey id).
+#define HOTKEY_ID_POPUP 1
 // Posted by the clipboard-flow handler (network/clipboard threads) to run the
 // icon nudge on the tray thread. wParam = ClipboardFlowDirection.
 #define WM_CLIPFLOW (WM_USER + 2)
 #define ID_TRAY_OPEN  1000
 #define ID_TRAY_ABOUT 1001
 #define ID_TRAY_EXIT  1002
+#define ID_TRAY_POPUP 1003
 #define IDT_NUDGE 1
 
 static constexpr wchar_t kTrayWindowClassName[] = L"ClippHiddenTrayWindow";
@@ -269,6 +273,12 @@ LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             StartNudge(hwnd, static_cast<clipp::ClipboardFlowDirection>(wParam));
             break;
 
+        case WM_HOTKEY:
+            if (wParam == HOTKEY_ID_POPUP) {
+                clipp::TogglePopupWindow();
+            }
+            break;
+
         case WM_TIMER:
             if (wParam == IDT_NUDGE) {
                 AdvanceNudge(hwnd);
@@ -294,6 +304,7 @@ LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                 HMENU hMenu = CreatePopupMenu();
                 AppendMenuW(hMenu, MF_STRING, ID_TRAY_OPEN, CLP_W(CLP_UI_OPEN_CLIPP));
                 SetMenuDefaultItem(hMenu, ID_TRAY_OPEN, FALSE);
+                AppendMenuW(hMenu, MF_STRING, ID_TRAY_POPUP, CLP_W(CLP_UI_TRAY_POPUP));
                 AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
                 AppendMenuW(hMenu, MF_STRING, ID_TRAY_ABOUT, CLP_W(CLP_UI_ABOUT_CLIPP));
                 AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
@@ -317,6 +328,9 @@ LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             switch (LOWORD(wParam)) {
             case ID_TRAY_OPEN:
                 ShowClippMainDialog(hwnd);
+                break;
+            case ID_TRAY_POPUP:
+                clipp::TogglePopupWindow();
                 break;
             case ID_TRAY_ABOUT:
                 DarkMode::DarkMessageBox(
@@ -342,6 +356,8 @@ LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
 
         case WM_DESTROY:
             clipp::SetClipboardFlowHandler(nullptr);
+            UnregisterHotKey(hwnd, HOTKEY_ID_POPUP);
+            clipp::DestroyPopupWindow();
             KillTimer(hwnd, IDT_NUDGE);
             DestroyNudgeFrames();
             CloseClippMainDialog();
@@ -375,6 +391,19 @@ void TrayIconMessageLoop(bool showNetworkPageOnStartup) {
     // shown keeps it out of the taskbar and Alt+Tab.
     g_trayWindow = CreateWindowExW(WS_EX_TOOLWINDOW, wc.lpszClassName, L"", WS_POPUP,
         0, 0, 0, 0, nullptr, nullptr, hInstance, nullptr);
+
+    // Visual-paste popup summon hotkey: Win+Insert (probe-verified free), with
+    // Win+Alt+V as the fallback when something else owns it. MOD_NOREPEAT so a
+    // held chord doesn't machine-gun the toggle. Failure is non-fatal — the
+    // tray menu keeps the popup reachable.
+    if (RegisterHotKey(g_trayWindow, HOTKEY_ID_POPUP, MOD_WIN | MOD_NOREPEAT, VK_INSERT)) {
+        g_logger.log(__FUNCTION__, Logger::Level::Info, L"Popup hotkey registered: Win+Insert.");
+    } else if (RegisterHotKey(g_trayWindow, HOTKEY_ID_POPUP, MOD_WIN | MOD_ALT | MOD_NOREPEAT, 'V')) {
+        g_logger.log(__FUNCTION__, Logger::Level::Info, L"Win+Insert unavailable; popup hotkey is Win+Alt+V.");
+    } else {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning,
+            L"No popup hotkey could be registered; the tray menu still opens it.");
+    }
 
     g_nid.cbSize = sizeof(NOTIFYICONDATAW);
     g_nid.hWnd = g_trayWindow;
@@ -420,6 +449,9 @@ void TrayIconMessageLoop(bool showNetworkPageOnStartup) {
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0)) {
         if (ClippMainDialogPreTranslateMessage(&msg)) {
+            continue;
+        }
+        if (clipp::PopupPreTranslateMessage(&msg)) {
             continue;
         }
 

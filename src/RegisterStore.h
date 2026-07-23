@@ -18,7 +18,12 @@
 namespace RegisterFlags {
 inline constexpr uint8_t Tombstone = 0x01;  // delete marker; value is empty
 inline constexpr uint8_t Private   = 0x02;  // mask in `ls -v`; isatty-gate on `paste`
-// 0x04 .. 0x80 reserved.
+// Value = typed binary header + raw stream (RegisterWire::TryParseBinaryValue).
+// A record flag — not a wire version bump — because flags round-trip old
+// daemons verbatim (store-and-forward stays lossless), while unknown wire
+// versions are hard-rejected.
+inline constexpr uint8_t BinaryHeader = 0x04;
+// 0x08 .. 0x80 reserved.
 }
 
 // One entry in the LWW-element-map. A value record and a tombstone share this
@@ -34,6 +39,7 @@ struct RegisterRecord {
 
     bool IsTombstone() const { return (flags & RegisterFlags::Tombstone) != 0; }
     bool IsPrivate() const { return (flags & RegisterFlags::Private) != 0; }
+    bool IsBinary() const { return (flags & RegisterFlags::BinaryHeader) != 0; }
 
     // Full-field equality; used to detect "merge changed nothing" and by tests to
     // assert replica convergence.
@@ -49,9 +55,14 @@ struct RegisterDigestEntry {
 
 // ---- Pure helpers (no locking, no clock): the merge core, independently tested ----
 
-// Register names are case-sensitive ASCII [a-z0-9._-]{1,64}. The empty name is NOT
-// valid here (it is the internal mirror key). Enforce at the CLI and at REGW
-// ingress (defense in depth).
+// Register names are UTF-8, at most 64 BYTES (the wire cap old builds enforce
+// at decode time), printable — no C0/C1 controls, no DEL — with the three
+// reserved printables `?` `*` `/` excluded (globs stay pure CLI metacharacters;
+// `/` is for future namespaces) and no leading/trailing space. Case-sensitive.
+// Callers NFC-normalize at ingress (this validator checks well-formedness, not
+// normalization). The empty name is NOT valid here (it is the internal mirror
+// key). Enforce at the CLI, the GUI editors, and at REGW ingress (defense in
+// depth).
 bool IsValidRegisterName(std::string_view name);
 
 // True iff `r` has out-lived its idle TTL in real wall time. Pure function of the
@@ -105,6 +116,12 @@ public:
     // authoritative clock. Lets a gateway perform a one-shot client's write without
     // the client needing the live clock, yet keep the true origin for `ls -v`/LWW.
     WriteResult Upsert(const std::string& name, std::string value, bool isPrivate, const HostId& origin);
+    // Flag-preserving variant: `valueFlags` carries the value-describing bits
+    // (PRIVATE | BINARY_HEADER); TOMBSTONE is masked off (deletes go through
+    // Delete). The bool overloads above are sugar for Private-only writes; the
+    // REGW relay ingress and the GUI promote path use this one so BinaryHeader
+    // survives the re-stamp.
+    WriteResult UpsertWithFlags(const std::string& name, std::string value, uint8_t valueFlags, const HostId& origin);
 
     // `paste`: returns the record and refreshes `touched` (LRU). nullopt if absent,
     // tombstoned, or expired.
@@ -171,7 +188,7 @@ public:
 private:
     void PruneExpiredLocked();
     size_t LiveCountLocked() const;
-    WriteResult UpsertLocked(const std::string& name, std::string value, bool isPrivate, const HostId& origin);
+    WriteResult UpsertLocked(const std::string& name, std::string value, uint8_t valueFlags, const HostId& origin);
     DeleteResult DeleteLocked(const std::string& name, const HostId& origin);
 
     mutable std::mutex mutex_;

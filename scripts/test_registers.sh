@@ -110,13 +110,27 @@ fi
 run rm test.never-existed-zzz >/dev/null 2>&1
 if [ $? -ne 0 ]; then ok "rm of absent register errors"; else no "rm of absent register did NOT error"; fi
 
-# --- invalid register name rejected (no register created) ---
-printf 'x' >"$TMP/bad.in"
-run copy 'test.BAD!' <"$TMP/bad.in" >/dev/null 2>&1
-if [ $? -ne 0 ]; then ok "invalid register name rejected"; else no "invalid register name accepted"; fi
+# --- wide (GUI-era) names: spaces, caps, punctuation all valid now ---
+printf 'wide-name payload' >"$TMP/wide.in"; roundtrip 'test wide (Name)!' "$TMP/wide.in"
 
-# --- cleanup: tombstone everything we made (quote the glob so the shell can't expand it) ---
-run rm 'test.*' >/dev/null 2>&1
+# --- NFC at name ingress: a decomposed name arg addresses the same register as
+# --- its precomposed spelling (register VALUES stay byte-exact; only NAMES fold)
+printf 'nfc payload' >"$TMP/nfc.in"
+run copy "$(printf 'test.cafe\xcc\x81')" <"$TMP/nfc.in" >/dev/null 2>&1   # 'e' + COMBINING ACUTE
+run paste "$(printf 'test.caf\xc3\xa9')" >"$TMP/nfc.out" 2>/dev/null      # precomposed 'é'
+if cmp -s "$TMP/nfc.in" "$TMP/nfc.out"; then ok "NFC name equivalence (decomposed == precomposed)"
+else no "NFC name equivalence failed"; fi
+
+# --- reserved printables rejected (globs stay CLI metacharacters; / is namespaces) ---
+printf 'x' >"$TMP/bad.in"
+run copy 'test/bad' <"$TMP/bad.in" >/dev/null 2>&1
+if [ $? -ne 0 ]; then ok "reserved '/' in name rejected"; else no "reserved '/' in name accepted"; fi
+run copy 'test.bad*' <"$TMP/bad.in" >/dev/null 2>&1
+if [ $? -ne 0 ]; then ok "reserved '*' in name rejected"; else no "reserved '*' in name accepted"; fi
+
+# --- cleanup: tombstone everything we made ('test*' now also covers wide names;
+# --- quote the glob so the shell can't expand it) ---
+run rm 'test*' >/dev/null 2>&1
 
 echo
 echo "$pass passed, $fail failed."

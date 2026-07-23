@@ -36,6 +36,7 @@ private:
     void RefreshActivityItems(const std::vector<ClipboardActivityItemHeader>& items);
     void AddActivityItem(uint64_t itemID);
     void RemoveActivityItem(uint64_t itemID);
+    void MoveActivityItem(uint64_t itemID);
     void ClearActivityItems();
     void SetActivityEmptyMessageVisible(bool visible);
     void UpdateActivityEmptyState();

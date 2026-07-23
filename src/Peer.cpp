@@ -387,6 +387,20 @@ bool Peer::DrainOutboundMessages(CryptoChannel& channel, const SocketIoContext& 
 	}
 }
 
+void Peer::HandleClipboardDeleteFrame(const std::vector<unsigned char>& frame) {
+	// CDEL: best-effort mesh delete of one activity item; body is the 16-byte
+	// eventGuid. Malformed frames are ignored, never fatal — the whole op is
+	// advisory (old builds don't even know the tag and log-and-ignore it).
+	if (frame.size() != 4 + 16) {
+		log(__FUNCTION__, Logger::Level::Warning, L"Ignoring malformed CDEL frame (%zu bytes).", frame.size());
+		return;
+	}
+	std::array<uint8_t, 16> guid{};
+	std::memcpy(guid.data(), frame.data() + 4, guid.size());
+	const bool removed = g_clipboardActivityStore.RemoveByEventGuid(guid);
+	log(__FUNCTION__, Logger::Level::Debug, L"CDEL: activity item %ls.", removed ? L"removed" : L"not present");
+}
+
 bool Peer::HandleRegisterFrame(CryptoChannel& channel, const SocketIoContext& io, const std::vector<unsigned char>& frame) {
 #if CLIPP_REGISTERS_DAEMON
 	// frame = 4-byte tag + body; slice the body once for the decoders.
@@ -411,7 +425,9 @@ bool Peer::HandleRegisterFrame(CryptoChannel& channel, const SocketIoContext& io
 				changed = (result == RegisterStore::DeleteResult::Deleted);
 				channel.SendFrame(io, changed ? "RDEL" : "NONE");
 			} else {
-				const auto result = g_registerStore.Upsert(name, std::move(rec.value), rec.IsPrivate(), rec.originHostId);
+				// Preserve ALL value flags (PRIVATE, BINARY_HEADER, future bits)
+				// through the re-stamp; Tombstone is masked inside the store.
+				const auto result = g_registerStore.UpsertWithFlags(name, std::move(rec.value), rec.flags, rec.originHostId);
 				changed = (result == RegisterStore::WriteResult::Ok);
 				channel.SendFrame(io, changed ? "ROKW" : "RERR");
 			}
@@ -481,15 +497,29 @@ bool Peer::HandleRegisterFrame(CryptoChannel& channel, const SocketIoContext& io
 			return true;
 		}
 		// The same item `clipp copy` would send: canonical-LF text plus the
-		// capture-convention trailing NUL. Origin = the requesting device (the put
+		// capture-convention trailing NUL — or, for a binary register, the raw
+		// stream with the header's format. Origin = the requesting device (the put
 		// is user-initiated there); the sequence number is diagnostic and comes
 		// from our counter.
-		std::vector<unsigned char> bytes(rec->value.begin(), rec->value.end());
-		bytes.push_back('\0');
 		ClipboardPayload payload;
-		payload.meta.formatId = CLIPP_FORMAT_UTF8;
+		std::vector<unsigned char> bytes;
+		bool buildable = true;
+		if (rec->IsBinary()) {
+			RegisterWire::BinaryValueInfo info{};
+			if (RegisterWire::TryParseBinaryValue(rec->value, info)) {
+				payload.meta.formatId = info.formatId;
+				bytes.assign(rec->value.begin() + static_cast<std::ptrdiff_t>(info.streamOffset),
+					rec->value.end());
+			} else {
+				buildable = false;  // flagged but unparseable: refuse rather than relay garbage
+			}
+		} else {
+			payload.meta.formatId = CLIPP_FORMAT_UTF8;
+			bytes.assign(rec->value.begin(), rec->value.end());
+			bytes.push_back('\0');
+		}
 		bool routed = false;
-		if (payload.SetUncompressedBytes(std::move(bytes))) {
+		if (buildable && payload.SetUncompressedBytes(std::move(bytes))) {
 			payload.StampOrigin(hostID(), WideToUtf8String(hostName()).c_str(),
 				g_settings.nextOriginSequenceNumber());
 			payload.meta.flags |= NetworkDefs::CLPM_FLAG_RELAY;
@@ -529,9 +559,22 @@ bool Peer::HandleRegisterFrame(CryptoChannel& channel, const SocketIoContext& io
 			e.originHostName = resolveOriginName(storeRec.originHostId);
 			e.flags = storeRec.flags;
 			if (!storeRec.IsPrivate()) {
-				const size_t n = storeRec.value.size() < RegisterWire::kMaxPreviewLen
-					? storeRec.value.size() : RegisterWire::kMaxPreviewLen;
-				e.preview.assign(storeRec.value.data(), storeRec.value.data() + n);
+				if (storeRec.IsBinary()) {
+					// Ship only the typed header as the preview — enough for the
+					// CLI to label the kind ("[image/png, 2M]"), no stream bytes
+					// on a listing. Unparseable header -> empty preview.
+					RegisterWire::BinaryValueInfo info{};
+					if (RegisterWire::TryParseBinaryValue(storeRec.value, info)) {
+						size_t n = info.streamOffset < storeRec.value.size()
+							? info.streamOffset : storeRec.value.size();
+						if (n > RegisterWire::kMaxPreviewLen) n = RegisterWire::kMaxPreviewLen;
+						e.preview.assign(storeRec.value.data(), storeRec.value.data() + n);
+					}
+				} else {
+					const size_t n = storeRec.value.size() < RegisterWire::kMaxPreviewLen
+						? storeRec.value.size() : RegisterWire::kMaxPreviewLen;
+					e.preview.assign(storeRec.value.data(), storeRec.value.data() + n);
+				}
 			}
 			list.push_back(std::move(e));
 		}
@@ -754,6 +797,8 @@ void Peer::ThreadProcSend() {
 					// outgoing-direction peer; the requester is on the incoming
 					// side). Tolerate it without breaking the connection.
 					log(__FUNCTION__, Logger::Level::Debug, L"Unexpected EOSY received on outgoing connection; ignoring.");
+				} else if (std::memcmp(frame.data(), "CDEL", 4) == 0) {
+					HandleClipboardDeleteFrame(frame);
 				} else if (HandleRegisterFrame(channel, io, frame)) {
 					// Register-protocol frame handled inline.
 				} else {
@@ -812,11 +857,18 @@ void Peer::ThreadProcRecv() {
 		const bool firstIncoming = g_peerManager.OnIncomingPeerEstablished();
 		const bool incomingEstablished = true;
 		if (firstIncoming) {
-			const auto tail = g_clipboardActivityStore.TailEventGuid();
-			if (channel.SendFrame(io, "SYNC", tail.data(), static_cast<uint32_t>(tail.size()))) {
+			// Zero anchor on purpose ("send me your most recent N"): the old
+			// tail-guid anchor is unsound once items can relocate — an MRU
+			// re-share moves the anchor itself to the tail, and positional
+			// replay would then skip everything between its old and new spots.
+			// The window is small (clipboardSyncMaxItems) and receive-side guid
+			// dedup/relocate make the overlap idempotent, so the full window is
+			// the simple correct request — and legal against every peer build.
+			const std::array<uint8_t, 16> anchor{};
+			if (channel.SendFrame(io, "SYNC", anchor.data(), static_cast<uint32_t>(anchor.size()))) {
 				log(__FUNCTION__, Logger::Level::Info,
-					L"Requested activity-stream sync from this peer (tail GUID supplied).");
-				ReportTraffic(4 + tail.size() + crypto_secretstream_xchacha20poly1305_ABYTES + sizeof(uint32_t), 0);
+					L"Requested activity-stream sync from this peer (zero anchor).");
+				ReportTraffic(4 + anchor.size() + crypto_secretstream_xchacha20poly1305_ABYTES + sizeof(uint32_t), 0);
 			} else {
 				log(__FUNCTION__, Logger::Level::Debug, L"Peer: failed to send initial SYNC request.");
 			}
@@ -924,6 +976,11 @@ void Peer::ThreadProcRecv() {
 				// already been folded into the activity store via dedup-aware
 				// insert. Logged for diagnostics.
 				log(__FUNCTION__, Logger::Level::Info, L"Activity-stream sync from this peer complete.");
+				continue;
+			}
+
+			if (std::memcmp(frame.data(), "CDEL", 4) == 0) {
+				HandleClipboardDeleteFrame(frame);
 				continue;
 			}
 

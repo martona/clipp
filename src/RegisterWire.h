@@ -30,6 +30,32 @@ inline constexpr uint16_t kMaxDigestEntries = 1024;               // matches Reg
 inline constexpr uint16_t kMaxPreviewLen = 256;                  // value bytes carried per list entry
 inline constexpr uint16_t kMaxOriginNameLen = 128;              // device name per list entry (== CryptoChannel::HOSTNAME_MAX_BYTES)
 
+// ---- Binary register values (RegisterFlags::BinaryHeader) ----
+//
+// The value is a fixed big-endian header followed by the raw stream:
+//   u8 headerVersion (=1) | u8 reserved (=0) | u16 headerLen | u32 formatId
+// `formatId` is the CLIPP_FORMAT_* vocabulary (PNG / JPEG / future kinds).
+// `headerLen` is the seek contract: readers jump to it even when trailing
+// header fields (added by later versions) are unknown to them — which is why
+// the record flag, not the wire kVersion, marks binariness: old daemons
+// store-and-forward the value untouched, and future header growth needs no
+// new flag.
+inline constexpr uint8_t kBinaryHeaderVersion = 1;
+inline constexpr size_t kBinaryHeaderV1Size = 8;
+
+struct BinaryValueInfo {
+    uint32_t formatId{ 0 };
+    size_t streamOffset{ 0 };  // where the raw stream starts within the value
+};
+
+// Prefix `stream` with a v1 header; the result is stored as the register value
+// with the BinaryHeader flag set.
+std::string EncodeBinaryValue(uint32_t formatId, const unsigned char* stream, size_t streamLen);
+// Parse the header of a BinaryHeader-flagged value (also works on an RLST
+// preview, which carries at least the header). False on short/malformed input
+// or an out-of-bounds headerLen — treat the value as opaque in that case.
+bool TryParseBinaryValue(const std::string& value, BinaryValueInfo& outInfo);
+
 // One entry in an RLST list response — richer than a digest: metadata plus a
 // capped, possibly-empty value preview, for `ls -v`. (The anti-entropy RSYN digest
 // stays name/written/touched only; this is the CLI-facing list.)

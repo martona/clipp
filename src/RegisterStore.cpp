@@ -1,5 +1,7 @@
 #include "RegisterStore.h"
 
+#include "platform.h"  // clipp_platform_detail::DecodeUtf8CodePoint (name validation)
+
 #include <algorithm>
 #include <unordered_map>
 #include <utility>
@@ -22,13 +24,24 @@ bool ValueLess(const RegisterRecord& a, const RegisterRecord& b) {
 
 bool IsValidRegisterName(std::string_view name) {
     if (name.empty() || name.size() > 64) {
-        return false;
+        return false;  // 64 BYTES: the wire cap old builds enforce at decode
     }
-    for (const unsigned char c : name) {
-        const bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
-                        c == '.' || c == '_' || c == '-';
-        if (!ok) {
-            return false;
+    if (name.front() == ' ' || name.back() == ' ') {
+        return false;  // edge whitespace: invisible in UI, an addressing trap
+    }
+    std::size_t offset = 0;
+    while (offset < name.size()) {
+        uint32_t codePoint = 0;
+        if (!clipp_platform_detail::DecodeUtf8CodePoint(name, offset, codePoint)) {
+            return false;  // malformed UTF-8 (overlongs, surrogates, truncation)
+        }
+        if (codePoint < 0x20 || codePoint == 0x7F ||
+            (codePoint >= 0x80 && codePoint <= 0x9F)) {
+            return false;  // C0/C1/DEL: `ls` is a line-oriented script surface
+        }
+        if (codePoint == '?' || codePoint == '*' || codePoint == '/') {
+            return false;  // reserved printables: globs stay pure CLI
+                           // metacharacters; '/' is for future namespaces
         }
     }
     return true;
@@ -99,7 +112,7 @@ size_t RegisterStore::LiveCountLocked() const {
 }
 
 RegisterStore::WriteResult RegisterStore::UpsertLocked(const std::string& name, std::string value,
-                                                      bool isPrivate, const HostId& origin) {
+                                                      uint8_t valueFlags, const HostId& origin) {
     // "" is the reserved mirror key, written only via MirrorDefault — reject it
     // (and any invalid name) from the user-write path.
     if (!IsValidRegisterName(name)) {
@@ -126,7 +139,8 @@ RegisterStore::WriteResult RegisterStore::UpsertLocked(const std::string& name, 
     r.written = ts;
     r.touched = ts;
     r.originHostId = origin;
-    r.flags = isPrivate ? RegisterFlags::Private : 0;
+    // Tombstone is a lifecycle state, never a caller-supplied value flag.
+    r.flags = static_cast<uint8_t>(valueFlags & ~RegisterFlags::Tombstone);
     records_.insert_or_assign(name, std::move(r));
     return WriteResult::Ok;
 }
@@ -134,13 +148,21 @@ RegisterStore::WriteResult RegisterStore::UpsertLocked(const std::string& name, 
 RegisterStore::WriteResult RegisterStore::Upsert(const std::string& name, std::string value,
                                                  bool isPrivate) {
     std::lock_guard<std::mutex> lock(mutex_);
-    return UpsertLocked(name, std::move(value), isPrivate, localHost_);
+    return UpsertLocked(name, std::move(value),
+                        isPrivate ? RegisterFlags::Private : uint8_t{ 0 }, localHost_);
 }
 
 RegisterStore::WriteResult RegisterStore::Upsert(const std::string& name, std::string value,
                                                  bool isPrivate, const HostId& origin) {
     std::lock_guard<std::mutex> lock(mutex_);
-    return UpsertLocked(name, std::move(value), isPrivate, origin);
+    return UpsertLocked(name, std::move(value),
+                        isPrivate ? RegisterFlags::Private : uint8_t{ 0 }, origin);
+}
+
+RegisterStore::WriteResult RegisterStore::UpsertWithFlags(const std::string& name, std::string value,
+                                                          uint8_t valueFlags, const HostId& origin) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return UpsertLocked(name, std::move(value), valueFlags, origin);
 }
 
 std::optional<RegisterRecord> RegisterStore::Read(const std::string& name) {

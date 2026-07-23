@@ -18,6 +18,7 @@
 #define CLIPP_IOS_CLIPBOARD_RECEIVE_STUB 1
 void CLPIOSReceiveClipboardPayload(std::shared_ptr<const ClipboardPayload> payload);
 #else
+#include "ClipboardActions.h"
 #include "ClipboardActivityStore.h"
 #include "Clipboard.h"
 #include "ClipboardFlowUi.h"
@@ -437,17 +438,7 @@ void NetworkRuntime::OnClipboardReceived(std::shared_ptr<const ClipboardPayload>
         clipp::NotifyClipboardFlow(clipp::ClipboardFlowDirection::Received,
                                    payload->meta.originHostName);
         // Mirror the now-current clipboard into the default ("") register for `ls`.
-        if (IsClippTextFormat(payload->meta.formatId)) {
-            const std::vector<unsigned char>* bytes = payload->TryGetUncompressedBytes();
-            if (bytes != nullptr) {
-                // Strip the convention NUL so the "" mirror reports the logical content length,
-                // matching named registers (see MirrorClipboardToDefaultRegister in main.cpp).
-                size_t n = bytes->size();
-                if (n > 0 && bytes->back() == '\0') --n;
-                g_registerStore.MirrorDefault(std::string(bytes->begin(), bytes->begin() + n));
-                g_settings.noteRegisterHlcWallMs(g_registerStore.ClockHighWater().wallMs);
-            }
-        }
+        clipp::MirrorClipboardToDefaultRegister(payload);
     }
 #endif
 }

@@ -139,6 +139,13 @@ void PeerManager::BroadcastRegisterFrame(const std::array<char, 4>& tag, const s
 	}
 }
 
+void PeerManager::BroadcastFrame(const std::array<char, 4>& tag, const std::vector<unsigned char>& body) {
+	std::lock_guard<std::mutex> lock(peersMutex_);
+	for (const auto& peer : peers_) {
+		peer->PushRawFrame(tag, body);  // copies the body per recipient
+	}
+}
+
 bool PeerManager::OnIncomingPeerEstablished() {
 	std::lock_guard<std::mutex> lock(incomingCountMutex_);
 	const bool isFirst = (establishedIncomingCount_ == 0);

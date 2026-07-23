@@ -67,6 +67,11 @@ struct ClipboardActivityUpdate {
         Added,
         Removed,
         Cleared,
+        // An existing item (same id) changed position: its payload was replaced
+        // by a fresher-stamped copy of the same event (an MRU re-share) and it
+        // re-sorted by the new meta.timestamp. The UI repositions the row; the
+        // item id — and anything keyed on it, like peek state — is unchanged.
+        Moved,
     };
 
     Type type{ Type::Added };
@@ -85,6 +90,12 @@ public:
     // Insert a payload into the activity store. Direction and device-name are
     // derived at display time from payload->meta.originHostId / originHostName,
     // so the caller doesn't pass them in.
+    //
+    // Dedup/relocate by eventGuid: a known guid with an older-or-equal
+    // meta.timestamp is an echo (no-op, returns the existing id); a known guid
+    // with a strictly newer meta.timestamp is an MRU re-share — the stored
+    // payload is replaced and the item relocates to its new timestamp position
+    // with a stable id (watchers see Moved).
     uint64_t Add(std::shared_ptr<const ClipboardPayload> payload);
 
     void SetLimits(uint64_t memoryLimitBytes, uint64_t maxAgeSeconds, uint64_t maxItems);
@@ -106,6 +117,10 @@ public:
     std::vector<std::shared_ptr<const ClipboardPayload>> ItemsSince(
         const std::array<uint8_t, 16>& fromGuid, uint64_t maxItems) const;
     bool Remove(uint64_t itemID);
+    // Removal by wire identity — the CDEL receive path. Best-effort: absent
+    // guid is a no-op (false). An all-zero guid never matches (unstamped items
+    // aren't addressable from the wire).
+    bool RemoveByEventGuid(const std::array<uint8_t, 16>& eventGuid);
     void Clear();
 
     ClipboardActivityRegistration QueryAndRegister(Watcher watcher, void* userData = nullptr);

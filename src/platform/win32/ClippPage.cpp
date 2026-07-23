@@ -1,6 +1,7 @@
 #include "ClippPage.h"
 
 #include "Clipboard.h"
+#include "ClipboardActions.h"
 #include "KeyManager.h"
 #include "platform/uiClippPage.h"
 #include "platform/uistrings.h"
@@ -477,13 +478,37 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t it
             updateActionIcons();
         }
 
+        MenuFlyoutItem deleteMenuItem;
+        deleteMenuItem.Text(winrt::hstring{ CLP_W(CLP_UI_DELETE) });
+        deleteMenuItem.Click([itemID](auto const&, auto const&) {
+            // Mesh-wide, best-effort; the store's Removed event tears the row down.
+            clipp::DeleteActivityItemEverywhere(itemID);
+        });
+        contextMenu.Items().Append(deleteMenuItem);
+
+        rowButton.KeyDown([itemID](auto const&, winrt::Windows::UI::Xaml::Input::KeyRoutedEventArgs const& args) {
+            if (args.Key() == winrt::Windows::System::VirtualKey::Delete) {
+                args.Handled(true);
+                clipp::DeleteActivityItemEverywhere(itemID);
+            }
+        });
+
         rowButton.ContextFlyout(contextMenu);
         ToolTipService::SetToolTip(rowButton, winrt::box_value(winrt::hstring{ CLP_W(CLP_UI_COPY) }));
         Automation::AutomationProperties::SetName(rowButton, winrt::hstring{ metaText });
         Automation::AutomationProperties::SetHelpText(rowButton, winrt::hstring{ CLP_W(CLP_UI_COPY) });
     } else {
-        // Placeholder rows are informational — no click, no copy menu, no tooltip.
+        // Placeholder rows are informational — no click, no copy, no tooltip.
+        // Still deletable, so the trace can be removed everywhere.
         rowButton.IsTabStop(false);
+        MenuFlyout placeholderMenu;
+        MenuFlyoutItem deleteOnlyItem;
+        deleteOnlyItem.Text(winrt::hstring{ CLP_W(CLP_UI_DELETE) });
+        deleteOnlyItem.Click([itemID](auto const&, auto const&) {
+            clipp::DeleteActivityItemEverywhere(itemID);
+        });
+        placeholderMenu.Items().Append(deleteOnlyItem);
+        rowButton.ContextFlyout(placeholderMenu);
         Automation::AutomationProperties::SetName(rowButton, winrt::hstring{ metaText });
     }
 
@@ -555,6 +580,54 @@ void ClippPage::RemoveActivityItem(uint64_t itemID) {
     SetActivityEmptyMessageVisible(activityItemIDs_.empty());
 }
 
+void ClippPage::MoveActivityItem(uint64_t itemID) {
+    if (!activityItemsPanel_) {
+        return;
+    }
+
+    const auto movedPayload = activityStore_.PayloadReference(itemID);
+    if (!movedPayload) {
+        RemoveActivityItem(itemID);
+        return;
+    }
+
+    // Take the old row out WITHOUT forgetting peek state — the id (and the
+    // user's peek choice) survives a relocation.
+    const auto found = std::find(activityItemIDs_.begin(), activityItemIDs_.end(), itemID);
+    if (found != activityItemIDs_.end()) {
+        const auto index = static_cast<uint32_t>(found - activityItemIDs_.begin());
+        activityItemsPanel_.Children().RemoveAt(index);
+        activityItemIDs_.erase(found);
+    }
+
+    const bool shouldFollow = IsActivityNearTop();
+    auto row = BuildActivityRow(itemID);
+    if (!row) {
+        SetActivityEmptyMessageVisible(activityItemIDs_.empty());
+        return;
+    }
+
+    // Panel is newest-first; insert before the first row whose payload
+    // timestamp is at-or-below the moved one (ties: moved item on top).
+    const uint64_t movedTs = movedPayload->meta.timestamp;
+    uint32_t insertIndex = static_cast<uint32_t>(activityItemIDs_.size());
+    for (uint32_t i = 0; i < activityItemIDs_.size(); ++i) {
+        const auto payload = activityStore_.PayloadReference(activityItemIDs_[i]);
+        if (payload && payload->meta.timestamp <= movedTs) {
+            insertIndex = i;
+            break;
+        }
+    }
+
+    activityItemsPanel_.Children().InsertAt(insertIndex, row);
+    activityItemIDs_.insert(activityItemIDs_.begin() + insertIndex, itemID);
+    SetActivityEmptyMessageVisible(false);
+
+    if (shouldFollow) {
+        ScrollActivityToTop();
+    }
+}
+
 void ClippPage::ClearActivityItems() {
     uiClippPage::ForgetAllPeekedItems();
     if (!activityItemsPanel_) {
@@ -609,20 +682,10 @@ void ClippPage::ScrollActivityToTop() const {
 }
 
 void ClippPage::CopyActivityItem(uint64_t itemID) {
-    auto payload = activityStore_.PayloadReference(itemID);
-    if (!payload) {
-        return;
-    }
-
-    // Source-marked-private placeholder payloads carry no content and exist
-    // only to inform the user that something happened. Writing an empty
-    // clipboard would be both useless and destructive of whatever's there now.
-    if ((payload->meta.flags & NetworkDefs::CLPM_FLAG_SOURCE_MARKED_PRIVATE) != 0
-        && payload->EncodedBytes().empty()) {
-        return;
-    }
-
-    SetClipboardData(std::move(payload), true);
+    // Copy-from-history is an MRU re-share: it sets the local clipboard AND
+    // makes the item current mesh-wide (peer clipboards follow, lists
+    // relocate). The placeholder/no-content guards live inside the helper.
+    clipp::ReshareActivityItem(itemID);
 }
 
 void ClippPage::OnShown() {
@@ -641,6 +704,9 @@ void ClippPage::OnHidden() {
 
 void ClippPage::OnDestroy() {
     OnHidden();
+    // Peeks are session-scoped: revealing a private item lasts until the
+    // window goes away, then must be redone.
+    uiClippPage::ForgetAllPeekedItems();
     activityItemsPanel_ = nullptr;
     activityScroll_ = nullptr;
     activityEmptyState_ = nullptr;
@@ -691,6 +757,9 @@ void ClippPage::ClipboardActivityWatcher(const ClipboardActivityUpdate& update, 
             break;
         case ClipboardActivityUpdate::Type::Cleared:
             page->ClearActivityItems();
+            break;
+        case ClipboardActivityUpdate::Type::Moved:
+            page->MoveActivityItem(update.itemID);
             break;
         }
     });

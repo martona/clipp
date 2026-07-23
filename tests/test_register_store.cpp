@@ -81,18 +81,21 @@ TEST_CASE("Upsert / Read / overwrite / Delete basics") {
 }
 
 TEST_CASE("name validation") {
+    // GUI-era wide rules: printable UTF-8, `?` `*` `/` reserved, no edge
+    // whitespace, <=64 bytes. The full accept/reject matrix lives in
+    // test_binary_registers.cpp; this covers the store-level basics.
     CHECK(IsValidRegisterName("url"));
     CHECK(IsValidRegisterName("a.b_c-1"));
+    CHECK(IsValidRegisterName("UPPER"));
+    CHECK(IsValidRegisterName("has space"));
     CHECK(IsValidRegisterName(std::string(64, 'a')));
     CHECK_FALSE(IsValidRegisterName(""));
-    CHECK_FALSE(IsValidRegisterName("UPPER"));
-    CHECK_FALSE(IsValidRegisterName("has space"));
     CHECK_FALSE(IsValidRegisterName("slash/name"));
     CHECK_FALSE(IsValidRegisterName(std::string(65, 'a')));
 
     auto t = std::make_shared<FakeTime>(FakeTime{ kEpoch });
     auto s = MakeStore(1, t);
-    CHECK(s->Upsert("Bad Name", "x") == WriteResult::InvalidName);
+    CHECK(s->Upsert("glob*name", "x") == WriteResult::InvalidName);
     CHECK(s->Upsert("", "mirror") == WriteResult::InvalidName);  // "" reserved; written only via MirrorDefault
 }
 

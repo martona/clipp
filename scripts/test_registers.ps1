@@ -128,13 +128,18 @@ else { No "test.rmcheck lifecycle (present=$present rmExit=$rmRc gone=$gone past
 $rc = Clipp @('rm', 'test.never-existed-zzz')
 if ($rc -ne 0) { Ok 'rm of absent register errors' } else { No 'rm of absent register did NOT error' }
 
-# --- invalid register name rejected (no register created) ---
-[System.IO.File]::WriteAllBytes((Join-Path $tmp 'bad.in'), $U8.GetBytes('x'))
-$rc = Clipp @('copy', 'test.BAD!') (Join-Path $tmp 'bad.in')
-if ($rc -ne 0) { Ok 'invalid register name rejected' } else { No 'invalid register name accepted' }
+# --- wide (GUI-era) names: spaces, caps, punctuation all valid now ---
+RoundTrip 'test wide (Name)!' ($U8.GetBytes('wide-name payload'))
 
-# --- cleanup: tombstone everything we made ---
-[void](Clipp @('rm', 'test.*'))
+# --- reserved printables rejected (globs stay CLI metacharacters; / is namespaces) ---
+[System.IO.File]::WriteAllBytes((Join-Path $tmp 'bad.in'), $U8.GetBytes('x'))
+$rc = Clipp @('copy', 'test/bad') (Join-Path $tmp 'bad.in')
+if ($rc -ne 0) { Ok "reserved '/' in name rejected" } else { No "reserved '/' in name accepted" }
+$rc = Clipp @('copy', 'test.bad*') (Join-Path $tmp 'bad.in')
+if ($rc -ne 0) { Ok "reserved '*' in name rejected" } else { No "reserved '*' in name accepted" }
+
+# --- cleanup: tombstone everything we made ('test*' now also covers wide names) ---
+[void](Clipp @('rm', 'test*'))
 Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 
 Write-Host "`n$($script:pass) passed, $($script:fail) failed." -ForegroundColor ($(if ($script:fail) { 'Red' } else { 'Green' }))

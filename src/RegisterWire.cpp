@@ -101,6 +101,44 @@ struct Reader {
 
 }  // namespace
 
+std::string EncodeBinaryValue(uint32_t formatId, const unsigned char* stream, size_t streamLen) {
+    std::string value;
+    value.reserve(kBinaryHeaderV1Size + streamLen);
+    value.push_back(static_cast<char>(kBinaryHeaderVersion));
+    value.push_back('\0');  // reserved
+    value.push_back(static_cast<char>((kBinaryHeaderV1Size >> 8) & 0xFF));
+    value.push_back(static_cast<char>(kBinaryHeaderV1Size & 0xFF));
+    value.push_back(static_cast<char>((formatId >> 24) & 0xFF));
+    value.push_back(static_cast<char>((formatId >> 16) & 0xFF));
+    value.push_back(static_cast<char>((formatId >> 8) & 0xFF));
+    value.push_back(static_cast<char>(formatId & 0xFF));
+    if (stream != nullptr && streamLen > 0) {
+        value.append(reinterpret_cast<const char*>(stream), streamLen);
+    }
+    return value;
+}
+
+bool TryParseBinaryValue(const std::string& value, BinaryValueInfo& outInfo) {
+    if (value.size() < kBinaryHeaderV1Size) {
+        return false;
+    }
+    const auto u8 = [&value](size_t i) { return static_cast<uint8_t>(value[i]); };
+    // Byte 0 is the header version. It is deliberately NOT rejected when newer
+    // than kBinaryHeaderVersion: the fixed prefix (headerLen at 2-3, formatId
+    // at 4-7) is the forward-compat contract, and headerLen tells us where the
+    // stream starts regardless of trailing fields we don't know.
+    const uint16_t headerLen = static_cast<uint16_t>((u8(2) << 8) | u8(3));
+    if (headerLen < kBinaryHeaderV1Size || headerLen > value.size()) {
+        return false;
+    }
+    outInfo.formatId = (static_cast<uint32_t>(u8(4)) << 24) |
+                       (static_cast<uint32_t>(u8(5)) << 16) |
+                       (static_cast<uint32_t>(u8(6)) << 8) |
+                       static_cast<uint32_t>(u8(7));
+    outInfo.streamOffset = headerLen;
+    return true;
+}
+
 std::vector<unsigned char> EncodeRecord(const RegisterRecord& record, uint8_t transportFlags) {
     std::vector<unsigned char> b;
     b.reserve(56 + record.name.size() + record.value.size());

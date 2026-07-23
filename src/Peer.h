@@ -82,6 +82,9 @@ private:
 	// tag it consumed. Both are no-ops on builds that don't run the register daemon.
 	bool HandleRegisterFrame(CryptoChannel& channel, const SocketIoContext& io, const std::vector<unsigned char>& frame);
 	void SendRegisterSyncOnConnect(CryptoChannel& channel, const SocketIoContext& io);
+	// CDEL receive: best-effort delete of one activity item by eventGuid.
+	// Ungated — every build that compiles Peer.cpp has the activity store.
+	void HandleClipboardDeleteFrame(const std::vector<unsigned char>& frame);
 	void ReportTraffic(uint64_t bytesSent, uint64_t bytesReceived);
 	SOCKET CurrentSocket() const;
 	void SetSocket(SOCKET socket);
