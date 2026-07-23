@@ -15,6 +15,7 @@ namespace {
     constexpr wchar_t kHonorExternalPrivacyMarkersName[] = L"HonorExternalPrivacyMarkers";
     constexpr wchar_t kMaskShortTextPreviewsName[] = L"MaskShortTextPreviews";
     constexpr wchar_t kAnimateFlowFeedbackName[] = L"AnimateFlowFeedback";
+    constexpr wchar_t kPopupHintShownCountName[] = L"PopupHintShownCount";
     constexpr wchar_t kOriginSequenceFloorName[] = L"OriginSequenceFloor";
     constexpr wchar_t kRegisterTtlSecondsName[] = L"RegisterTtlSeconds";
     constexpr wchar_t kRegisterMaxCountName[] = L"RegisterMaxCount";
@@ -207,6 +208,21 @@ bool Settings::set_animateFlowFeedback(bool value) {
     return true;
 }
 
+uint64_t Settings::popupHintShownCount() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return popupHintShownCount_;
+}
+
+void Settings::notePopupHintShown() {
+    uint64_t next = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        next = ++popupHintShownCount_;
+    }
+    // At most PopupHintMaxShows writes over the app's lifetime; no batching.
+    WriteUint64Value(kPopupHintShownCountName, next);
+}
+
 uint64_t Settings::nextOriginSequenceNumber() {
     std::lock_guard<std::mutex> lock(mutex_);
     const uint64_t next = ++originSequenceCounter_;
@@ -349,6 +365,10 @@ bool Settings::LoadCache() {
     }
     if (ReadUint32Value(kAnimateFlowFeedbackName, animateFlowFeedback)) {
         animateFlowFeedback_ = (animateFlowFeedback != 0);
+    }
+    uint64_t popupHintShownCount = 0;
+    if (ReadUint64Value(kPopupHintShownCountName, popupHintShownCount)) {
+        popupHintShownCount_ = popupHintShownCount;
     }
 
     // Origin sequence counter: load the persisted floor (the value the previous

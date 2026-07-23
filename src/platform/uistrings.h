@@ -36,6 +36,7 @@
 #define CLP_UI_DELETE "Delete"
 #define CLP_UI_TRAY_POPUP "Clipboard history"
 #define CLP_UI_POPUP_FILTER_HINT "Type to filter..."
+#define CLP_UI_POPUP_TOAST "Arrow keys to select, Enter to paste"
 #define CLP_UI_POPUP_MORE "Keep typing to narrow the list..."
 #define CLP_UI_POPUP_EMPTY "No data to display."
 #define CLP_UI_LINK "Link"

@@ -42,6 +42,10 @@ public:
     // clipboard item is sent to or received from the group. Display-only; the
     // last-event tooltip / menu line stays available either way.
     static constexpr bool DefaultAnimateFlowFeedback = true;
+    // The popup shows its "Arrow keys to select, Enter to paste" hint toast on
+    // each of the first this-many summons (dismissed early by the first
+    // action), then never again.
+    static constexpr uint64_t PopupHintMaxShows = 5;
 
     Settings();
 
@@ -75,6 +79,12 @@ public:
     // is pre-bumped by one batch so an unclean shutdown never collides with the
     // next session. Counter is per-origin (this device), monotonic across restarts.
     uint64_t nextOriginSequenceNumber();
+
+    // How many times the popup's first-run hint toast has been shown. Bumped
+    // (and persisted) once per summon that shows it; the popup stops showing
+    // the toast at PopupHintMaxShows.
+    uint64_t popupHintShownCount() const;
+    void notePopupHintShown();
 
     // Named-register settings (stored-only). TTL in seconds; cap in records.
     uint64_t registerTtlSeconds() const;
@@ -124,6 +134,7 @@ private:
     uint64_t registerMaxCount_;
     // Reserved-ahead persisted HLC wall-ms floor for the register clock.
     uint64_t registerHlcFloorMs_{ 0 };
+    uint64_t popupHintShownCount_{ 0 };
     mutable std::mutex mutex_;
 };
 

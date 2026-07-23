@@ -33,6 +33,14 @@ private:
     winrt::Windows::UI::Xaml::Controls::Grid BuildActivitySection();
     winrt::Windows::UI::Xaml::Controls::Grid BuildActivityRow(uint64_t itemID);
 
+    // FLIP-style list animation: capture panel-relative row positions before a
+    // mutation, then slide survivors from old to new after it.
+    struct RowPosition {
+        uint64_t itemID;
+        double y;
+    };
+    std::vector<RowPosition> CaptureRowPositions();
+    void AnimateRowsFromPositions(const std::vector<RowPosition>& oldPositions);
     void RefreshActivityItems(const std::vector<ClipboardActivityItemHeader>& items);
     void AddActivityItem(uint64_t itemID);
     void RemoveActivityItem(uint64_t itemID);

@@ -6,6 +6,7 @@
 #include "ClipboardActivityStore.h"
 #include "Logger.h"
 #include "PopupModel.h"
+#include "Settings.h"
 #include "clipp-win32-darkmode32/DMSubclass.h"
 #include "platform/uiClippPage.h"
 #include "platform/uistrings.h"
@@ -13,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -34,10 +36,13 @@
 #include <winrt/Windows.UI.Xaml.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
 #include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
+#include <winrt/Windows.UI.Xaml.Documents.h>
 #include <winrt/Windows.UI.Xaml.Hosting.h>
 #include <winrt/Windows.UI.Xaml.Input.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
 #include <winrt/base.h>
+
+#include "XamlImage.h"
 
 #pragma comment(lib, "dwmapi.lib")
 
@@ -51,11 +56,27 @@ using namespace winrt::Windows::UI::Xaml::Controls;
 using namespace winrt::Windows::UI::Xaml::Media;
 
 constexpr wchar_t kPopupClassName[] = L"ClippPopupWindow";
+constexpr wchar_t kToastClassName[] = L"ClippPopupToast";
+constexpr wchar_t kPreviewClassName[] = L"ClippPopupPreview";
 constexpr double kPopupWidthDips = 420;
 constexpr double kPopupHeightDips = 540;
 // XAML row construction is the expensive part of a re-render; cap what one
 // filter state shows and say so with a hint row instead of silently cropping.
 constexpr std::size_t kMaxRenderedRows = 40;
+// Preview flyout geometry: content-sized, up to these caps.
+constexpr double kPreviewMaxTextWidthDips = 360;
+constexpr double kPreviewMaxHeightDips = 520;
+// Row text is one ellipsized line; text this short fits it and earns no flyout.
+constexpr std::size_t kRowFitChars = 60;
+// Re-windowing: context kept ahead of the first match in a row / the flyout,
+// and how much total text the flyout shows. The match is visible by
+// construction — no scrolling machinery to go wrong.
+constexpr std::size_t kRowMatchLeadChars = 12;
+constexpr std::size_t kPreviewLeadChars = 400;
+constexpr std::size_t kPreviewWindowChars = 2500;
+// A one-letter filter over a big text can hit thousands of times; the
+// highlighter caps out rather than drowning the renderer.
+constexpr std::size_t kMaxHighlightRanges = 200;
 
 int DipsToPixels(double dips, UINT dpi) {
     return static_cast<int>(std::ceil(dips * dpi / USER_DEFAULT_SCREEN_DPI));
@@ -109,6 +130,56 @@ void ApplyTextControlThemeResources(FrameworkElement const& element) {
     }
 }
 
+wchar_t FoldAscii(wchar_t ch) {
+    return (ch >= L'A' && ch <= L'Z') ? static_cast<wchar_t>(ch - L'A' + L'a') : ch;
+}
+
+// Non-overlapping, ASCII-case-insensitive occurrences of `needle` — the same
+// folding the model's filter uses, so what matched is what lights up.
+std::vector<std::size_t> FindMatches(const std::wstring& text, const std::wstring& needle) {
+    std::vector<std::size_t> matches;
+    if (needle.empty() || needle.size() > text.size()) {
+        return matches;
+    }
+    for (std::size_t start = 0; start + needle.size() <= text.size(); ++start) {
+        bool hit = true;
+        for (std::size_t i = 0; i < needle.size(); ++i) {
+            if (FoldAscii(text[start + i]) != FoldAscii(needle[i])) {
+                hit = false;
+                break;
+            }
+        }
+        if (hit) {
+            matches.push_back(start);
+            if (matches.size() >= kMaxHighlightRanges) {
+                break;
+            }
+            start += needle.size() - 1;
+        }
+    }
+    return matches;
+}
+
+// Amber find-highlight with forced dark text: readable over both themes.
+void HighlightMatches(TextBlock const& block, const std::wstring& text, const std::wstring& filter) {
+    block.TextHighlighters().Clear();
+    if (filter.empty()) {
+        return;
+    }
+    const auto matches = FindMatches(text, filter);
+    if (matches.empty()) {
+        return;
+    }
+    winrt::Windows::UI::Xaml::Documents::TextHighlighter highlighter;
+    highlighter.Background(ArgbBrush(150, 255, 185, 0));
+    highlighter.Foreground(ArgbBrush(255, 0, 0, 0));
+    for (const auto start : matches) {
+        highlighter.Ranges().Append(winrt::Windows::UI::Xaml::Documents::TextRange{
+            static_cast<int32_t>(start), static_cast<int32_t>(filter.size()) });
+    }
+    block.TextHighlighters().Append(highlighter);
+}
+
 std::wstring RelativeAgeText(std::chrono::system_clock::time_point when) {
     using namespace std::chrono;
     const auto now = system_clock::now();
@@ -122,6 +193,379 @@ std::wstring RelativeAgeText(std::chrono::system_clock::time_point when) {
     if (secs < 172800) return L"yesterday";
     return std::to_wstring(secs / 86400) + L" days ago";
 }
+
+// ---- companion windows ----
+// Both are WS_EX_NOACTIVATE satellites of the popup: they can never take the
+// keyboard home away from the filter box, never trip the popup's
+// light-dismiss (they don't activate at all), and live entirely outside the
+// popup's own layout.
+
+// Coaching toast: a text pill floating ABOVE the popup, outside its bounds.
+// Plain GDI — no island, no XAML, nothing to fight.
+class ToastWindow {
+public:
+    void ShowAbove(HWND popupWindow, const wchar_t* text) {
+        text_ = text;
+        EnsureCreated();
+        if (hwnd_ == nullptr) {
+            return;
+        }
+
+        const UINT dpi = GetDpiForWindow(popupWindow);
+        EnsureFont(dpi);
+
+        RECT measure{};
+        if (HDC hdc = GetDC(hwnd_)) {
+            const HGDIOBJ old = SelectObject(hdc, font_);
+            DrawTextW(hdc, text_.c_str(), -1, &measure, DT_CALCRECT | DT_SINGLELINE);
+            SelectObject(hdc, old);
+            ReleaseDC(hwnd_, hdc);
+        }
+        const int width = (measure.right - measure.left) + MulDiv(14, dpi, 96) * 2;
+        const int height = (measure.bottom - measure.top) + MulDiv(7, dpi, 96) * 2;
+
+        RECT popupRect{};
+        GetWindowRect(popupWindow, &popupRect);
+        MONITORINFO info{};
+        info.cbSize = sizeof(info);
+        GetMonitorInfoW(MonitorFromWindow(popupWindow, MONITOR_DEFAULTTONEAREST), &info);
+        const int x = popupRect.left + ((popupRect.right - popupRect.left) - width) / 2;
+        int y = popupRect.top - height - MulDiv(10, dpi, 96);
+        if (y < info.rcWork.top) {
+            y = info.rcWork.top;  // popup hugs the screen top: sit flush
+        }
+        SetWindowPos(hwnd_, HWND_TOPMOST, x, y, width, height,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        InvalidateRect(hwnd_, nullptr, TRUE);
+    }
+
+    void Hide() {
+        if (hwnd_ != nullptr && IsWindowVisible(hwnd_)) {
+            ShowWindow(hwnd_, SW_HIDE);
+        }
+    }
+
+    void Destroy() {
+        if (hwnd_ != nullptr) {
+            DestroyWindow(hwnd_);
+            hwnd_ = nullptr;
+        }
+        if (font_ != nullptr) {
+            DeleteObject(font_);
+            font_ = nullptr;
+        }
+    }
+
+private:
+    void EnsureCreated() {
+        if (hwnd_ != nullptr) {
+            return;
+        }
+        const HINSTANCE hInstance = GetModuleHandleW(nullptr);
+        static bool registered = false;
+        if (!registered) {
+            WNDCLASSEXW wc{};
+            wc.cbSize = sizeof(wc);
+            wc.lpfnWndProc = WndProc;
+            wc.hInstance = hInstance;
+            wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+            wc.lpszClassName = kToastClassName;
+            RegisterClassExW(&wc);
+            registered = true;
+        }
+        hwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+            kToastClassName, L"", WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, hInstance, this);
+        if (hwnd_ != nullptr) {
+            const DWORD cornerRoundSmall = 3 /*DWMWCP_ROUNDSMALL*/;
+            DwmSetWindowAttribute(hwnd_, 33 /*DWMWA_WINDOW_CORNER_PREFERENCE*/,
+                &cornerRoundSmall, sizeof(cornerRoundSmall));
+        }
+    }
+
+    void EnsureFont(UINT dpi) {
+        if (font_ != nullptr && fontDpi_ == dpi) {
+            return;
+        }
+        if (font_ != nullptr) {
+            DeleteObject(font_);
+        }
+        font_ = CreateFontW(-MulDiv(9, static_cast<int>(dpi), 72), 0, 0, 0, FW_NORMAL,
+            FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        fontDpi_ = dpi;
+    }
+
+    void Paint() {
+        PAINTSTRUCT ps{};
+        const HDC hdc = BeginPaint(hwnd_, &ps);
+        RECT client{};
+        GetClientRect(hwnd_, &client);
+        const HBRUSH background = CreateSolidBrush(RGB(45, 45, 45));
+        FillRect(hdc, &client, background);
+        DeleteObject(background);
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, RGB(255, 255, 255));
+        const HGDIOBJ old = SelectObject(hdc, font_);
+        DrawTextW(hdc, text_.c_str(), -1, &client, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(hdc, old);
+        EndPaint(hwnd_, &ps);
+    }
+
+    static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+        ToastWindow* self = nullptr;
+        if (msg == WM_NCCREATE) {
+            auto* createStruct = reinterpret_cast<CREATESTRUCTW*>(lParam);
+            self = reinterpret_cast<ToastWindow*>(createStruct->lpCreateParams);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+        } else {
+            self = reinterpret_cast<ToastWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        }
+        switch (msg) {
+        case WM_PAINT:
+            if (self != nullptr) {
+                self->Paint();
+                return 0;
+            }
+            break;
+        case WM_MOUSEACTIVATE:
+            return MA_NOACTIVATE;
+        default:
+            break;
+        }
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
+
+    HWND hwnd_ = nullptr;
+    HFONT font_ = nullptr;
+    UINT fontDpi_ = 0;
+    std::wstring text_;
+};
+
+// Preview flyout: summoned only when the selection holds more than its row can
+// show (an image, or long/multiline text). Pinned beside the popup at the
+// selected row's height, sized to its content up to a cap. Self-managed rather
+// than a XAML Flyout: same look and transience, none of the focus-steal /
+// per-keystroke reopen churn / light-dismiss fights.
+class PreviewWindow {
+public:
+    void ShowText(HWND popupWindow, int anchorScreenY, const std::wstring& text,
+                  const std::wstring& filter) {
+        EnsureCreated();
+        if (hwnd_ == nullptr) {
+            return;
+        }
+        image_.Visibility(Visibility::Collapsed);
+        image_.Source(nullptr);
+        text_.Visibility(Visibility::Visible);
+        text_.Text(winrt::hstring{ text });
+        HighlightMatches(text_, text, filter);
+        popupWindow_ = popupWindow;
+        anchorY_ = anchorScreenY;
+        PositionAndShow();
+    }
+
+    void ShowImage(HWND popupWindow, int anchorScreenY,
+                   const std::shared_ptr<const std::vector<unsigned char>>& bytes) {
+        EnsureCreated();
+        if (hwnd_ == nullptr || !bytes) {
+            return;
+        }
+        text_.Visibility(Visibility::Collapsed);
+        text_.Text(L"");
+        text_.TextHighlighters().Clear();
+        image_.Visibility(Visibility::Visible);
+        image_.Source(BitmapFromImageBytes(*bytes, static_cast<int32_t>(kPreviewMaxTextWidthDips)));
+        popupWindow_ = popupWindow;
+        anchorY_ = anchorScreenY;
+        PositionAndShow();  // provisional; ImageOpened re-runs with the real aspect
+    }
+
+    void Hide() {
+        if (hwnd_ != nullptr && IsWindowVisible(hwnd_)) {
+            ShowWindow(hwnd_, SW_HIDE);
+        }
+    }
+
+    void Destroy() {
+        if (xamlSource_) {
+            xamlSource_.Close();
+            xamlSource_ = nullptr;
+        }
+        if (hwnd_ != nullptr) {
+            DestroyWindow(hwnd_);
+            hwnd_ = nullptr;
+        }
+    }
+
+private:
+    void EnsureCreated() {
+        if (hwnd_ != nullptr) {
+            return;
+        }
+        const HINSTANCE hInstance = GetModuleHandleW(nullptr);
+        static bool registered = false;
+        if (!registered) {
+            WNDCLASSEXW wc{};
+            wc.cbSize = sizeof(wc);
+            wc.lpfnWndProc = WndProc;
+            wc.hInstance = hInstance;
+            wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+            wc.lpszClassName = kPreviewClassName;
+            wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+            RegisterClassExW(&wc);
+            registered = true;
+        }
+        CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+            kPreviewClassName, L"", WS_POPUP, 0, 0, 100, 100, nullptr, nullptr, hInstance, this);
+        if (hwnd_ == nullptr) {
+            return;
+        }
+        DarkMode::setWindowEraseBgSubclass(hwnd_);
+        const DWORD cornerRound = 2 /*DWMWCP_ROUND*/;
+        DwmSetWindowAttribute(hwnd_, 33 /*DWMWA_WINDOW_CORNER_PREFERENCE*/,
+            &cornerRound, sizeof(cornerRound));
+
+        try {
+            winrt::init_apartment(winrt::apartment_type::single_threaded);
+        } catch (...) {
+        }
+        if (!xamlManager_) {
+            xamlManager_ = Hosting::WindowsXamlManager::InitializeForCurrentThread();
+        }
+        xamlSource_ = Hosting::DesktopWindowXamlSource{};
+        auto nativeSource = xamlSource_.as<IDesktopWindowXamlSourceNative>();
+        winrt::check_hresult(nativeSource->AttachToWindow(hwnd_));
+        winrt::check_hresult(nativeSource->get_WindowHandle(&xamlHost_));
+        xamlSource_.Content(BuildContent());
+    }
+
+    Border BuildContent() {
+        image_ = Image();
+        image_.Stretch(Stretch::Uniform);
+        image_.MaxWidth(kPreviewMaxTextWidthDips);
+        image_.HorizontalAlignment(HorizontalAlignment::Left);
+        image_.Visibility(Visibility::Collapsed);
+        image_.ImageOpened([this](auto const&, auto const&) {
+            // Decoded dimensions are in: re-fit the window to the real aspect.
+            if (hwnd_ != nullptr && IsWindowVisible(hwnd_)) {
+                PositionAndShow();
+            }
+        });
+
+        text_ = TextBlock();
+        text_.FontSize(13);
+        text_.TextWrapping(TextWrapping::Wrap);
+        text_.MaxWidth(kPreviewMaxTextWidthDips);
+        text_.HorizontalAlignment(HorizontalAlignment::Left);
+        text_.IsTextSelectionEnabled(false);
+
+        StackPanel stack;
+        stack.Spacing(6);
+        stack.HorizontalAlignment(HorizontalAlignment::Left);
+        stack.Children().Append(image_);
+        stack.Children().Append(text_);
+
+        root_ = Border();
+        root_.RequestedTheme(CurrentTheme());
+        root_.Background(PopupBackgroundBrush());
+        root_.BorderBrush(ArgbBrush(64, 127, 127, 127));
+        root_.BorderThickness(ThicknessHelper::FromLengths(1, 1, 1, 1));
+        root_.Padding(ThicknessHelper::FromLengths(10, 8, 10, 8));
+        root_.Child(stack);
+        return root_;
+    }
+
+    void PositionAndShow() {
+        if (hwnd_ == nullptr || !root_ || popupWindow_ == nullptr) {
+            return;
+        }
+        // Content-sized up to the caps: measure the XAML tree at the maximum
+        // box and take what it wants.
+        root_.Measure(winrt::Windows::Foundation::Size{
+            static_cast<float>(kPreviewMaxTextWidthDips + 22),
+            static_cast<float>(kPreviewMaxHeightDips) });
+        const auto desired = root_.DesiredSize();
+
+        const UINT dpi = GetDpiForWindow(popupWindow_);
+        int width = DipsToPixels((std::max)(140.0f, desired.Width), dpi);
+        int height = DipsToPixels(
+            (std::min)(static_cast<double>(desired.Height), kPreviewMaxHeightDips), dpi);
+        height = (std::max)(height, DipsToPixels(44, dpi));
+
+        RECT popupRect{};
+        GetWindowRect(popupWindow_, &popupRect);
+        MONITORINFO info{};
+        info.cbSize = sizeof(info);
+        GetMonitorInfoW(MonitorFromWindow(popupWindow_, MONITOR_DEFAULTTONEAREST), &info);
+        const int gap = DipsToPixels(8, dpi);
+        int x = popupRect.right + gap;
+        if (x + width > info.rcWork.right) {
+            x = popupRect.left - width - gap;  // no room on the right: flip left
+        }
+        int y = anchorY_;
+        if (y + height > info.rcWork.bottom) {
+            y = info.rcWork.bottom - height;
+        }
+        if (y < info.rcWork.top) {
+            y = info.rcWork.top;
+        }
+        SetWindowPos(hwnd_, HWND_TOPMOST, x, y, width, height,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        ResizeXamlHost();
+    }
+
+    void ResizeXamlHost() {
+        if (xamlHost_ == nullptr || hwnd_ == nullptr) {
+            return;
+        }
+        RECT client{};
+        GetClientRect(hwnd_, &client);
+        SetWindowPos(xamlHost_, nullptr, 0, 0,
+            client.right - client.left, client.bottom - client.top,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    }
+
+    static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+        PreviewWindow* self = nullptr;
+        if (msg == WM_NCCREATE) {
+            auto* createStruct = reinterpret_cast<CREATESTRUCTW*>(lParam);
+            self = reinterpret_cast<PreviewWindow*>(createStruct->lpCreateParams);
+            self->hwnd_ = hwnd;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+        } else {
+            self = reinterpret_cast<PreviewWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        }
+        switch (msg) {
+        case WM_MOUSEACTIVATE:
+            return MA_NOACTIVATE;
+        case WM_SIZE:
+            if (self != nullptr) {
+                self->ResizeXamlHost();
+                return 0;
+            }
+            break;
+        case WM_NCDESTROY:
+            if (self != nullptr) {
+                self->hwnd_ = nullptr;
+            }
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            break;
+        default:
+            break;
+        }
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
+
+    HWND hwnd_ = nullptr;
+    HWND xamlHost_ = nullptr;
+    HWND popupWindow_ = nullptr;
+    int anchorY_ = 0;
+    Hosting::WindowsXamlManager xamlManager_{ nullptr };
+    Hosting::DesktopWindowXamlSource xamlSource_{ nullptr };
+    Border root_{ nullptr };
+    Image image_{ nullptr };
+    TextBlock text_{ nullptr };
+};
 
 class PopupWindow {
 public:
@@ -154,6 +598,7 @@ public:
                 static_cast<LONG>(static_cast<SHORT>(HIWORD(msg->lParam))),
             };
             if (PtInRect(&rect, cursor)) {
+                DismissHintToast();
                 const int delta = GET_WHEEL_DELTA_WPARAM(msg->wParam);
                 constexpr double kPixelsPerNotch = 96.0;
                 const double offset =
@@ -177,6 +622,8 @@ public:
 
     void Destroy() {
         EndActivityNotifications();
+        toastWindow_.Destroy();
+        previewWindow_.Destroy();
         if (xamlSource_) {
             xamlSource_.Close();
             xamlSource_ = nullptr;
@@ -210,6 +657,20 @@ private:
         ShowWindow(hwnd_, SW_SHOW);
         SetForegroundWindow(hwnd_);
         FocusFilterBox();
+
+        // First-runs coaching: a pill ABOVE the popup (its own no-activate
+        // window — zero popup real estate) on each of the first
+        // PopupHintMaxShows summons; the first action retires it.
+        if (g_settings.popupHintShownCount() < Settings::PopupHintMaxShows) {
+            toastWindow_.ShowAbove(hwnd_, CLP_W(CLP_UI_POPUP_TOAST));
+            g_settings.notePopupHintShown();
+        }
+
+        // The pre-show RenderList ran while the window was still hidden, so
+        // the flyout's visibility guard suppressed it; give the initial
+        // selection its preview now.
+        UpdatePreviewFlyout();
+
         BeginActivityNotifications();
     }
 
@@ -242,6 +703,8 @@ private:
             return;
         }
         EndActivityNotifications();
+        toastWindow_.Hide();
+        previewWindow_.Hide();
         // Session-scoped peeks: anything revealed inside the popup is
         // forgotten the moment it hides.
         uiClippPage::ForgetAllPeekedItems();
@@ -428,6 +891,7 @@ private:
                     if (!listScroll_) {
                         return;
                     }
+                    DismissHintToast();
                     const int delta = args.GetCurrentPoint(nullptr).Properties().MouseWheelDelta();
                     if (delta == 0) {
                         return;
@@ -447,6 +911,7 @@ private:
         // that bubbles this far (rows bubble too — selection still works, and
         // typing keeps flowing).
         root.PointerReleased([this](auto const&, auto const&) {
+            DismissHintToast();
             if (dispatcher_) {
                 dispatcher_.TryEnqueue([this]() {
                     if (filterBox_ && hwnd_ != nullptr && IsWindowVisible(hwnd_)) {
@@ -461,6 +926,7 @@ private:
 
     void OnFilterKey(Input::KeyRoutedEventArgs const& args) {
         using winrt::Windows::System::VirtualKey;
+        DismissHintToast();  // any keystroke counts as the first action
         const auto key = args.Key();
         const bool filterEmpty = filterBox_ ? filterBox_.Text().empty() : true;
 
@@ -532,9 +998,13 @@ private:
             PopupItem item;
             item.kind = PopupItem::Kind::History;
             item.historyId = it->id;
-            // Filter matches the MASKED preview (never the revealed text of a
-            // private row) plus the device name.
-            item.searchText = display->previewText + L" " + display->deviceName;
+            // Type-to-find matches CONTENT only — kind labels, device names,
+            // and ages are neither located nor highlighted. Non-text rows
+            // simply drop out of a filtered view.
+            const bool contentKind =
+                display->kind == ClipboardActivityPayloadKind::Text ||
+                display->kind == ClipboardActivityPayloadKind::Link;
+            item.searchText = contentKind ? display->previewText : std::wstring{};
             item.actionable = display->kind != ClipboardActivityPayloadKind::PrivatePlaceholder;
             displayCache_.emplace(it->id, std::move(*display));
             history.push_back(std::move(item));
@@ -588,6 +1058,7 @@ private:
         TextBlock preview;
         std::wstring previewText;
         std::wstring metaText;
+        bool contentRow = false;  // true when previewText is CONTENT, not a label
         if (cached != displayCache_.end()) {
             const auto& display = cached->second;
             switch (display.kind) {
@@ -601,6 +1072,8 @@ private:
                 previewText = display.previewText;
                 break;
             }
+            contentRow = display.kind == ClipboardActivityPayloadKind::Text ||
+                         display.kind == ClipboardActivityPayloadKind::Link;
             // "Mars11 14 seconds ago" — who it came from, and how fresh.
             metaText = display.deviceName.empty()
                 ? RelativeAgeText(display.header.timestamp)
@@ -609,10 +1082,23 @@ private:
         if (previewText.empty()) {
             previewText = L" ";
         }
+        // Find applies to content only — labels and meta lines are exempt from
+        // both matching and highlighting. A content match past the single-line
+        // ellipsis would be invisible, so re-window the text around the first
+        // match instead of scrolling anything.
+        if (contentRow && !model_.Filter().empty()) {
+            const auto matches = FindMatches(previewText, model_.Filter());
+            if (!matches.empty() && matches.front() > kRowMatchLeadChars) {
+                previewText = L"…" + previewText.substr(matches.front() - kRowMatchLeadChars);
+            }
+        }
         preview.Text(winrt::hstring{ previewText });
         preview.TextTrimming(TextTrimming::CharacterEllipsis);
         preview.TextWrapping(TextWrapping::NoWrap);
         preview.MaxLines(1);
+        if (contentRow) {
+            HighlightMatches(preview, previewText, model_.Filter());
+        }
         content.Children().Append(preview);
 
         if (!metaText.empty()) {
@@ -671,6 +1157,89 @@ private:
                 rowBorders_[i].StartBringIntoView();
             }
         }
+        UpdatePreviewFlyout();
+    }
+
+    // Screen Y of the selected row's top edge — the flyout's anchor. The
+    // island fills the borderless popup's client area at (0,0), so island
+    // dips map straight onto the window origin.
+    int RowAnchorScreenY() {
+        RECT popupRect{};
+        GetWindowRect(hwnd_, &popupRect);
+        const auto selection = model_.Selected();
+        if (selection.has_value() && selection->group == PopupModel::Group::History &&
+            selection->index < rowBorders_.size()) {
+            try {
+                const auto transform = rowBorders_[selection->index].TransformToVisual(nullptr);
+                const auto point = transform.TransformPoint(winrt::Windows::Foundation::Point{ 0, 0 });
+                return popupRect.top + DipsToPixels(point.Y, GetDpiForWindow(hwnd_));
+            } catch (const winrt::hresult_error&) {
+            }
+        }
+        return popupRect.top + DipsToPixels(80, GetDpiForWindow(hwnd_));
+    }
+
+    // The flyout appears only when the selection holds more than its row can
+    // show: an image, or long/multiline text. Masked private rows, the
+    // placeholder, and unsupported items add nothing and get none. The text
+    // shown is the REGION around the first filter match — visible by
+    // construction, nothing to scroll.
+    void UpdatePreviewFlyout() {
+        const PopupItem* item = model_.SelectedItem();
+        const auto cached = (item != nullptr && item->kind == PopupItem::Kind::History)
+            ? displayCache_.find(item->historyId)
+            : displayCache_.end();
+        if (cached == displayCache_.end() || hwnd_ == nullptr || !IsWindowVisible(hwnd_)) {
+            previewWindow_.Hide();
+            return;
+        }
+
+        const auto& display = cached->second;
+        // Content only — the row already carries the who/when labels.
+        if (display.kind == ClipboardActivityPayloadKind::Image && display.imageData) {
+            previewWindow_.ShowImage(hwnd_, RowAnchorScreenY(), display.imageData);
+            return;
+        }
+
+        if (display.kind != ClipboardActivityPayloadKind::Text &&
+            display.kind != ClipboardActivityPayloadKind::Link) {
+            previewWindow_.Hide();
+            return;
+        }
+
+        const std::wstring& full =
+            display.detailText.empty() ? display.previewText : display.detailText;
+        if (full.find(L'\n') == std::wstring::npos && full.size() <= kRowFitChars) {
+            previewWindow_.Hide();  // the row already tells the whole story
+            return;
+        }
+
+        const std::wstring filter = filterBox_ ? std::wstring{ filterBox_.Text() } : std::wstring{};
+        std::size_t firstMatch = std::wstring::npos;
+        if (!filter.empty()) {
+            const auto matches = FindMatches(full, filter);
+            if (!matches.empty()) {
+                firstMatch = matches.front();
+            }
+        }
+        std::size_t begin = 0;
+        if (firstMatch != std::wstring::npos && firstMatch > kPreviewLeadChars) {
+            begin = firstMatch - kPreviewLeadChars;
+        }
+        std::wstring shown = full.substr(begin, kPreviewWindowChars);
+        const bool clippedFront = begin > 0;
+        const bool clippedBack = begin + shown.size() < full.size();
+        if (clippedFront) {
+            shown.insert(0, L"… ");
+        }
+        if (clippedBack) {
+            shown.append(L" …");
+        }
+        previewWindow_.ShowText(hwnd_, RowAnchorScreenY(), shown, filter);
+    }
+
+    void DismissHintToast() {
+        toastWindow_.Hide();
     }
 
     // ---- actions ----
@@ -787,6 +1356,10 @@ private:
             FocusFilterBox();
             return 0;
         case WM_DPICHANGED: {
+            // The satellites' geometry is stale at the new DPI; they re-derive
+            // it on their next show.
+            toastWindow_.Hide();
+            previewWindow_.Hide();
             const RECT* suggested = reinterpret_cast<const RECT*>(lParam);
             SetWindowPos(hwnd_, nullptr, suggested->left, suggested->top,
                 suggested->right - suggested->left, suggested->bottom - suggested->top,
@@ -848,6 +1421,8 @@ private:
     TextBlock filterHint_{ nullptr };
     ScrollViewer listScroll_{ nullptr };
     StackPanel listPanel_{ nullptr };
+    ToastWindow toastWindow_;
+    PreviewWindow previewWindow_;
     std::vector<Border> rowBorders_;
     std::unordered_map<uint64_t, ClipboardActivityDisplayItem> displayCache_;
     PopupModel model_;

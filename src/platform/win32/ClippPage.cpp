@@ -8,6 +8,8 @@
 #include "utils.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cwchar>
 #include <ctime>
 #include <memory>
@@ -38,8 +40,11 @@
 #include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Windows.UI.Xaml.Input.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
+#include <winrt/Windows.UI.Xaml.Media.Animation.h>
 #include <winrt/Windows.UI.Xaml.Media.Imaging.h>
 #include <winrt/base.h>
+
+#include "XamlImage.h"
 
 extern KeyManager g_keyManager;
 
@@ -51,6 +56,53 @@ constexpr double kActivityBubbleMaxWidth = 460.0;
 winrt::Windows::UI::Xaml::Media::SolidColorBrush MakeBrush(uint8_t alpha, uint8_t red, uint8_t green, uint8_t blue) {
     return winrt::Windows::UI::Xaml::Media::SolidColorBrush(
         winrt::Windows::UI::ColorHelper::FromArgb(alpha, red, green, blue));
+}
+
+// Hand-rolled list animations. ThemeTransitions (AddDelete / Reposition) turn
+// out not to run at all inside this XAML island, so the reshuffle drives
+// explicit storyboards instead — with EnableDependentAnimation forced so the
+// framework can't silently classify-and-skip them either.
+void AnimateRowSlide(winrt::Windows::UI::Xaml::UIElement const& element, double fromOffsetY) {
+    using namespace winrt::Windows::UI::Xaml;
+    using namespace winrt::Windows::UI::Xaml::Media;
+    using namespace winrt::Windows::UI::Xaml::Media::Animation;
+
+    TranslateTransform transform;
+    transform.Y(fromOffsetY);
+    element.RenderTransform(transform);
+
+    DoubleAnimation slide;
+    slide.From(fromOffsetY);
+    slide.To(0.0);
+    slide.Duration(DurationHelper::FromTimeSpan(std::chrono::milliseconds(200)));
+    slide.EnableDependentAnimation(true);
+    CubicEase ease;
+    ease.EasingMode(EasingMode::EaseOut);
+    slide.EasingFunction(ease);
+
+    Storyboard storyboard;
+    Storyboard::SetTarget(slide, transform);
+    Storyboard::SetTargetProperty(slide, L"Y");
+    storyboard.Children().Append(slide);
+    storyboard.Begin();
+}
+
+void AnimateRowEntrance(winrt::Windows::UI::Xaml::UIElement const& element) {
+    using namespace winrt::Windows::UI::Xaml;
+    using namespace winrt::Windows::UI::Xaml::Media::Animation;
+
+    element.Opacity(0.0);
+    DoubleAnimation fade;
+    fade.From(0.0);
+    fade.To(1.0);
+    fade.Duration(DurationHelper::FromTimeSpan(std::chrono::milliseconds(220)));
+    fade.EnableDependentAnimation(true);
+
+    Storyboard storyboard;
+    Storyboard::SetTarget(fade, element);
+    Storyboard::SetTargetProperty(fade, L"Opacity");
+    storyboard.Children().Append(fade);
+    storyboard.Begin();
 }
 
 std::wstring FormatActivityTime(std::chrono::system_clock::time_point timestamp) {
@@ -85,49 +137,6 @@ std::wstring PayloadKindLabel(ClipboardActivityPayloadKind kind) {
     }
 }
 
-winrt::Windows::UI::Xaml::Media::Imaging::BitmapImage BitmapFromImageBytes(
-    const std::vector<unsigned char>& bytes,
-    int32_t decodePixelWidth)
-{
-    using namespace winrt::Windows::Storage::Streams;
-    using namespace winrt::Windows::UI::Xaml::Media::Imaging;
-
-    BitmapImage bitmap;
-    if (bytes.empty()) {
-        return bitmap;
-    }
-
-    try {
-        // Decode at display size (DIPs) so large source images don't sit in the visual tree
-        // as full-resolution bitmaps. XAML scales DecodePixelWidth by the current DPI when
-        // DecodePixelType is Logical, and preserves aspect ratio when only width is set.
-        bitmap.DecodePixelType(DecodePixelType::Logical);
-        bitmap.DecodePixelWidth(decodePixelWidth);
-
-        // We need the image bytes inside an IRandomAccessStream that BitmapImage
-        // can decode from. The obvious path — DataWriter::WriteBytes +
-        // StoreAsync().get() — trips C++/WinRT's STA-blocking-wait assert in
-        // Debug builds because .get() on an IAsyncOperation while the caller is
-        // on the STA (UI) thread is *technically* a deadlock hazard, even when
-        // the underlying op is synchronous-in-practice (in-memory stream).
-        //
-        // Bypass the async wrapper by writing through the COM IStream interface
-        // adapter instead. ISequentialStream::Write is plain synchronous COM;
-        // no IAsyncOperation, no assert, no thread hop.
-        InMemoryRandomAccessStream stream;
-        winrt::com_ptr<IStream> rawStream;
-        winrt::check_hresult(::CreateStreamOverRandomAccessStream(
-            winrt::get_unknown(stream), IID_PPV_ARGS(rawStream.put())));
-        ULONG written = 0;
-        winrt::check_hresult(rawStream->Write(
-            bytes.data(), static_cast<ULONG>(bytes.size()), &written));
-        stream.Seek(0);
-        bitmap.SetSource(stream);
-    } catch (const winrt::hresult_error&) {
-    }
-
-    return bitmap;
-}
 }
 
 ClippPage::ClippPage(ClipboardActivityStore& activityStore, NavigateCallback showNetworkPage)
@@ -170,6 +179,7 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivitySection() {
     activityItemsPanel_.Orientation(Orientation::Vertical);
     activityItemsPanel_.Spacing(12);
     activityItemsPanel_.Padding(ThicknessHelper::FromLengths(24, 16, 24, 24));
+
 
     activityScroll_ = ScrollViewer();
     activityScroll_.HorizontalAlignment(HorizontalAlignment::Stretch);
@@ -554,6 +564,59 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t it
     return row;
 }
 
+// FLIP support: snapshot every row's panel-relative Y before a mutation...
+std::vector<ClippPage::RowPosition> ClippPage::CaptureRowPositions() {
+    std::vector<RowPosition> positions;
+    if (!activityItemsPanel_) {
+        return positions;
+    }
+    const auto children = activityItemsPanel_.Children();
+    const uint32_t count =
+        (std::min)(children.Size(), static_cast<uint32_t>(activityItemIDs_.size()));
+    positions.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        try {
+            const auto point = children.GetAt(i).as<winrt::Windows::UI::Xaml::UIElement>()
+                .TransformToVisual(activityItemsPanel_)
+                .TransformPoint(winrt::Windows::Foundation::Point{ 0, 0 });
+            positions.push_back({ activityItemIDs_[i], static_cast<double>(point.Y) });
+        } catch (const winrt::hresult_error&) {
+        }
+    }
+    return positions;
+}
+
+// ...then, after the mutation, lay out synchronously and slide every surviving
+// row from where it was to where it now is. Rows that didn't actually move
+// (delta ~ 0) are left alone; vanished ids simply aren't found.
+void ClippPage::AnimateRowsFromPositions(const std::vector<RowPosition>& oldPositions) {
+    if (!activityItemsPanel_) {
+        return;
+    }
+    activityItemsPanel_.UpdateLayout();
+    const auto children = activityItemsPanel_.Children();
+    for (const auto& old : oldPositions) {
+        const auto it = std::find(activityItemIDs_.begin(), activityItemIDs_.end(), old.itemID);
+        if (it == activityItemIDs_.end()) {
+            continue;
+        }
+        const auto index = static_cast<uint32_t>(it - activityItemIDs_.begin());
+        if (index >= children.Size()) {
+            continue;
+        }
+        try {
+            const auto element = children.GetAt(index).as<winrt::Windows::UI::Xaml::UIElement>();
+            const auto point = element.TransformToVisual(activityItemsPanel_)
+                .TransformPoint(winrt::Windows::Foundation::Point{ 0, 0 });
+            const double delta = old.y - static_cast<double>(point.Y);
+            if (std::fabs(delta) > 0.5) {
+                AnimateRowSlide(element, delta);
+            }
+        } catch (const winrt::hresult_error&) {
+        }
+    }
+}
+
 void ClippPage::RefreshActivityItems(const std::vector<ClipboardActivityItemHeader>& items) {
     if (!activityItemsPanel_) {
         return;
@@ -590,9 +653,12 @@ void ClippPage::AddActivityItem(uint64_t itemID) {
         return;
     }
 
+    const auto oldPositions = CaptureRowPositions();
     activityItemsPanel_.Children().InsertAt(0, row);
     activityItemIDs_.insert(activityItemIDs_.begin(), itemID);
     SetActivityEmptyMessageVisible(false);
+    AnimateRowsFromPositions(oldPositions);  // existing rows glide down
+    AnimateRowEntrance(row);
 
     if (shouldFollow) {
         ScrollActivityToTop();
@@ -610,10 +676,12 @@ void ClippPage::RemoveActivityItem(uint64_t itemID) {
         return;
     }
 
+    const auto oldPositions = CaptureRowPositions();
     const auto index = static_cast<uint32_t>(found - activityItemIDs_.begin());
     activityItemsPanel_.Children().RemoveAt(index);
     activityItemIDs_.erase(found);
     SetActivityEmptyMessageVisible(activityItemIDs_.empty());
+    AnimateRowsFromPositions(oldPositions);  // rows below glide up into the gap
 
     // Same focus re-anchor as MoveActivityItem: a removed focused row would
     // otherwise leave the island with null focus and a dead mouse wheel.
@@ -639,6 +707,10 @@ void ClippPage::MoveActivityItem(uint64_t itemID) {
         RemoveActivityItem(itemID);
         return;
     }
+
+    // FLIP: remember where every row sits before the mutation; the moved row
+    // itself is excluded implicitly (its id maps to a fresh element after).
+    const auto oldPositions = CaptureRowPositions();
 
     // Take the old row out WITHOUT forgetting peek state — the id (and the
     // user's peek choice) survives a relocation.
@@ -671,6 +743,8 @@ void ClippPage::MoveActivityItem(uint64_t itemID) {
     activityItemsPanel_.Children().InsertAt(insertIndex, row);
     activityItemIDs_.insert(activityItemIDs_.begin() + insertIndex, itemID);
     SetActivityEmptyMessageVisible(false);
+    AnimateRowsFromPositions(oldPositions);  // displaced rows glide; the mover
+    AnimateRowEntrance(row);                 // fades in at its destination
 
     // Removing the (typically just-clicked, focused) old row drops XAML focus
     // to null, which kills mouse-wheel routing in the island until something

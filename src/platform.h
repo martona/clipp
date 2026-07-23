@@ -9,12 +9,21 @@
 #include <vector>
 
 #ifdef _WIN32
-    #define WIN32_LEAN_AND_MEAN 
+    #define WIN32_LEAN_AND_MEAN
     #define NOMINMAX
     #include <windows.h>
     #include <WinSock2.h>
     #include <ws2tcpip.h>
     #include <conio.h>
+    // Legacy 16-bit alias (== GetTickCount) nothing here uses. Killed at the
+    // source because it poisons C++/WinRT: any winrt impl header processed
+    // while it's live bakes "GetTickCount" into Storyboard's declarations, and
+    // a later include of Windows.UI.Xaml.Media.Animation.h then fails with
+    // "GetCurrentTime is not a member". Per-TU #undefs can't fix that — the
+    // first winrt include usually arrives via another header, before them.
+    #ifdef GetCurrentTime
+    #undef GetCurrentTime
+    #endif
 #elif defined(__APPLE__)
     #include <CoreFoundation/CoreFoundation.h>
     #include <TargetConditionals.h>
