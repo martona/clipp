@@ -19,6 +19,7 @@
 #include "utils.h"
 
 #import <AppKit/AppKit.h>
+#import <ApplicationServices/ApplicationServices.h>
 #import <Carbon/Carbon.h>
 #import <dispatch/dispatch.h>
 
@@ -1362,12 +1363,51 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
     if (item == nullptr || !item->actionable) {
         return;
     }
+    bool applied = false;
     if (item->kind == PopupItem::Kind::History) {
-        clipp::ReshareActivityItem(item->historyId);
+        applied = clipp::ReshareActivityItem(item->historyId);
     } else {
-        clipp::MakeRegisterCurrent(item->registerName);
+        applied = clipp::MakeRegisterCurrent(item->registerName);
     }
+    // Shift held = make-current only, no keystroke (the escape hatch for
+    // apps that shouldn't receive a synthetic ⌘V).
+    const bool wantPaste = applied
+        && ([NSEvent modifierFlags] & NSEventModifierFlagShift) == 0;
     [self dismiss];
+    if (wantPaste) {
+        [self schedulePasteKeystroke];
+    }
+}
+
+// Post ⌘V to the frontmost app. The nonactivating panel never took the app's
+// focus, so the target is already frontmost — the only timing need is a beat
+// for our key panel to finish resigning. Requires the user to have granted
+// Accessibility (Privacy & Security); ungranted, the paste is skipped
+// silently and the clipboard is simply set (manual ⌘V works). The onboarding
+// flow for that grant is a separate, later step.
+- (void)schedulePasteKeystroke {
+    if (!AXIsProcessTrusted()) {
+        g_logger.log(__FUNCTION__, Logger::Level::Debug,
+                     "Paste keystroke skipped: accessibility permission not granted.");
+        return;
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.06 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        CGEventSourceRef source = CGEventSourceCreate(kCGEventSourceStateCombinedSessionState);
+        CGEventRef down = CGEventCreateKeyboardEvent(source, kVK_ANSI_V, true);
+        CGEventRef up = CGEventCreateKeyboardEvent(source, kVK_ANSI_V, false);
+        if (down != nullptr && up != nullptr) {
+            // Explicit flags: exactly Command, regardless of what the user
+            // still physically holds from the summon chord.
+            CGEventSetFlags(down, kCGEventFlagMaskCommand);
+            CGEventSetFlags(up, kCGEventFlagMaskCommand);
+            CGEventPost(kCGHIDEventTap, down);
+            CGEventPost(kCGHIDEventTap, up);
+        }
+        if (down != nullptr) CFRelease(down);
+        if (up != nullptr) CFRelease(up);
+        if (source != nullptr) CFRelease(source);
+    });
 }
 
 - (void)deleteSelected {

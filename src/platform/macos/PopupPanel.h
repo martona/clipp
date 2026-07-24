@@ -13,8 +13,10 @@
 // returns the keyboard to whoever had it. Mirrors the win32 popup's behavior:
 // PopupModel drives two columns (Registers | Clipboard), the filter field owns
 // the keyboard (launcher pattern), Enter/double-click makes the selection
-// current mesh-wide, and the toolbar fronts the shared ClipboardActions
-// (save / copy / rename / privacy / delete / undo).
+// current mesh-wide and then PASTES it (⌘V via CGEventPost — gated on the
+// Accessibility grant, silently skipped without it; Shift suppresses the
+// keystroke), and the toolbar fronts the shared ClipboardActions
+// (save / paste / rename / privacy / delete / undo).
 //
 // All entry points are main-thread. The panel is created lazily on first
 // summon and kept alive after.

@@ -380,6 +380,8 @@ elseif (APPLE)
         "-framework Carbon"
         # CABasicAnimation for the ClippPage FLIP list motion.
         "-framework QuartzCore"
+        # AXIsProcessTrusted + CGEventPost for the popup's paste keystroke.
+        "-framework ApplicationServices"
     )
 
     # CMake substitutes ${MACOSX_BUNDLE_*} target properties into Info.plist.in

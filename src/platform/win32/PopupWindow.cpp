@@ -195,6 +195,36 @@ Button MakeToolbarButton(const wchar_t* glyph, const wchar_t* tooltip) {
     return button;
 }
 
+// Send a clean Ctrl+V to whoever holds the keyboard. The physical modifier
+// state is scrubbed first: the user may still hold the summon chord, and a
+// held Win/Alt/Shift would corrupt the paste into Win+V / Alt+V /
+// paste-special. UIPI caveat (accepted for now): injection into an elevated
+// window silently does nothing without a uiAccess-signed binary.
+void InjectPasteChord() {
+    std::vector<INPUT> inputs;
+    const auto addKey = [&inputs](WORD vk, bool keyUp) {
+        INPUT input{};
+        input.type = INPUT_KEYBOARD;
+        input.ki.wVk = vk;
+        input.ki.dwFlags = keyUp ? KEYEVENTF_KEYUP : 0;
+        inputs.push_back(input);
+    };
+    const WORD modifiers[] = {
+        VK_LWIN, VK_RWIN, VK_MENU, VK_LMENU, VK_RMENU,
+        VK_SHIFT, VK_LSHIFT, VK_RSHIFT, VK_CONTROL, VK_LCONTROL, VK_RCONTROL,
+    };
+    for (const WORD vk : modifiers) {
+        if (GetAsyncKeyState(vk) & 0x8000) {
+            addKey(vk, true);
+        }
+    }
+    addKey(VK_CONTROL, false);
+    addKey('V', false);
+    addKey('V', true);
+    addKey(VK_CONTROL, true);
+    SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT));
+}
+
 // ---- companion windows ----
 // Both are WS_EX_NOACTIVATE satellites of the popup: they can never take the
 // keyboard home away from the filter box, never trip the popup's
@@ -662,6 +692,7 @@ private:
             }
         }
 
+        CancelPasteInjection();  // a re-summon supersedes any pending paste
         previousForeground_ = GetForegroundWindow();
 
         RebuildFromStores();
@@ -1770,12 +1801,59 @@ private:
         if (item == nullptr || !item->actionable) {
             return;
         }
+        bool applied = false;
         if (item->kind == PopupItem::Kind::History) {
-            clipp::ReshareActivityItem(item->historyId);
+            applied = clipp::ReshareActivityItem(item->historyId);
         } else {
-            clipp::MakeRegisterCurrent(item->registerName);
+            applied = clipp::MakeRegisterCurrent(item->registerName);
         }
+        // Shift held = make-current only, no keystroke (the escape hatch for
+        // apps that shouldn't receive a synthetic Ctrl+V).
+        const bool wantPaste = applied && (GetKeyState(VK_SHIFT) & 0x8000) == 0;
+        const HWND pasteTarget = previousForeground_;
         Dismiss(/*restoreFocus=*/true);
+        if (wantPaste && pasteTarget != nullptr && IsWindow(pasteTarget)) {
+            BeginPasteInjection(pasteTarget);
+        }
+    }
+
+    // The paste keystroke fires only once the restored target actually holds
+    // the foreground — never into a bystander window. Activation isn't
+    // instant after SetForegroundWindow, so poll briefly and give up
+    // gracefully (the clipboard is set either way; a manual Ctrl+V works).
+    void BeginPasteInjection(HWND target) {
+        pasteTargetWindow_ = target;
+        pasteRetriesLeft_ = 8;  // 8 x 25ms of activation grace
+        SetTimer(hwnd_, kPasteTimerId, 25, nullptr);
+    }
+
+    void CancelPasteInjection() {
+        if (pasteTargetWindow_ != nullptr) {
+            KillTimer(hwnd_, kPasteTimerId);
+            pasteTargetWindow_ = nullptr;
+        }
+    }
+
+    void OnPasteTimer() {
+        const HWND target = pasteTargetWindow_;
+        if (target == nullptr || !IsWindow(target)) {
+            CancelPasteInjection();
+            return;
+        }
+        const HWND foreground = GetForegroundWindow();
+        const bool targetFocused = foreground != nullptr
+            && (foreground == target
+                || GetAncestor(foreground, GA_ROOTOWNER) == GetAncestor(target, GA_ROOTOWNER));
+        if (targetFocused) {
+            CancelPasteInjection();
+            InjectPasteChord();
+            return;
+        }
+        if (--pasteRetriesLeft_ <= 0) {
+            g_logger.log(__FUNCTION__, Logger::Level::Debug,
+                L"Paste keystroke skipped: the target window never regained focus.");
+            CancelPasteInjection();
+        }
     }
 
     void DeleteSelected() {
@@ -2127,6 +2205,12 @@ private:
             // the way back to the filter box, or the keyboard lands nowhere.
             FocusFilterBox();
             return 0;
+        case WM_TIMER:
+            if (wParam == kPasteTimerId) {
+                OnPasteTimer();
+                return 0;
+            }
+            return DefWindowProcW(hwnd_, msg, wParam, lParam);
         case WM_DPICHANGED: {
             // The satellites' geometry is stale at the new DPI; they re-derive
             // it on their next show.
@@ -2214,6 +2298,11 @@ private:
     std::map<std::string, RegisterRowInfo> registerCache_;
     std::optional<std::string> editingRegister_;
     bool registersPresent_ = false;
+    // Pending paste keystroke: armed at dismissal, fired once the target
+    // regains the foreground (kPasteTimerId polls).
+    static constexpr UINT_PTR kPasteTimerId = 1;
+    HWND pasteTargetWindow_ = nullptr;
+    int pasteRetriesLeft_ = 0;
     PopupModel model_;
     std::size_t watcherID_ = 0;
 };

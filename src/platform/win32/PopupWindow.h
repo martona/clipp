@@ -5,14 +5,13 @@
 #include "platform.h"
 
 // The visual-paste popup: a borderless, topmost XAML-island window summoned by
-// the global hotkey (or the tray menu). Shows the activity stream (registers
-// group arrives with the promote flow), filters as you type, Enter/double-click
-// makes the selected item current everywhere (MRU re-share), Del deletes it
-// everywhere, Esc closes. Focus contract: the previously-focused window is
-// captured at summon and restored on dismissal, so the user's manual Ctrl+V
-// lands where they were — the later synthetic-paste feature builds on exactly
-// this flow. Light-dismiss on focus loss deliberately does NOT restore focus
-// (the user just gave it to someone else).
+// the global hotkey (or the tray menu). Shows registers + the activity stream,
+// filters as you type, Enter/double-click makes the selected item current
+// everywhere (MRU re-share) and then PASTES it — a synthetic Ctrl+V delivered
+// once the previously-focused window (captured at summon, restored on
+// dismissal) actually regains the foreground; Shift suppresses the keystroke.
+// Del deletes everywhere, Esc closes. Light-dismiss on focus loss deliberately
+// does NOT restore focus (the user just gave it to someone else).
 //
 // All entry points are UI-thread (the tray message loop's thread). The window
 // is created lazily on first summon and kept alive after (the XAML island's
