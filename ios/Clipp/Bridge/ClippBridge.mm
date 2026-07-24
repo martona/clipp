@@ -30,6 +30,10 @@
 #include <vector>
 
 #include "../../../src/ClipboardActivityStore.cpp"
+// DisplayItem lives in the display half of the store (split so the container
+// half compiles dependency-free in the unit tests); both halves ride along
+// here the usual include-the-cpp way.
+#include "../../../src/ClipboardActivityDisplay.cpp"
 #include "../../../src/ClippGlyphBadge.mm"
 
 extern Settings g_settings;
