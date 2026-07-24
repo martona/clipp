@@ -23,6 +23,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -215,30 +216,35 @@ std::wstring RelativeAgeText(uint64_t unixWallMs) {
             std::chrono::milliseconds{ unixWallMs }) });
 }
 
-// Toolbar button: a compact icon+label pair, mouse-only by design (IsTabStop
-// off — the filter box keeps the keyboard, and every action has a key).
-Button MakeToolbarButton(const wchar_t* glyph, const wchar_t* label) {
+// Toolbar button: icon-only with a tooltip naming the action and its key.
+// Mouse-only by design (IsTabStop off — the filter box keeps the keyboard,
+// and every action has a key equivalent).
+Button MakeToolbarButton(const wchar_t* glyph, const wchar_t* tooltip) {
     FontIcon icon;
     icon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
     icon.Glyph(winrt::hstring{ glyph });
-    icon.FontSize(12);
-    icon.VerticalAlignment(VerticalAlignment::Center);
-    TextBlock text;
-    text.Text(winrt::hstring{ label });
-    text.FontSize(12);
-    text.VerticalAlignment(VerticalAlignment::Center);
-    StackPanel content;
-    content.Orientation(Orientation::Horizontal);
-    content.Spacing(6);
-    content.Children().Append(icon);
-    content.Children().Append(text);
+    icon.FontSize(14);
     Button button;
-    button.Content(content);
-    button.Padding(ThicknessHelper::FromLengths(10, 4, 10, 4));
+    button.Content(icon);
+    button.Padding(ThicknessHelper::FromLengths(8, 5, 8, 5));
     button.MinWidth(0);
     button.MinHeight(0);
     button.IsTabStop(false);
+    ToolTipService::SetToolTip(button, winrt::box_value(winrt::hstring{ tooltip }));
     return button;
+}
+
+// Trailing shell newlines (a piped `clipp copy`) must not force a flyout for
+// one short line: the fits-in-a-row decision looks at the whitespace-trimmed
+// core. The flyout, when it does earn its keep, shows the value untrimmed.
+bool TextFitsInRow(const std::wstring& full) {
+    const auto first = full.find_first_not_of(L" \t\r\n");
+    if (first == std::wstring::npos) {
+        return true;  // nothing but whitespace: nothing a flyout could add
+    }
+    const auto last = full.find_last_not_of(L" \t\r\n");
+    const std::wstring_view core(full.data() + first, last - first + 1);
+    return core.find(L'\n') == std::wstring_view::npos && core.size() <= kRowFitChars;
 }
 
 // ---- companion windows ----
@@ -663,9 +669,7 @@ public:
                 DismissHintToast();
                 const int delta = GET_WHEEL_DELTA_WPARAM(msg->wParam);
                 constexpr double kPixelsPerNotch = 96.0;
-                const double islandX =
-                    (cursor.x - rect.left) * 96.0 / GetDpiForWindow(hwnd_);
-                const auto target = WheelTargetAt(islandX);
+                const auto target = WheelTarget();
                 const double offset =
                     target.VerticalOffset() - (static_cast<double>(delta) / WHEEL_DELTA) * kPixelsPerNotch;
                 target.ChangeView(nullptr,
@@ -734,8 +738,8 @@ private:
 
         // The pre-show RenderList ran while the window was still hidden, so
         // the flyout's visibility guard suppressed it; give the initial
-        // selection its preview now.
-        UpdatePreviewFlyout();
+        // selection its preview now (deferred — the rows arrange first).
+        SchedulePreviewFlyoutUpdate();
 
         BeginActivityNotifications();
     }
@@ -846,18 +850,19 @@ private:
         root.Background(PopupBackgroundBrush());
         ApplyTextControlThemeResources(root);
 
+        // Rows: identity header, action toolbar, search field, columns.
         RowDefinition headerRow;
         headerRow.Height(GridLength{ 0, GridUnitType::Auto });
+        RowDefinition toolbarRow;
+        toolbarRow.Height(GridLength{ 0, GridUnitType::Auto });
         RowDefinition filterRow;
         filterRow.Height(GridLength{ 0, GridUnitType::Auto });
         RowDefinition listRow;
         listRow.Height(GridLength{ 1, GridUnitType::Star });
-        RowDefinition toolbarRow;
-        toolbarRow.Height(GridLength{ 0, GridUnitType::Auto });
         root.RowDefinitions().Append(headerRow);
+        root.RowDefinitions().Append(toolbarRow);
         root.RowDefinitions().Append(filterRow);
         root.RowDefinitions().Append(listRow);
-        root.RowDefinitions().Append(toolbarRow);
 
         // Identity bar: a surprise borderless window on a stray keystroke
         // should say what it is, and offer an obvious way out.
@@ -941,8 +946,45 @@ private:
         Grid filterHost;
         filterHost.Children().Append(filterBox_);
         filterHost.Children().Append(filterHint_);
-        Grid::SetRow(filterHost, 1);
+        Grid::SetRow(filterHost, 2);
         root.Children().Append(filterHost);
+
+        // Action toolbar, above the search field: icon-only, tooltipped.
+        // Save promotes the selected clipboard item into a register (enabled
+        // only there); Rename and the privacy toggle act on registers only;
+        // Copy mirrors Enter; Delete mirrors Del.
+        StackPanel toolbar;
+        toolbar.Orientation(Orientation::Horizontal);
+        toolbar.Spacing(4);
+        toolbar.Margin(ThicknessHelper::FromLengths(12, 6, 12, 0));
+        saveButton_ = MakeToolbarButton(L"\xE74E", CLP_W(CLP_UI_POPUP_SAVE_TIP));
+        saveButton_.Click([this](auto const&, auto const&) {
+            SaveSelected();
+        });
+        copyButton_ = MakeToolbarButton(L"\xE8C8", CLP_W(CLP_UI_POPUP_COPY_TIP));
+        copyButton_.Click([this](auto const&, auto const&) {
+            ActivateSelected();
+        });
+        renameButton_ = MakeToolbarButton(L"\xE8AC", CLP_W(CLP_UI_POPUP_RENAME_TIP));
+        renameButton_.Click([this](auto const&, auto const&) {
+            BeginRenameSelected();
+        });
+        privateButton_ = MakeToolbarButton(L"\xE72E", CLP_W(CLP_UI_POPUP_MAKE_PRIVATE));
+        privateButton_.Click([this](auto const&, auto const&) {
+            ToggleSelectedRegisterPrivate();
+        });
+        deleteButton_ = MakeToolbarButton(L"\xE74D", CLP_W(CLP_UI_POPUP_DELETE_TIP));
+        deleteButton_.Click([this](auto const&, auto const&) {
+            DeleteSelected();
+            FocusFilterBox();
+        });
+        toolbar.Children().Append(saveButton_);
+        toolbar.Children().Append(copyButton_);
+        toolbar.Children().Append(renameButton_);
+        toolbar.Children().Append(privateButton_);
+        toolbar.Children().Append(deleteButton_);
+        Grid::SetRow(toolbar, 1);
+        root.Children().Append(toolbar);
 
         // Two star columns: Registers (left, collapsed to zero width until any
         // exist) and the Clipboard stream (right). The column labels appear
@@ -1008,35 +1050,8 @@ private:
         Grid::SetColumn(historyColumn, 1);
         columnsGrid.Children().Append(historyColumn);
 
-        Grid::SetRow(columnsGrid, 2);
+        Grid::SetRow(columnsGrid, 3);
         root.Children().Append(columnsGrid);
-
-        // Action toolbar. Save promotes the selected clipboard item into a
-        // register (and is enabled only there); Copy mirrors Enter; Delete
-        // mirrors Del. All mouse affordances for the keyboard-first actions.
-        StackPanel toolbar;
-        toolbar.Orientation(Orientation::Horizontal);
-        toolbar.HorizontalAlignment(HorizontalAlignment::Right);
-        toolbar.Spacing(8);
-        toolbar.Margin(ThicknessHelper::FromLengths(12, 0, 12, 10));
-        saveButton_ = MakeToolbarButton(L"\xE74E", CLP_W(CLP_UI_POPUP_SAVE));
-        saveButton_.Click([this](auto const&, auto const&) {
-            SaveSelected();
-        });
-        copyButton_ = MakeToolbarButton(L"\xE8C8", CLP_W(CLP_UI_COPY));
-        copyButton_.Click([this](auto const&, auto const&) {
-            ActivateSelected();
-        });
-        deleteButton_ = MakeToolbarButton(L"\xE74D", CLP_W(CLP_UI_DELETE));
-        deleteButton_.Click([this](auto const&, auto const&) {
-            DeleteSelected();
-            FocusFilterBox();
-        });
-        toolbar.Children().Append(saveButton_);
-        toolbar.Children().Append(copyButton_);
-        toolbar.Children().Append(deleteButton_);
-        Grid::SetRow(toolbar, 3);
-        root.Children().Append(toolbar);
 
         // Second wheel net, this one inside XAML: wherever the island routes
         // the wheel (focused element, pointer target), it bubbles here —
@@ -1050,13 +1065,12 @@ private:
                         return;
                     }
                     DismissHintToast();
-                    const auto point = args.GetCurrentPoint(nullptr);
-                    const int delta = point.Properties().MouseWheelDelta();
+                    const int delta = args.GetCurrentPoint(nullptr).Properties().MouseWheelDelta();
                     if (delta == 0) {
                         return;
                     }
                     constexpr double kPixelsPerNotch = 96.0;
-                    const auto target = WheelTargetAt(point.Position().X);
+                    const auto target = WheelTarget();
                     const double offset = target.VerticalOffset()
                         - (static_cast<double>(delta) / WHEEL_DELTA) * kPixelsPerNotch;
                     target.ChangeView(nullptr,
@@ -1171,7 +1185,8 @@ private:
         std::shared_ptr<const std::vector<unsigned char>> imageData;  // image stream, or null
         bool contentRow = false;   // previewText is real content: find matches + re-windows it
         bool isPrivate = false;
-        uint64_t writtenWallMs = 0;
+        // Age = last touch (reads AND writes), the same clock `clipp ls` shows.
+        uint64_t touchedWallMs = 0;
     };
 
     void RebuildFromStores() {
@@ -1186,7 +1201,7 @@ private:
             RegisterRowInfo info;
             info.name = Utf8ToWideString(rec.name);
             info.isPrivate = rec.IsPrivate();
-            info.writtenWallMs = rec.written.wallMs;
+            info.touchedWallMs = rec.touched.wallMs;
 
             PopupItem item;
             item.kind = PopupItem::Kind::Register;
@@ -1504,7 +1519,7 @@ private:
 
         if (cached != registerCache_.end()) {
             TextBlock meta;
-            std::wstring metaText = RelativeAgeText(cached->second.writtenWallMs);
+            std::wstring metaText = RelativeAgeText(cached->second.touchedWallMs);
             if (cached->second.isPrivate) {
                 metaText += L" · " CLP_W(CLP_UI_PRIVATE_BADGE);
             }
@@ -1544,6 +1559,15 @@ private:
             BeginRenameSelected();
         });
         menu.Items().Append(renameItem);
+        MenuFlyoutItem privateItem;
+        privateItem.Text(winrt::hstring{
+            cached != registerCache_.end() && cached->second.isPrivate
+                ? CLP_W(CLP_UI_POPUP_MAKE_PUBLIC) : CLP_W(CLP_UI_POPUP_MAKE_PRIVATE) });
+        privateItem.Click([this, index](auto const&, auto const&) {
+            model_.SelectAt(PopupModel::Group::Registers, index);
+            ToggleSelectedRegisterPrivate();
+        });
+        menu.Items().Append(privateItem);
         MenuFlyoutItem deleteItem;
         deleteItem.Text(winrt::hstring{ CLP_W(CLP_UI_DELETE) });
         deleteItem.Click([this, index](auto const&, auto const&) {
@@ -1574,7 +1598,25 @@ private:
         paint(registerRowBorders_, PopupModel::Group::Registers);
         paint(rowBorders_, PopupModel::Group::History);
         UpdateToolbar();
-        UpdatePreviewFlyout();
+        SchedulePreviewFlyoutUpdate();
+    }
+
+    // The flyout anchors to the selected row's on-screen position, which for
+    // freshly built rows only exists after the next layout pass — defer one
+    // dispatcher hop (coalesced) instead of measuring mid-render.
+    void SchedulePreviewFlyoutUpdate() {
+        if (!dispatcher_) {
+            UpdatePreviewFlyout();
+            return;
+        }
+        if (previewUpdatePending_) {
+            return;
+        }
+        previewUpdatePending_ = true;
+        dispatcher_.TryEnqueue([this]() {
+            previewUpdatePending_ = false;
+            UpdatePreviewFlyout();
+        });
     }
 
     void UpdateToolbar() {
@@ -1590,11 +1632,32 @@ private:
                     || kind == ClipboardActivityPayloadKind::PrivateText;
             }
         }
+        const bool registerSelected =
+            item != nullptr && item->kind == PopupItem::Kind::Register;
+        bool selectedPrivate = false;
+        if (registerSelected) {
+            const auto cached = registerCache_.find(item->registerName);
+            selectedPrivate = cached != registerCache_.end() && cached->second.isPrivate;
+        }
         if (saveButton_) {
             saveButton_.IsEnabled(canSave);
         }
         if (copyButton_) {
             copyButton_.IsEnabled(item != nullptr && item->actionable);
+        }
+        if (renameButton_) {
+            renameButton_.IsEnabled(registerSelected);
+        }
+        if (privateButton_) {
+            privateButton_.IsEnabled(registerSelected);
+            // The button shows the ACTION: lock a public register, unlock a
+            // private one.
+            if (const auto icon = privateButton_.Content().try_as<FontIcon>()) {
+                icon.Glyph(selectedPrivate ? L"\xE785" : L"\xE72E");
+            }
+            ToolTipService::SetToolTip(privateButton_, winrt::box_value(winrt::hstring{
+                selectedPrivate ? CLP_W(CLP_UI_POPUP_MAKE_PUBLIC)
+                                : CLP_W(CLP_UI_POPUP_MAKE_PRIVATE) }));
         }
         if (deleteButton_) {
             deleteButton_.IsEnabled(item != nullptr);
@@ -1613,9 +1676,22 @@ private:
                 ? registerRowBorders_ : rowBorders_;
             if (selection->index < borders.size()) {
                 try {
-                    const auto transform = borders[selection->index].TransformToVisual(nullptr);
-                    const auto point = transform.TransformPoint(winrt::Windows::Foundation::Point{ 0, 0 });
-                    return popupRect.top + DipsToPixels(point.Y, GetDpiForWindow(hwnd_));
+                    auto point = borders[selection->index].TransformToVisual(nullptr)
+                        .TransformPoint(winrt::Windows::Foundation::Point{ 0, 0 });
+                    // A freshly built row that hasn't been arranged yet
+                    // transforms to ~0 — a Y no real row can have (header,
+                    // toolbar and filter sit above them all). A dispatcher
+                    // hop is NOT reliably after the arrange pass, so force
+                    // one (the ClippPage FLIP animation's proven pattern)
+                    // and ask again; only then fall back.
+                    if (point.Y < 1.0f) {
+                        borders[selection->index].UpdateLayout();
+                        point = borders[selection->index].TransformToVisual(nullptr)
+                            .TransformPoint(winrt::Windows::Foundation::Point{ 0, 0 });
+                    }
+                    if (point.Y >= 1.0f) {
+                        return popupRect.top + DipsToPixels(point.Y, GetDpiForWindow(hwnd_));
+                    }
                 } catch (const winrt::hresult_error&) {
                 }
             }
@@ -1678,7 +1754,7 @@ private:
                 return;
             }
             const std::wstring& full = info.fullText;
-            if (full.find(L'\n') == std::wstring::npos && full.size() <= kRowFitChars) {
+            if (TextFitsInRow(full)) {
                 previewWindow_.Hide();  // the row already tells the whole story
                 return;
             }
@@ -1707,7 +1783,7 @@ private:
 
         const std::wstring& full =
             display.detailText.empty() ? display.previewText : display.detailText;
-        if (full.find(L'\n') == std::wstring::npos && full.size() <= kRowFitChars) {
+        if (TextFitsInRow(full)) {
             previewWindow_.Hide();  // the row already tells the whole story
             return;
         }
@@ -1718,17 +1794,17 @@ private:
         toastWindow_.Hide();
     }
 
-    // The scroll viewer owning an island-space X: the registers column claims
-    // everything left of the history scroll's origin.
-    ScrollViewer WheelTargetAt(double islandXDips) {
-        if (registersPresent_ && registerScroll_ && listScroll_) {
-            try {
-                const auto origin = listScroll_.TransformToVisual(nullptr)
-                    .TransformPoint(winrt::Windows::Foundation::Point{ 0, 0 });
-                if (islandXDips < origin.X) {
-                    return registerScroll_;
-                }
-            } catch (const winrt::hresult_error&) {
+    // The scroll viewer under the mouse. Both wheel nets ask HERE rather than
+    // trusting message/event coordinates (island pointer positions proved
+    // unreliable): the live cursor position against the window midline — the
+    // two columns are equal stars, so the seam IS the midline.
+    ScrollViewer WheelTarget() {
+        if (registersPresent_ && registerScroll_ && hwnd_ != nullptr) {
+            POINT cursor{};
+            RECT rect{};
+            if (GetCursorPos(&cursor) && GetWindowRect(hwnd_, &rect)
+                && cursor.x < (rect.left + rect.right) / 2) {
+                return registerScroll_;
             }
         }
         return listScroll_;
@@ -1807,9 +1883,27 @@ private:
         RefreshAfterRegisterOp(name);  // renders the new row as the inline editor
     }
 
+    // Flip the selected register's PRIVATE flag mesh-wide.
+    void ToggleSelectedRegisterPrivate() {
+        DismissHintToast();
+        CommitOrCancelRename();
+        const PopupItem* item = model_.SelectedItem();
+        if (item == nullptr || item->kind != PopupItem::Kind::Register) {
+            return;
+        }
+        const std::string name = item->registerName;  // survives the refresh below
+        const auto cached = registerCache_.find(name);
+        const bool isPrivate = cached != registerCache_.end() && cached->second.isPrivate;
+        if (clipp::SetRegisterPrivate(name, !isPrivate)) {
+            RefreshAfterRegisterOp(name);
+            FocusFilterBox();
+        }
+    }
+
     // ---- inline rename ----
 
     void BeginRenameSelected() {
+        DismissHintToast();
         if (editingRegister_.has_value()) {
             return;  // already editing
         }
@@ -2120,8 +2214,11 @@ private:
     ColumnDefinition regColumnDef_{ nullptr };
     Button saveButton_{ nullptr };
     Button copyButton_{ nullptr };
+    Button renameButton_{ nullptr };
+    Button privateButton_{ nullptr };
     Button deleteButton_{ nullptr };
     TextBox nameEditor_{ nullptr };
+    bool previewUpdatePending_ = false;
     ToastWindow toastWindow_;
     PreviewWindow previewWindow_;
     std::vector<Border> rowBorders_;

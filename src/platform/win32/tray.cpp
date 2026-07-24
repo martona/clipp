@@ -5,6 +5,8 @@
 
 #include <Windows.h>
 #include <shellapi.h>
+#include <commctrl.h>
+#pragma comment(lib, "comctl32.lib")
 #include <cwchar>
 #include <chrono>
 #include <cstring>
@@ -410,14 +412,14 @@ void TrayIconMessageLoop(bool showNetworkPageOnStartup) {
     g_nid.uID = 1; // Arbitrary ID for this app's icon
     g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     g_nid.uCallbackMessage = WM_TRAYICON;
-    g_nid.hIcon = static_cast<HICON>(LoadImageW(
-        hInstance,
-        MAKEINTRESOURCEW(IDI_CLIPP_ICON),
-        IMAGE_ICON,
-        GetSystemMetrics(SM_CXSMICON),
-        GetSystemMetrics(SM_CYSMICON),
-        LR_DEFAULTCOLOR | LR_SHARED));
-    if (!g_nid.hIcon) {
+    // LoadIconMetric, NOT LoadImage(LR_SHARED): the shared cache returns
+    // whatever size was loaded for this resource FIRST — the dialog class's
+    // 32x32 LoadIconW here — and the shell then rescales it into a blurry
+    // tray icon. LoadIconMetric always decodes the .ico frame matching the
+    // small-icon metric at the current DPI (the file carries 16/20/24/...).
+    if (FAILED(LoadIconMetric(hInstance, MAKEINTRESOURCEW(IDI_CLIPP_ICON),
+                              LIM_SMALL, &g_nid.hIcon))
+        || g_nid.hIcon == nullptr) {
         g_nid.hIcon = LoadIconW(NULL, IDI_APPLICATION);
     }
 

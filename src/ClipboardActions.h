@@ -61,6 +61,11 @@ bool SaveActivityItemAsRegister(uint64_t itemID, const std::string& name, bool m
 // when there was no live register to delete.
 bool DeleteRegisterEverywhere(const std::string& name);
 
+// Toolbar privacy toggle: rewrite the register in place with PRIVATE set or
+// cleared. Same name, same value — an LWW overwrite of the one record slot,
+// no tombstone involved. Broadcasts the result.
+bool SetRegisterPrivate(const std::string& name, bool isPrivate);
+
 // Inline-rename commit: upsert the record under the new name, then tombstone
 // the old one — both broadcast, in that order, so a crash in between leaves
 // the register duplicated rather than lost. Same-name is a successful no-op;

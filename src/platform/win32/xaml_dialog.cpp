@@ -20,6 +20,8 @@
 #include <string>
 
 #include <Windows.h>
+#include <commctrl.h>
+#pragma comment(lib, "comctl32.lib")
 #ifdef GetCurrentTime
 #undef GetCurrentTime
 #endif
@@ -804,18 +806,19 @@ private:
         wc.lpfnWndProc = WndProc;
         wc.hInstance = hInstance;
         wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-        wc.hIcon = LoadIconW(hInstance, MAKEINTRESOURCEW(IDI_CLIPP_ICON));
-        wc.hIconSm = static_cast<HICON>(LoadImageW(
-            hInstance,
-            MAKEINTRESOURCEW(IDI_CLIPP_ICON),
-            IMAGE_ICON,
-            GetSystemMetrics(SM_CXSMICON),
-            GetSystemMetrics(SM_CYSMICON),
-            LR_DEFAULTCOLOR | LR_SHARED));
-        if (!wc.hIcon) {
+        // LoadIconMetric for both class icons — never LoadImage(LR_SHARED):
+        // the shared cache hands back the first-loaded size for the resource
+        // regardless of what is asked for, which is how the tray icon ended
+        // up showing a rescaled 32x32. Metric loads pick the exact .ico
+        // frame for the current DPI, each as a private handle.
+        if (FAILED(LoadIconMetric(hInstance, MAKEINTRESOURCEW(IDI_CLIPP_ICON),
+                                  LIM_LARGE, &wc.hIcon))
+            || wc.hIcon == nullptr) {
             wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
         }
-        if (!wc.hIconSm) {
+        if (FAILED(LoadIconMetric(hInstance, MAKEINTRESOURCEW(IDI_CLIPP_ICON),
+                                  LIM_SMALL, &wc.hIconSm))
+            || wc.hIconSm == nullptr) {
             wc.hIconSm = wc.hIcon;
         }
         wc.lpszClassName = kDialogClassName;

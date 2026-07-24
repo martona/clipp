@@ -223,6 +223,25 @@ bool DeleteRegisterEverywhere(const std::string& name) {
     return true;
 }
 
+bool SetRegisterPrivate(const std::string& name, bool isPrivate) {
+    auto rec = g_registerStore.Read(name);  // live values only
+    if (!rec.has_value()) {
+        return false;
+    }
+    uint8_t flags = static_cast<uint8_t>(rec->flags & RegisterFlags::BinaryHeader);
+    if (isPrivate) {
+        flags |= RegisterFlags::Private;
+    }
+    HostId localHost{};
+    g_settings.getHostID(localHost);
+    if (g_registerStore.UpsertWithFlags(name, std::move(rec->value), flags, localHost)
+        != RegisterStore::WriteResult::Ok) {
+        return false;
+    }
+    BroadcastRegisterRecord(name);
+    return true;
+}
+
 bool RenameRegister(const std::string& oldName, const std::string& newName) {
     if (newName == oldName) {
         return true;
