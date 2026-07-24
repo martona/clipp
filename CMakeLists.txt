@@ -229,8 +229,21 @@ if (WIN32)
         target_compile_options(darkmode32 PRIVATE /utf-8)
     endif()
 
+    # The GUI binary compiles NO command line -- clipp.com (clipp-win32-cli) owns
+    # that now, and this exe's CLI path was dead in production anyway (it's uiAccess,
+    # so it can't be terminal-launched; the MSIX GUI starts arg-less via the Start
+    # tile). Dropping Cli.cpp takes CLI11 (header-only, instantiated only there) and
+    # OneShotPeer.cpp (Windows: referenced only by Cli.cpp) out of the binary.
+    # InitializeSodium moved to SodiumInit.cpp so it survives the cut; CLIPP_NO_CLI
+    # makes main() skip cli::Run and go straight to the GUI. (macOS keeps Cli.cpp --
+    # there the single app binary IS the CLI; this is a Windows-only trim.)
+    set(CLIPP_WIN32_GUI_SOURCES ${CLIPP_COMMON_SOURCES})
+    list(REMOVE_ITEM CLIPP_WIN32_GUI_SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/Cli.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/OneShotPeer.cpp"
+    )
     add_executable(clipp-win32 WIN32
-        ${CLIPP_COMMON_SOURCES}
+        ${CLIPP_WIN32_GUI_SOURCES}
         ${CLIPP_WIN32_PLATFORM_SOURCES}
         "${CLIPP_WIN32_RC}"
         # CMake auto-recognizes .manifest sources and routes them to mt.exe
@@ -242,7 +255,7 @@ if (WIN32)
     )
     clipp_apply_common_target_settings(clipp-win32)
     set_target_properties(clipp-win32 PROPERTIES OUTPUT_NAME "clipp")
-    target_compile_definitions(clipp-win32 PRIVATE WIN32 UNICODE _UNICODE _CONSOLE)
+    target_compile_definitions(clipp-win32 PRIVATE WIN32 UNICODE _UNICODE _CONSOLE CLIPP_NO_CLI)
     target_link_libraries(clipp-win32 PRIVATE
         darkmode32
         windowsapp

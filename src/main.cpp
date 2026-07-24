@@ -10,7 +10,12 @@
 #include "platform.h"
 
 #include "Logger.h"
+#include "SodiumInit.h"
+#ifndef CLIPP_NO_CLI
 #include "Cli.h"
+#else
+#include "platform/win32/CrashHandler.h"  // cli::Run installs this on the other builds
+#endif
 #include "KeyManager.h"
 #include "Settings.h"
 #include "utils.h"
@@ -311,12 +316,12 @@ int main(int argc, char* argv[]) {
     signal(SIGPIPE, SIG_IGN);
 #endif
 
-    // True when we were launched from a console/terminal (the console companion
-    // clipp.com natively has one; the GUI binary attaches its launching terminal's
-    // if any). On macOS/Linux stdout is a TTY. Drives the command-line vs GUI
-    // disposition in cli::Run below.
+    // True when we were launched from a console/terminal (attach it so GUI logs
+    // reach the terminal on the dev `clipp.exe gui` path; on macOS/Linux stdout is
+    // a TTY). Drives the command-line vs GUI disposition in cli::Run below.
     const bool launchedFromConsole = InitializeConsoleOutput();
 
+#ifndef CLIPP_NO_CLI
     // Command-line mode: if a recognized command (copy/paste/key/hostid) ran,
     // return its exit code. A bare launch from a console prints usage and exits; a
     // bare launch with no console (double-click / autostart) or an explicit `gui`
@@ -326,6 +331,16 @@ int main(int argc, char* argv[]) {
     if (auto commandExitCode = clipp::cli::Run(argc, argv, launchedFromConsole)) {
         return *commandExitCode;
     }
+#else
+    // The Windows GUI binary compiles no CLI (clipp.com owns the command line):
+    // there is no command to dispatch, so always proceed to the GUI, ignoring argv
+    // (nothing else reads it). cli::Run installs the crash handler in the other
+    // builds; do it explicitly here so the GUI still writes minidumps.
+    (void)launchedFromConsole;
+    (void)argc;
+    (void)argv;
+    clipp::InstallCrashHandler();
+#endif
 
 #ifdef CLIPP_NO_DAEMON
     // No GUI/daemon to fall through to (headless Linux CLI or the Windows clipp.com

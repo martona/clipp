@@ -29,6 +29,7 @@
 #include "RegisterStore.h"
 #include "RegisterWire.h"
 #include "Settings.h"
+#include "SodiumInit.h"
 #include "platform.h"
 #include "platform/DataPaths.h"
 #include "version.h"
@@ -51,15 +52,6 @@
 //   g_settings   -> Settings.h
 //   g_keyManager -> KeyManager.h
 //   g_logger     -> Logger.h
-
-bool InitializeSodium() {
-    if (sodium_init() < 0) {
-        g_logger.log(__FUNCTION__, Logger::Level::Error, "Fatal: libsodium failed to initialize!");
-        return false;
-    }
-    g_logger.log(__FUNCTION__, Logger::Level::Debug, "libsodium initialized successfully.");
-    return true;
-}
 
 namespace {
 

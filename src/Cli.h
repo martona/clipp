@@ -2,10 +2,8 @@
 
 #include <optional>
 
-// Initializes libsodium. Defined in Cli.cpp and shared by both the command-line
-// path and the GUI startup in main(), so there is exactly one definition and the
-// process initializes sodium exactly once on whichever path runs.
-bool InitializeSodium();
+// InitializeSodium() moved to SodiumInit.h so the Windows GUI (which compiles no
+// CLI) still has it without linking this TU.
 
 namespace clipp::cli {
 
