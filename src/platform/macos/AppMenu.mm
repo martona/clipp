@@ -16,6 +16,7 @@
 #include "version.h"
 
 #import "CliPathBanner.h"
+#import "PopupPanel.h"
 
 #import <AppKit/AppKit.h>
 #import <ServiceManagement/ServiceManagement.h>
@@ -963,6 +964,9 @@ static void MacClipboardFlowHandler(clipp::ClipboardFlowDirection direction, con
     if (self) {
         [self buildMenu];
         clipp::SetClipboardFlowHandler(&MacClipboardFlowHandler);
+        // Global popup hotkeys (⌘Insert + ⌃⌘V); the menu item covers keyboards
+        // that can type neither.
+        clipp::InstallPopupHotkeys();
     }
     return self;
 }
@@ -1001,6 +1005,16 @@ static void MacClipboardFlowHandler(clipp::ClipboardFlowDirection direction, con
                                                keyEquivalent:@""];
     openItem.target = self;
     [menu addItem:openItem];
+
+    // The visual-paste popup; the shown equivalent (⌃⌘V) doubles as the
+    // discoverable spelling of the global hotkey.
+    NSMenuItem* historyItem = [[NSMenuItem alloc] initWithTitle:CLP_NS(CLP_UI_TRAY_POPUP)
+                                                         action:@selector(openHistoryPopup:)
+                                                  keyEquivalent:@"v"];
+    historyItem.keyEquivalentModifierMask =
+        NSEventModifierFlagControl | NSEventModifierFlagCommand;
+    historyItem.target = self;
+    [menu addItem:historyItem];
 
     [menu addItem:[NSMenuItem separatorItem]];
 
@@ -1123,6 +1137,11 @@ static void MacClipboardFlowHandler(clipp::ClipboardFlowDirection direction, con
     [self openClippPage:kPageClipp];
 }
 
+- (void)openHistoryPopup:(id)sender {
+    (void)sender;
+    clipp::TogglePopupPanel();
+}
+
 - (void)openClippPage:(NSInteger)pageIndex {
     if (self.mainWindowController == nil) {
         self.mainWindowController = [[ClippMainWindowController alloc] init];
@@ -1178,6 +1197,8 @@ static void StopMacOSAppOnMainThread(bool unregisterAutoStart) {
     if (unregisterAutoStart && !IsMacAppStoreBuild()) {
         UnregisterClippAutoStart();
     }
+
+    clipp::DestroyPopupPanel();
 
     NSApplication* app = [NSApplication sharedApplication];
     [app stop:nil];

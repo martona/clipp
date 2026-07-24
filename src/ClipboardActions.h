@@ -100,8 +100,11 @@ std::string PendingUndoLabel();
 // re-stamped upsert + REGW broadcast; an activity item is re-inserted locally
 // and broadcast on the SYNC_REPLAY lane, so no live clipboard anywhere is
 // touched (undoing a delete is not a paste). False (still armed, retryable)
-// when nothing is armed or the store refuses the write.
-bool TryUndoDelete();
+// when nothing is armed or the store refuses the write. On an ACTIVITY
+// restore, `restoredActivityItemID` (when non-null) receives the re-inserted
+// item's store id so the caller can select and reveal it; untouched on a
+// register restore (the caller already knows the name via PendingUndoLabel).
+bool TryUndoDelete(uint64_t* restoredActivityItemID = nullptr);
 
 // Forget the armed delete without restoring.
 void DisarmUndoDelete();

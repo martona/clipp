@@ -375,6 +375,11 @@ elseif (APPLE)
         "-framework AppKit"
         "-framework ServiceManagement"
         "-framework Network"
+        # Global popup hotkeys (RegisterEventHotKey — the sanctioned, MAS-safe,
+        # no-accessibility-permission API lives in Carbon's HIToolbox).
+        "-framework Carbon"
+        # CABasicAnimation for the ClippPage FLIP list motion.
+        "-framework QuartzCore"
     )
 
     # CMake substitutes ${MACOSX_BUNDLE_*} target properties into Info.plist.in

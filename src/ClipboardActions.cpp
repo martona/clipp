@@ -286,7 +286,7 @@ std::string PendingUndoLabel() {
     return g_undoSlot.kind == UndoSlotKind::Register ? g_undoSlot.registerName : std::string{};
 }
 
-bool TryUndoDelete() {
+bool TryUndoDelete(uint64_t* restoredActivityItemID) {
     if (g_undoSlot.kind == UndoSlotKind::Register) {
         // Re-stamped upsert: name, content, privacy, binariness and origin
         // device come back exactly; the written clock is minted fresh so the
@@ -312,7 +312,10 @@ bool TryUndoDelete() {
         restored->meta = g_undoSlot.payload->meta;
         restored->meta.flags &= ~(NetworkDefs::CLPM_FLAG_SYNC_REPLAY | NetworkDefs::CLPM_FLAG_RELAY);
         restored->SetEncodedBytes(std::vector<unsigned char>(g_undoSlot.payload->EncodedBytes()));
-        g_clipboardActivityStore.Add(restored);
+        const uint64_t restoredID = g_clipboardActivityStore.Add(restored);
+        if (restoredActivityItemID != nullptr) {
+            *restoredActivityItemID = restoredID;
+        }
 
         // Mesh half on the SYNC_REPLAY lane: receivers re-insert the history
         // entry and leave their live clipboards alone — undoing a delete is

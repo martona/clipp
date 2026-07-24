@@ -11,13 +11,16 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cwchar>
 #include <ctime>
 #include <string>
 #include <utility>
+#include <vector>
 
 #import <AppKit/AppKit.h>
 #import <ImageIO/ImageIO.h>
+#import <QuartzCore/QuartzCore.h>
 #import <dispatch/dispatch.h>
 
 extern KeyManager g_keyManager;
@@ -509,6 +512,75 @@ NSTextField* MakeActivityPreviewLabel(NSString* text, bool selectable) {
     label.lineBreakMode = NSLineBreakByTruncatingTail;
     return label;
 }
+
+// ---- FLIP list motion ----
+// Same lesson as the win32 page (where ThemeTransitions silently did nothing):
+// never trust implicit animation for list reshuffles — capture positions,
+// mutate, force layout, then slide survivors from old to new with a purely
+// presentational layer animation (auto layout keeps owning the real frames).
+
+std::vector<std::pair<uint64_t, CGFloat>> CaptureRowPositions(
+        NSStackView* panel, const std::vector<uint64_t>& ids) {
+    std::vector<std::pair<uint64_t, CGFloat>> positions;
+    if (panel == nil) {
+        return positions;
+    }
+    [panel layoutSubtreeIfNeeded];
+    NSArray<NSView*>* rows = panel.arrangedSubviews;
+    const NSUInteger count = (std::min)(rows.count, static_cast<NSUInteger>(ids.size()));
+    positions.reserve(count);
+    for (NSUInteger i = 0; i < count; ++i) {
+        positions.emplace_back(ids[i], rows[i].frame.origin.y);
+    }
+    return positions;
+}
+
+void AnimateRowSlide(NSView* row, CGFloat fromDelta) {
+    row.wantsLayer = YES;
+    CABasicAnimation* slide = [CABasicAnimation animationWithKeyPath:@"transform.translation.y"];
+    // Frames were captured in the flipped document space (y grows down); a
+    // layer-backed view's layer follows its view's geometry, so the delta
+    // applies sign-verbatim. If motion ever runs inverted, negate here.
+    slide.fromValue = @(fromDelta);
+    slide.toValue = @0;
+    slide.duration = 0.2;
+    slide.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
+    [row.layer removeAnimationForKey:@"clipp-flip"];
+    [row.layer addAnimation:slide forKey:@"clipp-flip"];
+}
+
+void AnimateRowEntrance(NSView* row) {
+    if (row == nil) {
+        return;
+    }
+    row.wantsLayer = YES;
+    CABasicAnimation* fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
+    fade.fromValue = @0.0;
+    fade.toValue = @1.0;
+    fade.duration = 0.22;
+    [row.layer addAnimation:fade forKey:@"clipp-entrance"];
+}
+
+void AnimateRowsFromPositions(NSStackView* panel, const std::vector<uint64_t>& ids,
+        const std::vector<std::pair<uint64_t, CGFloat>>& oldPositions) {
+    if (panel == nil || oldPositions.empty()) {
+        return;
+    }
+    [panel layoutSubtreeIfNeeded];
+    NSArray<NSView*>* rows = panel.arrangedSubviews;
+    const NSUInteger count = (std::min)(rows.count, static_cast<NSUInteger>(ids.size()));
+    for (NSUInteger i = 0; i < count; ++i) {
+        for (const auto& old : oldPositions) {
+            if (old.first == ids[i]) {
+                const CGFloat delta = old.second - rows[i].frame.origin.y;
+                if (std::fabs(delta) > 0.5) {
+                    AnimateRowSlide(rows[i], delta);
+                }
+                break;
+            }
+        }
+    }
+}
 }
 
 struct MacOSClippPageState {
@@ -820,6 +892,7 @@ void MacOSClippPage::AddActivityItem(uint64_t itemID) {
     }
 
     const bool shouldFollow = IsActivityNearTop();
+    const auto oldPositions = CaptureRowPositions(activityItemsPanel_, activityItemIDs_);
     NSView* row = BuildActivityRow(itemID);
     if (row == nil) {
         return;
@@ -838,6 +911,10 @@ void MacOSClippPage::AddActivityItem(uint64_t itemID) {
     activityItemIDs_.insert(activityItemIDs_.begin(), itemID);
     SetActivityEmptyMessageVisible(false);
 
+    // Survivors glide down to make room; the newcomer fades in on top.
+    AnimateRowsFromPositions(activityItemsPanel_, activityItemIDs_, oldPositions);
+    AnimateRowEntrance(row);
+
     if (shouldFollow) {
         ScrollActivityToTop();
     }
@@ -854,6 +931,8 @@ void MacOSClippPage::RemoveActivityItem(uint64_t itemID) {
         return;
     }
 
+    const auto oldPositions = CaptureRowPositions(activityItemsPanel_, activityItemIDs_);
+
     const NSUInteger index = static_cast<NSUInteger>(found - activityItemIDs_.begin());
     NSArray<NSView*>* rows = activityItemsPanel_.arrangedSubviews;
     if (index < rows.count) {
@@ -866,6 +945,9 @@ void MacOSClippPage::RemoveActivityItem(uint64_t itemID) {
     }
     activityItemIDs_.erase(found);
     SetActivityEmptyMessageVisible(activityItemIDs_.empty());
+
+    // Survivors glide up into the vacated space.
+    AnimateRowsFromPositions(activityItemsPanel_, activityItemIDs_, oldPositions);
 }
 
 void MacOSClippPage::MoveActivityItem(uint64_t itemID) {
@@ -878,6 +960,8 @@ void MacOSClippPage::MoveActivityItem(uint64_t itemID) {
         RemoveActivityItem(itemID);
         return;
     }
+
+    const auto oldPositions = CaptureRowPositions(activityItemsPanel_, activityItemIDs_);
 
     // Take the old row out WITHOUT forgetting peek state — the id (and the
     // user's peek choice) survives a relocation.
@@ -923,6 +1007,11 @@ void MacOSClippPage::MoveActivityItem(uint64_t itemID) {
     }
     activityItemIDs_.insert(activityItemIDs_.begin() + static_cast<std::ptrdiff_t>(insertIndex), itemID);
     SetActivityEmptyMessageVisible(false);
+
+    // The relocation IS the story here (an MRU re-share): survivors glide to
+    // their new slots and the moved row fades in at its destination.
+    AnimateRowsFromPositions(activityItemsPanel_, activityItemIDs_, oldPositions);
+    AnimateRowEntrance(row);
 
     if (shouldFollow) {
         ScrollActivityToTop();

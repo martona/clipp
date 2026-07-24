@@ -7,6 +7,7 @@
 #include "ClipboardFormat.h"
 #include "Logger.h"
 #include "PopupModel.h"
+#include "PopupTextMatch.h"
 #include "RegisterStore.h"
 #include "RegisterWire.h"
 #include "Settings.h"
@@ -70,28 +71,18 @@ constexpr wchar_t kPreviewClassName[] = L"ClippPopupPreview";
 constexpr double kPopupWidthDips = 420;
 constexpr double kPopupWidthTwoColDips = 700;
 constexpr double kPopupHeightDips = 540;
-// XAML row construction is the expensive part of a re-render; cap what one
-// filter state shows (per column) and say so with a hint row instead of
-// silently cropping.
-constexpr std::size_t kMaxRenderedRows = 40;
-// Register content previews mirror the history display's cap (the file-local
-// kMaxTextPreviewCharacters in ClipboardActivityDisplay.cpp): find matches
-// against this window, the flyout against the full value.
-constexpr std::size_t kRegisterPreviewChars = 640;
 // Preview flyout geometry: content-sized, up to these caps.
 constexpr double kPreviewMaxTextWidthDips = 360;
 constexpr double kPreviewMaxHeightDips = 520;
-// Row text is one ellipsized line; text this short fits it and earns no flyout.
-constexpr std::size_t kRowFitChars = 60;
-// Re-windowing: context kept ahead of the first match in a row / the flyout,
-// and how much total text the flyout shows. The match is visible by
-// construction — no scrolling machinery to go wrong.
-constexpr std::size_t kRowMatchLeadChars = 12;
-constexpr std::size_t kPreviewLeadChars = 400;
-constexpr std::size_t kPreviewWindowChars = 2500;
-// A one-letter filter over a big text can hit thousands of times; the
-// highlighter caps out rather than drowning the renderer.
-constexpr std::size_t kMaxHighlightRanges = 200;
+
+// The find / re-window / fits-in-a-row text rules are shared with the macOS
+// shell (PopupTextMatch.h) so both popups match and window identically.
+using popupfind::kMaxRenderedRows;
+using popupfind::kRegisterPreviewChars;
+using popupfind::kRowFitChars;
+using popupfind::kMaxHighlightRanges;
+using popupfind::FindMatches;
+using popupfind::TextFitsInRow;
 
 int DipsToPixels(double dips, UINT dpi) {
     return static_cast<int>(std::ceil(dips * dpi / USER_DEFAULT_SCREEN_DPI));
@@ -143,36 +134,6 @@ void ApplyTextControlThemeResources(FrameworkElement const& element) {
             resources.Insert(winrt::box_value(winrt::hstring{ alias.target }), brush);
         }
     }
-}
-
-wchar_t FoldAscii(wchar_t ch) {
-    return (ch >= L'A' && ch <= L'Z') ? static_cast<wchar_t>(ch - L'A' + L'a') : ch;
-}
-
-// Non-overlapping, ASCII-case-insensitive occurrences of `needle` — the same
-// folding the model's filter uses, so what matched is what lights up.
-std::vector<std::size_t> FindMatches(const std::wstring& text, const std::wstring& needle) {
-    std::vector<std::size_t> matches;
-    if (needle.empty() || needle.size() > text.size()) {
-        return matches;
-    }
-    for (std::size_t start = 0; start + needle.size() <= text.size(); ++start) {
-        bool hit = true;
-        for (std::size_t i = 0; i < needle.size(); ++i) {
-            if (FoldAscii(text[start + i]) != FoldAscii(needle[i])) {
-                hit = false;
-                break;
-            }
-        }
-        if (hit) {
-            matches.push_back(start);
-            if (matches.size() >= kMaxHighlightRanges) {
-                break;
-            }
-            start += needle.size() - 1;
-        }
-    }
-    return matches;
 }
 
 // Amber find-highlight with forced dark text: readable over both themes.
@@ -232,19 +193,6 @@ Button MakeToolbarButton(const wchar_t* glyph, const wchar_t* tooltip) {
     button.IsTabStop(false);
     ToolTipService::SetToolTip(button, winrt::box_value(winrt::hstring{ tooltip }));
     return button;
-}
-
-// Trailing shell newlines (a piped `clipp copy`) must not force a flyout for
-// one short line: the fits-in-a-row decision looks at the whitespace-trimmed
-// core. The flyout, when it does earn its keep, shows the value untrimmed.
-bool TextFitsInRow(const std::wstring& full) {
-    const auto first = full.find_first_not_of(L" \t\r\n");
-    if (first == std::wstring::npos) {
-        return true;  // nothing but whitespace: nothing a flyout could add
-    }
-    const auto last = full.find_last_not_of(L" \t\r\n");
-    const std::wstring_view core(full.data() + first, last - first + 1);
-    return core.find(L'\n') == std::wstring_view::npos && core.size() <= kRowFitChars;
 }
 
 // ---- companion windows ----
@@ -961,8 +909,8 @@ private:
         saveButton_.Click([this](auto const&, auto const&) {
             SaveSelected();
         });
-        copyButton_ = MakeToolbarButton(L"\xE8C8", CLP_W(CLP_UI_POPUP_COPY_TIP));
-        copyButton_.Click([this](auto const&, auto const&) {
+        pasteButton_ = MakeToolbarButton(L"\xE77F", CLP_W(CLP_UI_PASTE));
+        pasteButton_.Click([this](auto const&, auto const&) {
             ActivateSelected();
         });
         renameButton_ = MakeToolbarButton(L"\xE8AC", CLP_W(CLP_UI_POPUP_RENAME_TIP));
@@ -983,7 +931,7 @@ private:
             UndoLastDelete();
         });
         toolbar.Children().Append(saveButton_);
-        toolbar.Children().Append(copyButton_);
+        toolbar.Children().Append(pasteButton_);
         toolbar.Children().Append(renameButton_);
         toolbar.Children().Append(privateButton_);
         toolbar.Children().Append(deleteButton_);
@@ -1384,11 +1332,8 @@ private:
         // both matching and highlighting. A content match past the single-line
         // ellipsis would be invisible, so re-window the text around the first
         // match instead of scrolling anything.
-        if (contentRow && !model_.Filter().empty()) {
-            const auto matches = FindMatches(previewText, model_.Filter());
-            if (!matches.empty() && matches.front() > kRowMatchLeadChars) {
-                previewText = L"…" + previewText.substr(matches.front() - kRowMatchLeadChars);
-            }
+        if (contentRow) {
+            previewText = popupfind::ReWindowRowText(std::move(previewText), model_.Filter());
         }
         preview.Text(winrt::hstring{ previewText });
         preview.TextTrimming(TextTrimming::CharacterEllipsis);
@@ -1423,13 +1368,13 @@ private:
         });
 
         MenuFlyout menu;
-        MenuFlyoutItem copyItem;
-        copyItem.Text(winrt::hstring{ CLP_W(CLP_UI_COPY) });
-        copyItem.Click([this, index](auto const&, auto const&) {
+        MenuFlyoutItem pasteItem;
+        pasteItem.Text(winrt::hstring{ CLP_W(CLP_UI_PASTE) });
+        pasteItem.Click([this, index](auto const&, auto const&) {
             model_.SelectAt(PopupModel::Group::History, index);
             ActivateSelected();
         });
-        menu.Items().Append(copyItem);
+        menu.Items().Append(pasteItem);
         MenuFlyoutItem deleteItem;
         deleteItem.Text(winrt::hstring{ CLP_W(CLP_UI_DELETE) });
         deleteItem.Click([this, index](auto const&, auto const&) {
@@ -1515,11 +1460,8 @@ private:
             previewText = L" ";
         }
         const bool contentRow = cached != registerCache_.end() && cached->second.contentRow;
-        if (contentRow && !model_.Filter().empty()) {
-            const auto matches = FindMatches(previewText, model_.Filter());
-            if (!matches.empty() && matches.front() > kRowMatchLeadChars) {
-                previewText = L"…" + previewText.substr(matches.front() - kRowMatchLeadChars);
-            }
+        if (contentRow) {
+            previewText = popupfind::ReWindowRowText(std::move(previewText), model_.Filter());
         }
         preview.Text(winrt::hstring{ previewText });
         preview.TextTrimming(TextTrimming::CharacterEllipsis);
@@ -1559,13 +1501,13 @@ private:
         });
 
         MenuFlyout menu;
-        MenuFlyoutItem copyItem;
-        copyItem.Text(winrt::hstring{ CLP_W(CLP_UI_COPY) });
-        copyItem.Click([this, index](auto const&, auto const&) {
+        MenuFlyoutItem pasteItem;
+        pasteItem.Text(winrt::hstring{ CLP_W(CLP_UI_PASTE) });
+        pasteItem.Click([this, index](auto const&, auto const&) {
             model_.SelectAt(PopupModel::Group::Registers, index);
             ActivateSelected();
         });
-        menu.Items().Append(copyItem);
+        menu.Items().Append(pasteItem);
         MenuFlyoutItem renameItem;
         renameItem.Text(winrt::hstring{ CLP_W(CLP_UI_POPUP_RENAME) });
         renameItem.Click([this, index](auto const&, auto const&) {
@@ -1656,8 +1598,8 @@ private:
         if (saveButton_) {
             saveButton_.IsEnabled(canSave);
         }
-        if (copyButton_) {
-            copyButton_.IsEnabled(item != nullptr && item->actionable);
+        if (pasteButton_) {
+            pasteButton_.IsEnabled(item != nullptr && item->actionable);
         }
         if (renameButton_) {
             renameButton_.IsEnabled(registerSelected);
@@ -1731,26 +1673,7 @@ private:
     // construction, nothing to scroll.
     void ShowTextFlyoutWindowed(const std::wstring& full, bool preferLeft) {
         const std::wstring filter = filterBox_ ? std::wstring{ filterBox_.Text() } : std::wstring{};
-        std::size_t firstMatch = std::wstring::npos;
-        if (!filter.empty()) {
-            const auto matches = FindMatches(full, filter);
-            if (!matches.empty()) {
-                firstMatch = matches.front();
-            }
-        }
-        std::size_t begin = 0;
-        if (firstMatch != std::wstring::npos && firstMatch > kPreviewLeadChars) {
-            begin = firstMatch - kPreviewLeadChars;
-        }
-        std::wstring shown = full.substr(begin, kPreviewWindowChars);
-        const bool clippedFront = begin > 0;
-        const bool clippedBack = begin + shown.size() < full.size();
-        if (clippedFront) {
-            shown.insert(0, L"… ");
-        }
-        if (clippedBack) {
-            shown.append(L" …");
-        }
+        const std::wstring shown = popupfind::WindowAroundFirstMatch(full, filter);
         previewWindow_.ShowText(hwnd_, RowAnchorScreenY(), shown, filter, preferLeft);
     }
 
@@ -1911,16 +1834,38 @@ private:
         RefreshAfterRegisterOp(name);  // renders the new row as the inline editor
     }
 
-    // Restore the last delete (register or activity item) mesh-wide. The
-    // activity restore lands via the store watcher; the register one needs
-    // the explicit refresh — running both unconditionally covers either.
+    // Restore the last delete (register or activity item) mesh-wide, then
+    // select the resurrected item and bring it into view — the whole point
+    // is showing the user their data is back.
     void UndoLastDelete() {
         DismissHintToast();
         CommitOrCancelRename();
-        if (!clipp::TryUndoDelete()) {
+        const auto undoKind = clipp::PendingUndoKind();
+        const std::string restoredRegister = clipp::PendingUndoLabel();
+        uint64_t restoredItemID = 0;
+        if (!clipp::TryUndoDelete(&restoredItemID)) {
             return;
         }
-        RefreshAfterRegisterOp(std::nullopt);
+        RebuildFromStores();
+        UpdateColumnLayout();
+        if (undoKind == clipp::UndoSlotKind::Register) {
+            const auto& regs = model_.VisibleRegisters();
+            for (std::size_t i = 0; i < regs.size(); ++i) {
+                if (regs[i]->registerName == restoredRegister) {
+                    model_.SelectAt(PopupModel::Group::Registers, i);
+                    break;
+                }
+            }
+        } else if (undoKind == clipp::UndoSlotKind::Activity && restoredItemID != 0) {
+            const auto& history = model_.VisibleHistory();
+            for (std::size_t i = 0; i < history.size(); ++i) {
+                if (history[i]->historyId == restoredItemID) {
+                    model_.SelectAt(PopupModel::Group::History, i);
+                    break;
+                }
+            }
+        }
+        RenderList();  // RenderHighlight inside brings the selection into view
         FocusFilterBox();
     }
 
@@ -2254,7 +2199,7 @@ private:
     TextBlock historyLabel_{ nullptr };
     ColumnDefinition regColumnDef_{ nullptr };
     Button saveButton_{ nullptr };
-    Button copyButton_{ nullptr };
+    Button pasteButton_{ nullptr };
     Button renameButton_{ nullptr };
     Button privateButton_{ nullptr };
     Button deleteButton_{ nullptr };
