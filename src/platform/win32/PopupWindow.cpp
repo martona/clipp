@@ -978,11 +978,16 @@ private:
             DeleteSelected();
             FocusFilterBox();
         });
+        undoButton_ = MakeToolbarButton(L"\xE7A7", CLP_W(CLP_UI_POPUP_UNDO_TIP));
+        undoButton_.Click([this](auto const&, auto const&) {
+            UndoLastDelete();
+        });
         toolbar.Children().Append(saveButton_);
         toolbar.Children().Append(copyButton_);
         toolbar.Children().Append(renameButton_);
         toolbar.Children().Append(privateButton_);
         toolbar.Children().Append(deleteButton_);
+        toolbar.Children().Append(undoButton_);
         Grid::SetRow(toolbar, 1);
         root.Children().Append(toolbar);
 
@@ -1150,6 +1155,15 @@ private:
             // 's' keeps flowing into the filter.
             if ((GetKeyState(VK_CONTROL) & 0x8000) != 0) {
                 SaveSelected();
+                args.Handled(true);
+            }
+            return;
+        case VirtualKey::Z:
+            // Ctrl+Z restores the last delete while one is armed; otherwise
+            // the TextBox keeps its own text-undo of the filter.
+            if ((GetKeyState(VK_CONTROL) & 0x8000) != 0
+                && clipp::PendingUndoKind() != clipp::UndoSlotKind::None) {
+                UndoLastDelete();
                 args.Handled(true);
             }
             return;
@@ -1662,6 +1676,20 @@ private:
         if (deleteButton_) {
             deleteButton_.IsEnabled(item != nullptr);
         }
+        if (undoButton_) {
+            const auto undoKind = clipp::PendingUndoKind();
+            undoButton_.IsEnabled(undoKind != clipp::UndoSlotKind::None);
+            // Name the victim when we can — "what comes back?" is the whole
+            // question this button answers.
+            std::wstring tip = CLP_W(CLP_UI_POPUP_UNDO_TIP);
+            if (undoKind == clipp::UndoSlotKind::Register) {
+                const std::wstring name = Utf8ToWideString(clipp::PendingUndoLabel());
+                if (!name.empty()) {
+                    tip = CLP_W(CLP_UI_POPUP_UNDO_OF_PREFIX) L"\"" + name + L"\" (Ctrl+Z)";
+                }
+            }
+            ToolTipService::SetToolTip(undoButton_, winrt::box_value(winrt::hstring{ tip }));
+        }
     }
 
     // Screen Y of the selected row's top edge — the flyout's anchor. The
@@ -1881,6 +1909,19 @@ private:
         editingRegister_ = name;
         model_.EnterEditMode();
         RefreshAfterRegisterOp(name);  // renders the new row as the inline editor
+    }
+
+    // Restore the last delete (register or activity item) mesh-wide. The
+    // activity restore lands via the store watcher; the register one needs
+    // the explicit refresh — running both unconditionally covers either.
+    void UndoLastDelete() {
+        DismissHintToast();
+        CommitOrCancelRename();
+        if (!clipp::TryUndoDelete()) {
+            return;
+        }
+        RefreshAfterRegisterOp(std::nullopt);
+        FocusFilterBox();
     }
 
     // Flip the selected register's PRIVATE flag mesh-wide.
@@ -2217,6 +2258,7 @@ private:
     Button renameButton_{ nullptr };
     Button privateButton_{ nullptr };
     Button deleteButton_{ nullptr };
+    Button undoButton_{ nullptr };
     TextBox nameEditor_{ nullptr };
     bool previewUpdatePending_ = false;
     ToastWindow toastWindow_;

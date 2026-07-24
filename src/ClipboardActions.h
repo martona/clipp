@@ -72,4 +72,38 @@ bool SetRegisterPrivate(const std::string& name, bool isPrivate);
 // an invalid target name or a vanished source fails.
 bool RenameRegister(const std::string& oldName, const std::string& newName);
 
+// ---- Single-slot delete undo ----
+// The popup's "deleted the wrong thing" safety net: the LAST successful user
+// delete (register or activity item) can be restored, with its user-visible
+// metadata — origin device, privacy, content, and for activity items the
+// original event guid and timestamp (it returns to its chronological slot) —
+// intact. CRDT clocks are necessarily re-stamped on a register restore (an
+// original `written` would lose LWW to the delete's own tombstone), so its
+// `ls` age resets.
+//
+// The slot is REPLACED by a newer delete and DISARMED by any other successful
+// user-initiated mutation in this file (re-share, make-current, save, rename,
+// privacy toggle) — not because the restore would stop working, but because a
+// lit Undo after unrelated edits would advertise a general undo that doesn't
+// exist. Ambient mutations (incoming mesh traffic, the "" clipboard mirror)
+// never touch it. UI-thread only, like the actions themselves.
+enum class UndoSlotKind { None, Register, Activity };
+
+// What's armed (drives the button's enabled state).
+UndoSlotKind PendingUndoKind();
+
+// UTF-8 label of what a restore would bring back: the register name, or ""
+// for an activity item (tooltips fall back to a generic line).
+std::string PendingUndoLabel();
+
+// Restore the armed delete mesh-wide and disarm. A register comes back via a
+// re-stamped upsert + REGW broadcast; an activity item is re-inserted locally
+// and broadcast on the SYNC_REPLAY lane, so no live clipboard anywhere is
+// touched (undoing a delete is not a paste). False (still armed, retryable)
+// when nothing is armed or the store refuses the write.
+bool TryUndoDelete();
+
+// Forget the armed delete without restoring.
+void DisarmUndoDelete();
+
 }

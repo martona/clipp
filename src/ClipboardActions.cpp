@@ -78,6 +78,20 @@ void BroadcastRegisterRecord(const std::string& name) {
     }
 }
 
+// The one-deep undo slot (see the header for the arming/disarming contract).
+// UI-thread only — every reader and writer is a user-initiated UI action.
+struct UndoSlot {
+    UndoSlotKind kind = UndoSlotKind::None;
+    // Register snapshot: the user-visible identity a restore reproduces.
+    std::string registerName;
+    std::string registerValue;
+    uint8_t registerValueFlags = 0;
+    HostId registerOrigin{};
+    // Activity snapshot: the payload outlives its store removal via this ref.
+    std::shared_ptr<const ClipboardPayload> payload;
+};
+UndoSlot g_undoSlot;
+
 }  // namespace
 
 bool ReshareActivityItem(uint64_t itemID) {
@@ -110,6 +124,7 @@ bool ReshareActivityItem(uint64_t itemID) {
 
     // The store Add inside sees the same guid with a newer ts -> relocate.
     ApplyAndBroadcastPayload(std::move(clone));
+    DisarmUndoDelete();  // a re-share is a mutation: the undo offer would mislead
     return true;
 }
 
@@ -125,6 +140,12 @@ bool DeleteActivityItemEverywhere(uint64_t itemID) {
     if (!g_clipboardActivityStore.Remove(itemID)) {
         return false;
     }
+
+    // Arm the undo slot (replacing an earlier delete): the payload reference
+    // keeps the item alive past its store removal.
+    g_undoSlot = UndoSlot{};
+    g_undoSlot.kind = UndoSlotKind::Activity;
+    g_undoSlot.payload = stored;
 
     const bool guidIsZero = std::all_of(guid.begin(), guid.end(),
         [](uint8_t b) { return b == 0; });
@@ -177,6 +198,7 @@ bool MakeRegisterCurrent(const std::string& name) {
         g_settings.nextOriginSequenceNumber());
 
     ApplyAndBroadcastPayload(std::make_shared<const ClipboardPayload>(std::move(payload)));
+    DisarmUndoDelete();
     return true;
 }
 
@@ -212,12 +234,25 @@ bool SaveActivityItemAsRegister(uint64_t itemID, const std::string& name, bool m
         return false;
     }
     BroadcastRegisterRecord(name);
+    DisarmUndoDelete();
     return true;
 }
 
 bool DeleteRegisterEverywhere(const std::string& name) {
+    // Snapshot before the tombstone lands (the touch is harmless); this is
+    // what the undo slot would bring back.
+    const auto rec = g_registerStore.Read(name);
     if (g_registerStore.Delete(name) != RegisterStore::DeleteResult::Deleted) {
         return false;
+    }
+    if (rec.has_value()) {
+        g_undoSlot = UndoSlot{};
+        g_undoSlot.kind = UndoSlotKind::Register;
+        g_undoSlot.registerName = rec->name;
+        g_undoSlot.registerValue = rec->value;
+        g_undoSlot.registerValueFlags = static_cast<uint8_t>(
+            rec->flags & (RegisterFlags::Private | RegisterFlags::BinaryHeader));
+        g_undoSlot.registerOrigin = rec->originHostId;
     }
     BroadcastRegisterRecord(name);  // GetForBroadcast surfaces the fresh tombstone
     return true;
@@ -239,7 +274,64 @@ bool SetRegisterPrivate(const std::string& name, bool isPrivate) {
         return false;
     }
     BroadcastRegisterRecord(name);
+    DisarmUndoDelete();
     return true;
+}
+
+UndoSlotKind PendingUndoKind() {
+    return g_undoSlot.kind;
+}
+
+std::string PendingUndoLabel() {
+    return g_undoSlot.kind == UndoSlotKind::Register ? g_undoSlot.registerName : std::string{};
+}
+
+bool TryUndoDelete() {
+    if (g_undoSlot.kind == UndoSlotKind::Register) {
+        // Re-stamped upsert: name, content, privacy, binariness and origin
+        // device come back exactly; the written clock is minted fresh so the
+        // restore outranks the delete's tombstone everywhere. Value is copied
+        // so a refused write (count cap) leaves the slot armed and retryable.
+        if (g_registerStore.UpsertWithFlags(g_undoSlot.registerName,
+                std::string(g_undoSlot.registerValue),
+                g_undoSlot.registerValueFlags,
+                g_undoSlot.registerOrigin)
+            != RegisterStore::WriteResult::Ok) {
+            return false;
+        }
+        BroadcastRegisterRecord(g_undoSlot.registerName);
+        DisarmUndoDelete();
+        return true;
+    }
+
+    if (g_undoSlot.kind == UndoSlotKind::Activity && g_undoSlot.payload) {
+        // Local re-insert exactly as the item lived: original guid and
+        // timestamp put it back in its chronological slot, and peer-side guid
+        // dedup makes any double harmless.
+        auto restored = std::make_shared<ClipboardPayload>();
+        restored->meta = g_undoSlot.payload->meta;
+        restored->meta.flags &= ~(NetworkDefs::CLPM_FLAG_SYNC_REPLAY | NetworkDefs::CLPM_FLAG_RELAY);
+        restored->SetEncodedBytes(std::vector<unsigned char>(g_undoSlot.payload->EncodedBytes()));
+        g_clipboardActivityStore.Add(restored);
+
+        // Mesh half on the SYNC_REPLAY lane: receivers re-insert the history
+        // entry and leave their live clipboards alone — undoing a delete is
+        // not a paste. Old builds already speak this flag.
+        auto wire = std::make_shared<ClipboardPayload>();
+        wire->meta = restored->meta;
+        wire->meta.flags |= NetworkDefs::CLPM_FLAG_SYNC_REPLAY;
+        wire->SetEncodedBytes(std::vector<unsigned char>(restored->EncodedBytes()));
+        g_peerManager.BroadcastClipboard(std::move(wire));
+
+        DisarmUndoDelete();
+        return true;
+    }
+
+    return false;
+}
+
+void DisarmUndoDelete() {
+    g_undoSlot = UndoSlot{};
 }
 
 bool RenameRegister(const std::string& oldName, const std::string& newName) {
@@ -269,6 +361,7 @@ bool RenameRegister(const std::string& oldName, const std::string& newName) {
     if (g_registerStore.Delete(oldName) == RegisterStore::DeleteResult::Deleted) {
         BroadcastRegisterRecord(oldName);
     }
+    DisarmUndoDelete();
     return true;
 }
 

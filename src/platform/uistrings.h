@@ -47,6 +47,8 @@
 #define CLP_UI_POPUP_DELETE_TIP "Delete everywhere (Del)"
 #define CLP_UI_POPUP_MAKE_PRIVATE "Make private"
 #define CLP_UI_POPUP_MAKE_PUBLIC "Make public"
+#define CLP_UI_POPUP_UNDO_TIP "Undo the last delete (Ctrl+Z)"
+#define CLP_UI_POPUP_UNDO_OF_PREFIX "Undo delete of "
 #define CLP_UI_LINK "Link"
 #define CLP_UI_TEXT "Text"
 #define CLP_UI_IMAGE "Image"
