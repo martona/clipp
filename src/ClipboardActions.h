@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 
 // UI-invoked clipboard actions shared by the settings page and the popup, plus
 // the default-register mirror every clipboard-changing path feeds. Declared
@@ -31,5 +32,39 @@ bool ReshareActivityItem(uint64_t itemID);
 // unknown tag. Unstamped (all-zero guid) items delete locally only. Returns
 // the local removal result.
 bool DeleteActivityItemEverywhere(uint64_t itemID);
+
+// ---- Named-register actions (the popup's registers column) ----
+// Each performs the local store op AND the mesh half the register gateway does
+// for one-shot clients (Peer.cpp REGW-relay): note the HLC floor, then push the
+// resulting record — value or tombstone — as a REGW to register-serving peers.
+// Names arrive already normalized/validated (the GUI editors run the shared
+// validator; the store re-checks anyway).
+
+// Enter on a register row: make its content the live clipboard everywhere.
+// The in-process equivalent of `clipp put <name>` — Read (touches), build the
+// same item `clipp copy` would send (canonical text + NUL, or the raw stream
+// with the BinaryHeader's format), stamp a FRESH local origin (new eventGuid:
+// this is a new clipboard event, not a re-share), then the same apply tail as
+// a re-share: OS clipboard, activity store, default-register mirror, mesh
+// broadcast. A PRIVATE register carries SOURCE_MARKED_PRIVATE onto the event.
+bool MakeRegisterCurrent(const std::string& name);
+
+// "Save" in the popup: promote an activity item into a named register. Text
+// stores its logical content (capture-convention NUL stripped, same as the ""
+// mirror); images store an EncodeBinaryValue-wrapped stream with the
+// BinaryHeader flag. False for unsupported formats, empty payloads, or a
+// refused store write. The caller picks the name (NextAutoRegisterName) and
+// decides markPrivate (source-marked or heuristic-masked items carry it).
+bool SaveActivityItemAsRegister(uint64_t itemID, const std::string& name, bool markPrivate);
+
+// Del on a register row: tombstone locally and broadcast the tombstone. False
+// when there was no live register to delete.
+bool DeleteRegisterEverywhere(const std::string& name);
+
+// Inline-rename commit: upsert the record under the new name, then tombstone
+// the old one — both broadcast, in that order, so a crash in between leaves
+// the register duplicated rather than lost. Same-name is a successful no-op;
+// an invalid target name or a vanished source fails.
+bool RenameRegister(const std::string& oldName, const std::string& newName);
 
 }

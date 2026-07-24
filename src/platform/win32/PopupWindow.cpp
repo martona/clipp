@@ -4,18 +4,24 @@
 
 #include "ClipboardActions.h"
 #include "ClipboardActivityStore.h"
+#include "ClipboardFormat.h"
 #include "Logger.h"
 #include "PopupModel.h"
+#include "RegisterStore.h"
+#include "RegisterWire.h"
 #include "Settings.h"
 #include "clipp-win32-darkmode32/DMSubclass.h"
 #include "platform/uiClippPage.h"
 #include "platform/uistrings.h"
+#include "utils.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -58,11 +64,19 @@ using namespace winrt::Windows::UI::Xaml::Media;
 constexpr wchar_t kPopupClassName[] = L"ClippPopupWindow";
 constexpr wchar_t kToastClassName[] = L"ClippPopupToast";
 constexpr wchar_t kPreviewClassName[] = L"ClippPopupPreview";
+// One column while only the clipboard stream exists; the registers column
+// (left of it) widens the popup and brings the group labels with it.
 constexpr double kPopupWidthDips = 420;
+constexpr double kPopupWidthTwoColDips = 700;
 constexpr double kPopupHeightDips = 540;
 // XAML row construction is the expensive part of a re-render; cap what one
-// filter state shows and say so with a hint row instead of silently cropping.
+// filter state shows (per column) and say so with a hint row instead of
+// silently cropping.
 constexpr std::size_t kMaxRenderedRows = 40;
+// Register content previews mirror the history display's cap (the file-local
+// kMaxTextPreviewCharacters in ClipboardActivityDisplay.cpp): find matches
+// against this window, the flyout against the full value.
+constexpr std::size_t kRegisterPreviewChars = 640;
 // Preview flyout geometry: content-sized, up to these caps.
 constexpr double kPreviewMaxTextWidthDips = 360;
 constexpr double kPreviewMaxHeightDips = 520;
@@ -192,6 +206,39 @@ std::wstring RelativeAgeText(std::chrono::system_clock::time_point when) {
     if (secs < 86400)  return std::to_wstring(secs / 3600) + L" hours ago";
     if (secs < 172800) return L"yesterday";
     return std::to_wstring(secs / 86400) + L" days ago";
+}
+
+// Register HLCs carry Unix wall-clock milliseconds.
+std::wstring RelativeAgeText(uint64_t unixWallMs) {
+    return RelativeAgeText(std::chrono::system_clock::time_point{
+        std::chrono::duration_cast<std::chrono::system_clock::duration>(
+            std::chrono::milliseconds{ unixWallMs }) });
+}
+
+// Toolbar button: a compact icon+label pair, mouse-only by design (IsTabStop
+// off — the filter box keeps the keyboard, and every action has a key).
+Button MakeToolbarButton(const wchar_t* glyph, const wchar_t* label) {
+    FontIcon icon;
+    icon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
+    icon.Glyph(winrt::hstring{ glyph });
+    icon.FontSize(12);
+    icon.VerticalAlignment(VerticalAlignment::Center);
+    TextBlock text;
+    text.Text(winrt::hstring{ label });
+    text.FontSize(12);
+    text.VerticalAlignment(VerticalAlignment::Center);
+    StackPanel content;
+    content.Orientation(Orientation::Horizontal);
+    content.Spacing(6);
+    content.Children().Append(icon);
+    content.Children().Append(text);
+    Button button;
+    button.Content(content);
+    button.Padding(ThicknessHelper::FromLengths(10, 4, 10, 4));
+    button.MinWidth(0);
+    button.MinHeight(0);
+    button.IsTabStop(false);
+    return button;
 }
 
 // ---- companion windows ----
@@ -349,7 +396,7 @@ private:
 class PreviewWindow {
 public:
     void ShowText(HWND popupWindow, int anchorScreenY, const std::wstring& text,
-                  const std::wstring& filter) {
+                  const std::wstring& filter, bool preferLeft) {
         EnsureCreated();
         if (hwnd_ == nullptr) {
             return;
@@ -361,11 +408,13 @@ public:
         HighlightMatches(text_, text, filter);
         popupWindow_ = popupWindow;
         anchorY_ = anchorScreenY;
+        preferLeft_ = preferLeft;
         PositionAndShow();
     }
 
     void ShowImage(HWND popupWindow, int anchorScreenY,
-                   const std::shared_ptr<const std::vector<unsigned char>>& bytes) {
+                   const std::shared_ptr<const std::vector<unsigned char>>& bytes,
+                   bool preferLeft) {
         EnsureCreated();
         if (hwnd_ == nullptr || !bytes) {
             return;
@@ -377,6 +426,7 @@ public:
         image_.Source(BitmapFromImageBytes(*bytes, static_cast<int32_t>(kPreviewMaxTextWidthDips)));
         popupWindow_ = popupWindow;
         anchorY_ = anchorScreenY;
+        preferLeft_ = preferLeft;
         PositionAndShow();  // provisional; ImageOpened re-runs with the real aspect
     }
 
@@ -497,10 +547,21 @@ private:
         MONITORINFO info{};
         info.cbSize = sizeof(info);
         GetMonitorInfoW(MonitorFromWindow(popupWindow_, MONITOR_DEFAULTTONEAREST), &info);
+        // Register rows open towards their own column's side (the popup's
+        // left); history rows towards the right. Either flips when the work
+        // area runs out.
         const int gap = DipsToPixels(8, dpi);
-        int x = popupRect.right + gap;
-        if (x + width > info.rcWork.right) {
-            x = popupRect.left - width - gap;  // no room on the right: flip left
+        int x;
+        if (preferLeft_) {
+            x = popupRect.left - width - gap;
+            if (x < info.rcWork.left) {
+                x = popupRect.right + gap;
+            }
+        } else {
+            x = popupRect.right + gap;
+            if (x + width > info.rcWork.right) {
+                x = popupRect.left - width - gap;
+            }
         }
         int y = anchorY_;
         if (y + height > info.rcWork.bottom) {
@@ -560,6 +621,7 @@ private:
     HWND xamlHost_ = nullptr;
     HWND popupWindow_ = nullptr;
     int anchorY_ = 0;
+    bool preferLeft_ = false;
     Hosting::WindowsXamlManager xamlManager_{ nullptr };
     Hosting::DesktopWindowXamlSource xamlSource_{ nullptr };
     Border root_{ nullptr };
@@ -601,9 +663,12 @@ public:
                 DismissHintToast();
                 const int delta = GET_WHEEL_DELTA_WPARAM(msg->wParam);
                 constexpr double kPixelsPerNotch = 96.0;
+                const double islandX =
+                    (cursor.x - rect.left) * 96.0 / GetDpiForWindow(hwnd_);
+                const auto target = WheelTargetAt(islandX);
                 const double offset =
-                    listScroll_.VerticalOffset() - (static_cast<double>(delta) / WHEEL_DELTA) * kPixelsPerNotch;
-                listScroll_.ChangeView(nullptr,
+                    target.VerticalOffset() - (static_cast<double>(delta) / WHEEL_DELTA) * kPixelsPerNotch;
+                target.ChangeView(nullptr,
                     winrt::Windows::Foundation::IReference<double>{ offset }, nullptr, true);
                 return true;
             }
@@ -648,6 +713,7 @@ private:
         previousForeground_ = GetForegroundWindow();
 
         RebuildFromStores();
+        UpdateColumnLayout();
         if (filterBox_) {
             filterBox_.Text(L"");  // fresh session; fires TextChanged -> SetFilter("")
         }
@@ -701,6 +767,9 @@ private:
     void Dismiss(bool restoreFocus) {
         if (hwnd_ == nullptr || !IsWindowVisible(hwnd_)) {
             return;
+        }
+        if (editingRegister_.has_value()) {
+            EndEditMode();  // silent cancel; the next summon rebuilds the rows
         }
         EndActivityNotifications();
         toastWindow_.Hide();
@@ -783,9 +852,12 @@ private:
         filterRow.Height(GridLength{ 0, GridUnitType::Auto });
         RowDefinition listRow;
         listRow.Height(GridLength{ 1, GridUnitType::Star });
+        RowDefinition toolbarRow;
+        toolbarRow.Height(GridLength{ 0, GridUnitType::Auto });
         root.RowDefinitions().Append(headerRow);
         root.RowDefinitions().Append(filterRow);
         root.RowDefinitions().Append(listRow);
+        root.RowDefinitions().Append(toolbarRow);
 
         // Identity bar: a surprise borderless window on a stray keystroke
         // should say what it is, and offer an obvious way out.
@@ -872,13 +944,99 @@ private:
         Grid::SetRow(filterHost, 1);
         root.Children().Append(filterHost);
 
+        // Two star columns: Registers (left, collapsed to zero width until any
+        // exist) and the Clipboard stream (right). The column labels appear
+        // only when both columns are showing — a lone stream needs no caption.
+        Grid columnsGrid;
+        regColumnDef_ = ColumnDefinition();
+        regColumnDef_.Width(GridLength{ 0, GridUnitType::Pixel });
+        ColumnDefinition histColumnDef;
+        histColumnDef.Width(GridLength{ 1, GridUnitType::Star });
+        columnsGrid.ColumnDefinitions().Append(regColumnDef_);
+        columnsGrid.ColumnDefinitions().Append(histColumnDef);
+
+        const auto makeColumnLabel = [](const wchar_t* text) {
+            TextBlock label;
+            label.Text(winrt::hstring{ text });
+            label.FontSize(12);
+            label.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+            label.Opacity(0.6);
+            label.Margin(ThicknessHelper::FromLengths(18, 0, 10, 4));
+            return label;
+        };
+
+        Grid registerColumn;
+        RowDefinition regLabelRow;
+        regLabelRow.Height(GridLength{ 0, GridUnitType::Auto });
+        RowDefinition regListRow;
+        regListRow.Height(GridLength{ 1, GridUnitType::Star });
+        registerColumn.RowDefinitions().Append(regLabelRow);
+        registerColumn.RowDefinitions().Append(regListRow);
+        TextBlock registersLabel = makeColumnLabel(CLP_W(CLP_UI_POPUP_REGISTERS));
+        Grid::SetRow(registersLabel, 0);
+        registerColumn.Children().Append(registersLabel);
+        registerScroll_ = ScrollViewer();
+        registerScroll_.Margin(ThicknessHelper::FromLengths(8, 0, 0, 8));
+        registerPanel_ = StackPanel();
+        registerPanel_.Spacing(2);
+        registerScroll_.Content(registerPanel_);
+        Grid::SetRow(registerScroll_, 1);
+        registerColumn.Children().Append(registerScroll_);
+        registerColumnRoot_ = registerColumn;
+        registerColumnRoot_.Visibility(Visibility::Collapsed);
+        Grid::SetColumn(registerColumn, 0);
+        columnsGrid.Children().Append(registerColumn);
+
+        Grid historyColumn;
+        RowDefinition histLabelRow;
+        histLabelRow.Height(GridLength{ 0, GridUnitType::Auto });
+        RowDefinition histListRow;
+        histListRow.Height(GridLength{ 1, GridUnitType::Star });
+        historyColumn.RowDefinitions().Append(histLabelRow);
+        historyColumn.RowDefinitions().Append(histListRow);
+        historyLabel_ = makeColumnLabel(CLP_W(CLP_UI_CLIPBOARD));
+        historyLabel_.Visibility(Visibility::Collapsed);
+        Grid::SetRow(historyLabel_, 0);
+        historyColumn.Children().Append(historyLabel_);
         listScroll_ = ScrollViewer();
         listScroll_.Margin(ThicknessHelper::FromLengths(8, 0, 8, 8));
         listPanel_ = StackPanel();
         listPanel_.Spacing(2);
         listScroll_.Content(listPanel_);
-        Grid::SetRow(listScroll_, 2);
-        root.Children().Append(listScroll_);
+        Grid::SetRow(listScroll_, 1);
+        historyColumn.Children().Append(listScroll_);
+        Grid::SetColumn(historyColumn, 1);
+        columnsGrid.Children().Append(historyColumn);
+
+        Grid::SetRow(columnsGrid, 2);
+        root.Children().Append(columnsGrid);
+
+        // Action toolbar. Save promotes the selected clipboard item into a
+        // register (and is enabled only there); Copy mirrors Enter; Delete
+        // mirrors Del. All mouse affordances for the keyboard-first actions.
+        StackPanel toolbar;
+        toolbar.Orientation(Orientation::Horizontal);
+        toolbar.HorizontalAlignment(HorizontalAlignment::Right);
+        toolbar.Spacing(8);
+        toolbar.Margin(ThicknessHelper::FromLengths(12, 0, 12, 10));
+        saveButton_ = MakeToolbarButton(L"\xE74E", CLP_W(CLP_UI_POPUP_SAVE));
+        saveButton_.Click([this](auto const&, auto const&) {
+            SaveSelected();
+        });
+        copyButton_ = MakeToolbarButton(L"\xE8C8", CLP_W(CLP_UI_COPY));
+        copyButton_.Click([this](auto const&, auto const&) {
+            ActivateSelected();
+        });
+        deleteButton_ = MakeToolbarButton(L"\xE74D", CLP_W(CLP_UI_DELETE));
+        deleteButton_.Click([this](auto const&, auto const&) {
+            DeleteSelected();
+            FocusFilterBox();
+        });
+        toolbar.Children().Append(saveButton_);
+        toolbar.Children().Append(copyButton_);
+        toolbar.Children().Append(deleteButton_);
+        Grid::SetRow(toolbar, 3);
+        root.Children().Append(toolbar);
 
         // Second wheel net, this one inside XAML: wherever the island routes
         // the wheel (focused element, pointer target), it bubbles here —
@@ -892,14 +1050,16 @@ private:
                         return;
                     }
                     DismissHintToast();
-                    const int delta = args.GetCurrentPoint(nullptr).Properties().MouseWheelDelta();
+                    const auto point = args.GetCurrentPoint(nullptr);
+                    const int delta = point.Properties().MouseWheelDelta();
                     if (delta == 0) {
                         return;
                     }
                     constexpr double kPixelsPerNotch = 96.0;
-                    const double offset = listScroll_.VerticalOffset()
+                    const auto target = WheelTargetAt(point.Position().X);
+                    const double offset = target.VerticalOffset()
                         - (static_cast<double>(delta) / WHEEL_DELTA) * kPixelsPerNotch;
-                    listScroll_.ChangeView(nullptr,
+                    target.ChangeView(nullptr,
                         winrt::Windows::Foundation::IReference<double>{ offset }, nullptr, true);
                     args.Handled(true);
                 })),
@@ -912,6 +1072,9 @@ private:
         // typing keeps flowing).
         root.PointerReleased([this](auto const&, auto const&) {
             DismissHintToast();
+            // A click that lands anywhere outside the name editor ends an
+            // in-flight rename (the editor swallows its own releases).
+            CommitOrCancelRename();
             if (dispatcher_) {
                 dispatcher_.TryEnqueue([this]() {
                     if (filterBox_ && hwnd_ != nullptr && IsWindowVisible(hwnd_)) {
@@ -963,6 +1126,19 @@ private:
                 args.Handled(true);
             }
             return;
+        case VirtualKey::F2:
+            // Rename the selected register (no-op on history rows).
+            BeginRenameSelected();
+            args.Handled(true);
+            return;
+        case VirtualKey::S:
+            // Ctrl+S saves the selected clipboard item as a register; a plain
+            // 's' keeps flowing into the filter.
+            if ((GetKeyState(VK_CONTROL) & 0x8000) != 0) {
+                SaveSelected();
+                args.Handled(true);
+            }
+            return;
         case VirtualKey::Escape: {
             const auto result = model_.HandleEscape();
             if (result == PopupModel::EscapeResult::ClearedFilter) {
@@ -985,7 +1161,66 @@ private:
 
     // ---- data ----
 
+    // Row-render info for one register, resolved from the record once per
+    // rebuild (the store hands out full copies; the popup is short-lived and
+    // rebuilds are event-driven, so this is fine).
+    struct RegisterRowInfo {
+        std::wstring name;         // wide name for render + highlight
+        std::wstring previewText;  // content line: text window, kind label, or mask
+        std::wstring fullText;     // text registers: the full value, for the flyout
+        std::shared_ptr<const std::vector<unsigned char>> imageData;  // image stream, or null
+        bool contentRow = false;   // previewText is real content: find matches + re-windows it
+        bool isPrivate = false;
+        uint64_t writtenWallMs = 0;
+    };
+
     void RebuildFromStores() {
+        registerCache_.clear();
+        std::vector<PopupItem> registers;
+        auto records = g_registerStore.List();  // live values, name-sorted
+        registers.reserve(records.size());
+        for (auto& rec : records) {
+            if (rec.name.empty()) {
+                continue;  // the "" clipboard mirror IS the clipboard column
+            }
+            RegisterRowInfo info;
+            info.name = Utf8ToWideString(rec.name);
+            info.isPrivate = rec.IsPrivate();
+            info.writtenWallMs = rec.written.wallMs;
+
+            PopupItem item;
+            item.kind = PopupItem::Kind::Register;
+            item.registerName = rec.name;
+            // Unlike history kind-labels, register NAMES are user data — the
+            // primary handle — so they participate in find (and light up).
+            item.searchText = info.name;
+
+            if (rec.IsPrivate()) {
+                info.previewText = L"••••••••";  // fixed width: not length-revealing
+            } else if (rec.IsBinary()) {
+                RegisterWire::BinaryValueInfo bin{};
+                if (RegisterWire::TryParseBinaryValue(rec.value, bin)
+                    && IsClippImageFormat(bin.formatId)) {
+                    info.previewText = CLP_W(CLP_UI_IMAGE);
+                    info.imageData = std::make_shared<const std::vector<unsigned char>>(
+                        rec.value.begin() + static_cast<std::ptrdiff_t>(bin.streamOffset),
+                        rec.value.end());
+                } else {
+                    info.previewText = CLP_W(CLP_UI_UNSUPPORTED_CLIPBOARD_ITEM);
+                }
+            } else {
+                info.contentRow = true;
+                info.fullText = Utf8ToWideString(rec.value);
+                info.previewText = info.fullText.size() > kRegisterPreviewChars
+                    ? info.fullText.substr(0, kRegisterPreviewChars) + L"..."
+                    : info.fullText;
+                item.searchText += L"\n" + info.previewText;
+            }
+            registerCache_.emplace(rec.name, std::move(info));
+            registers.push_back(std::move(item));
+        }
+        registersPresent_ = !registers.empty();
+
         displayCache_.clear();
         std::vector<PopupItem> history;
         const auto snapshot = g_clipboardActivityStore.Snapshot();  // ascending by ts
@@ -1009,19 +1244,58 @@ private:
             displayCache_.emplace(it->id, std::move(*display));
             history.push_back(std::move(item));
         }
-        // Registers group lands with the promote flow (plan B4); until then the
-        // model runs history-only and the group column collapses naturally.
-        model_.SetItems({}, std::move(history));
+        model_.SetItems(std::move(registers), std::move(history));
+    }
+
+    // Registers have no store watcher (their remote traffic is rare and the
+    // activity watcher's rebuild re-reads them anyway); popup-initiated ops
+    // call this to refresh explicitly, optionally re-selecting one by name.
+    void RefreshAfterRegisterOp(const std::optional<std::string>& selectName) {
+        RebuildFromStores();
+        UpdateColumnLayout();
+        if (selectName.has_value()) {
+            const auto& regs = model_.VisibleRegisters();
+            for (std::size_t i = 0; i < regs.size(); ++i) {
+                if (regs[i]->registerName == *selectName) {
+                    model_.SelectAt(PopupModel::Group::Registers, i);
+                    break;
+                }
+            }
+        }
+        RenderList();
     }
 
     // ---- rendering ----
 
     void RenderList() {
-        if (!listPanel_) {
+        if (!listPanel_ || !registerPanel_) {
             return;
         }
         listPanel_.Children().Clear();
+        registerPanel_.Children().Clear();
         rowBorders_.clear();
+        registerRowBorders_.clear();
+        nameEditor_ = nullptr;  // re-created below while a rename is in flight
+
+        const auto makeMoreHint = []() {
+            TextBlock more;
+            more.Text(winrt::hstring{ CLP_W(CLP_UI_POPUP_MORE) });
+            more.Opacity(0.55);
+            more.FontSize(12);
+            more.Margin(ThicknessHelper::FromLengths(10, 6, 10, 6));
+            return more;
+        };
+
+        const auto& registers = model_.VisibleRegisters();
+        const std::size_t shownRegisters = (std::min)(registers.size(), kMaxRenderedRows);
+        for (std::size_t i = 0; i < shownRegisters; ++i) {
+            registerPanel_.Children().Append(BuildRegisterRow(*registers[i], i));
+        }
+        if (registers.size() > shownRegisters) {
+            registerPanel_.Children().Append(makeMoreHint());
+        }
+        // No empty-state text for registers: with none at all the whole column
+        // is collapsed, and a filtered-empty column reads fine bare.
 
         const auto& history = model_.VisibleHistory();
         const std::size_t shown = (std::min)(history.size(), kMaxRenderedRows);
@@ -1029,12 +1303,7 @@ private:
             listPanel_.Children().Append(BuildRow(*history[i], i));
         }
         if (history.size() > shown) {
-            TextBlock more;
-            more.Text(winrt::hstring{ CLP_W(CLP_UI_POPUP_MORE) });
-            more.Opacity(0.55);
-            more.FontSize(12);
-            more.Margin(ThicknessHelper::FromLengths(10, 6, 10, 6));
-            listPanel_.Children().Append(more);
+            listPanel_.Children().Append(makeMoreHint());
         }
         if (history.empty()) {
             // Covers both "nothing synced yet" and "filter matched nothing".
@@ -1145,19 +1414,191 @@ private:
         return row;
     }
 
-    void RenderHighlight() {
-        const auto selection = model_.Selected();
-        for (std::size_t i = 0; i < rowBorders_.size(); ++i) {
-            const bool selected = selection.has_value()
-                && selection->group == PopupModel::Group::History
-                && selection->index == i;
-            rowBorders_[i].Background(selected ? ArgbBrush(56, 127, 127, 127)
-                                               : ArgbBrush(0, 0, 0, 0));
-            if (selected) {
-                rowBorders_[i].StartBringIntoView();
+    Border BuildRegisterRow(const PopupItem& item, std::size_t index) {
+        const auto cached = registerCache_.find(item.registerName);
+
+        StackPanel content;
+        content.Spacing(1);
+
+        // Name line — or, mid-rename, the inline editor in its place.
+        const std::wstring nameText =
+            cached != registerCache_.end() ? cached->second.name : std::wstring{ L" " };
+        const bool editing =
+            editingRegister_.has_value() && *editingRegister_ == item.registerName;
+        if (editing) {
+            nameEditor_ = TextBox();
+            nameEditor_.Text(winrt::hstring{ nameText });
+            nameEditor_.FontSize(13);
+            nameEditor_.MinHeight(0);
+            nameEditor_.Padding(ThicknessHelper::FromLengths(4, 2, 4, 2));
+            nameEditor_.Loaded([](auto const& sender, auto const&) {
+                // The editor is born with the row render; grab the keyboard
+                // and preselect the auto-name so typing replaces it.
+                if (const auto box = sender.template try_as<TextBox>()) {
+                    box.Focus(FocusState::Programmatic);
+                    box.SelectAll();
+                }
+            });
+            nameEditor_.TextChanged([this](auto const&, auto const&) {
+                ValidateNameEditor();
+            });
+            nameEditor_.PreviewKeyDown([this](auto const&, Input::KeyRoutedEventArgs const& args) {
+                using winrt::Windows::System::VirtualKey;
+                switch (args.Key()) {
+                case VirtualKey::Enter:
+                    CommitRename(/*keepSelection=*/true);
+                    args.Handled(true);
+                    return;
+                case VirtualKey::Escape:
+                    CancelRename();
+                    args.Handled(true);
+                    return;
+                case VirtualKey::Tab:
+                    args.Handled(true);
+                    return;
+                default:
+                    return;
+                }
+            });
+            // Caret clicks stay in the editor — they must not reach the
+            // root's click-away commit.
+            nameEditor_.PointerReleased([](auto const&, Input::PointerRoutedEventArgs const& args) {
+                args.Handled(true);
+            });
+            content.Children().Append(nameEditor_);
+        } else {
+            TextBlock name;
+            name.Text(winrt::hstring{ nameText });
+            name.FontSize(13);
+            name.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+            name.TextTrimming(TextTrimming::CharacterEllipsis);
+            name.TextWrapping(TextWrapping::NoWrap);
+            name.MaxLines(1);
+            HighlightMatches(name, nameText, model_.Filter());
+            content.Children().Append(name);
+        }
+
+        // Content line: same content-only find contract as history rows.
+        TextBlock preview;
+        std::wstring previewText =
+            cached != registerCache_.end() ? cached->second.previewText : std::wstring{ L" " };
+        if (previewText.empty()) {
+            previewText = L" ";
+        }
+        const bool contentRow = cached != registerCache_.end() && cached->second.contentRow;
+        if (contentRow && !model_.Filter().empty()) {
+            const auto matches = FindMatches(previewText, model_.Filter());
+            if (!matches.empty() && matches.front() > kRowMatchLeadChars) {
+                previewText = L"…" + previewText.substr(matches.front() - kRowMatchLeadChars);
             }
         }
+        preview.Text(winrt::hstring{ previewText });
+        preview.TextTrimming(TextTrimming::CharacterEllipsis);
+        preview.TextWrapping(TextWrapping::NoWrap);
+        preview.MaxLines(1);
+        preview.Opacity(0.75);  // the name is the row's headline
+        if (contentRow) {
+            HighlightMatches(preview, previewText, model_.Filter());
+        }
+        content.Children().Append(preview);
+
+        if (cached != registerCache_.end()) {
+            TextBlock meta;
+            std::wstring metaText = RelativeAgeText(cached->second.writtenWallMs);
+            if (cached->second.isPrivate) {
+                metaText += L" · " CLP_W(CLP_UI_PRIVATE_BADGE);
+            }
+            meta.Text(winrt::hstring{ metaText });
+            meta.FontSize(11);
+            meta.Opacity(0.6);
+            content.Children().Append(meta);
+        }
+
+        Border row;
+        row.Padding(ThicknessHelper::FromLengths(10, 6, 10, 6));
+        row.CornerRadius(CornerRadius{ 6 });
+        row.Background(ArgbBrush(0, 0, 0, 0));
+        row.Child(content);
+
+        row.PointerPressed([this, index](auto const&, auto const&) {
+            model_.SelectAt(PopupModel::Group::Registers, index);
+            RenderHighlight();
+        });
+        row.DoubleTapped([this, index](auto const&, auto const&) {
+            model_.SelectAt(PopupModel::Group::Registers, index);
+            ActivateSelected();
+        });
+
+        MenuFlyout menu;
+        MenuFlyoutItem copyItem;
+        copyItem.Text(winrt::hstring{ CLP_W(CLP_UI_COPY) });
+        copyItem.Click([this, index](auto const&, auto const&) {
+            model_.SelectAt(PopupModel::Group::Registers, index);
+            ActivateSelected();
+        });
+        menu.Items().Append(copyItem);
+        MenuFlyoutItem renameItem;
+        renameItem.Text(winrt::hstring{ CLP_W(CLP_UI_POPUP_RENAME) });
+        renameItem.Click([this, index](auto const&, auto const&) {
+            model_.SelectAt(PopupModel::Group::Registers, index);
+            BeginRenameSelected();
+        });
+        menu.Items().Append(renameItem);
+        MenuFlyoutItem deleteItem;
+        deleteItem.Text(winrt::hstring{ CLP_W(CLP_UI_DELETE) });
+        deleteItem.Click([this, index](auto const&, auto const&) {
+            model_.SelectAt(PopupModel::Group::Registers, index);
+            DeleteSelected();
+        });
+        menu.Items().Append(deleteItem);
+        row.ContextFlyout(menu);
+
+        registerRowBorders_.push_back(row);
+        return row;
+    }
+
+    void RenderHighlight() {
+        const auto selection = model_.Selected();
+        const auto paint = [&selection](std::vector<Border>& borders, PopupModel::Group group) {
+            for (std::size_t i = 0; i < borders.size(); ++i) {
+                const bool selected = selection.has_value()
+                    && selection->group == group
+                    && selection->index == i;
+                borders[i].Background(selected ? ArgbBrush(56, 127, 127, 127)
+                                               : ArgbBrush(0, 0, 0, 0));
+                if (selected) {
+                    borders[i].StartBringIntoView();
+                }
+            }
+        };
+        paint(registerRowBorders_, PopupModel::Group::Registers);
+        paint(rowBorders_, PopupModel::Group::History);
+        UpdateToolbar();
         UpdatePreviewFlyout();
+    }
+
+    void UpdateToolbar() {
+        const PopupItem* item = model_.SelectedItem();
+        bool canSave = false;
+        if (item != nullptr && item->kind == PopupItem::Kind::History && item->actionable) {
+            const auto cached = displayCache_.find(item->historyId);
+            if (cached != displayCache_.end()) {
+                const auto kind = cached->second.kind;
+                canSave = kind == ClipboardActivityPayloadKind::Text
+                    || kind == ClipboardActivityPayloadKind::Link
+                    || kind == ClipboardActivityPayloadKind::Image
+                    || kind == ClipboardActivityPayloadKind::PrivateText;
+            }
+        }
+        if (saveButton_) {
+            saveButton_.IsEnabled(canSave);
+        }
+        if (copyButton_) {
+            copyButton_.IsEnabled(item != nullptr && item->actionable);
+        }
+        if (deleteButton_) {
+            deleteButton_.IsEnabled(item != nullptr);
+        }
     }
 
     // Screen Y of the selected row's top edge — the flyout's anchor. The
@@ -1167,53 +1608,24 @@ private:
         RECT popupRect{};
         GetWindowRect(hwnd_, &popupRect);
         const auto selection = model_.Selected();
-        if (selection.has_value() && selection->group == PopupModel::Group::History &&
-            selection->index < rowBorders_.size()) {
-            try {
-                const auto transform = rowBorders_[selection->index].TransformToVisual(nullptr);
-                const auto point = transform.TransformPoint(winrt::Windows::Foundation::Point{ 0, 0 });
-                return popupRect.top + DipsToPixels(point.Y, GetDpiForWindow(hwnd_));
-            } catch (const winrt::hresult_error&) {
+        if (selection.has_value()) {
+            const auto& borders = selection->group == PopupModel::Group::Registers
+                ? registerRowBorders_ : rowBorders_;
+            if (selection->index < borders.size()) {
+                try {
+                    const auto transform = borders[selection->index].TransformToVisual(nullptr);
+                    const auto point = transform.TransformPoint(winrt::Windows::Foundation::Point{ 0, 0 });
+                    return popupRect.top + DipsToPixels(point.Y, GetDpiForWindow(hwnd_));
+                } catch (const winrt::hresult_error&) {
+                }
             }
         }
         return popupRect.top + DipsToPixels(80, GetDpiForWindow(hwnd_));
     }
 
-    // The flyout appears only when the selection holds more than its row can
-    // show: an image, or long/multiline text. Masked private rows, the
-    // placeholder, and unsupported items add nothing and get none. The text
-    // shown is the REGION around the first filter match — visible by
+    // Text flyout body: the REGION around the first filter match — visible by
     // construction, nothing to scroll.
-    void UpdatePreviewFlyout() {
-        const PopupItem* item = model_.SelectedItem();
-        const auto cached = (item != nullptr && item->kind == PopupItem::Kind::History)
-            ? displayCache_.find(item->historyId)
-            : displayCache_.end();
-        if (cached == displayCache_.end() || hwnd_ == nullptr || !IsWindowVisible(hwnd_)) {
-            previewWindow_.Hide();
-            return;
-        }
-
-        const auto& display = cached->second;
-        // Content only — the row already carries the who/when labels.
-        if (display.kind == ClipboardActivityPayloadKind::Image && display.imageData) {
-            previewWindow_.ShowImage(hwnd_, RowAnchorScreenY(), display.imageData);
-            return;
-        }
-
-        if (display.kind != ClipboardActivityPayloadKind::Text &&
-            display.kind != ClipboardActivityPayloadKind::Link) {
-            previewWindow_.Hide();
-            return;
-        }
-
-        const std::wstring& full =
-            display.detailText.empty() ? display.previewText : display.detailText;
-        if (full.find(L'\n') == std::wstring::npos && full.size() <= kRowFitChars) {
-            previewWindow_.Hide();  // the row already tells the whole story
-            return;
-        }
-
+    void ShowTextFlyoutWindowed(const std::wstring& full, bool preferLeft) {
         const std::wstring filter = filterBox_ ? std::wstring{ filterBox_.Text() } : std::wstring{};
         std::size_t firstMatch = std::wstring::npos;
         if (!filter.empty()) {
@@ -1235,27 +1647,113 @@ private:
         if (clippedBack) {
             shown.append(L" …");
         }
-        previewWindow_.ShowText(hwnd_, RowAnchorScreenY(), shown, filter);
+        previewWindow_.ShowText(hwnd_, RowAnchorScreenY(), shown, filter, preferLeft);
+    }
+
+    // The flyout appears only when the selection holds more than its row can
+    // show: an image, or long/multiline text. Masked private rows, the
+    // placeholder, and unsupported items add nothing and get none. Register
+    // rows open it on the popup's LEFT — their own column's side.
+    void UpdatePreviewFlyout() {
+        const PopupItem* item = model_.SelectedItem();
+        if (item == nullptr || hwnd_ == nullptr || !IsWindowVisible(hwnd_)
+            || editingRegister_.has_value()) {
+            previewWindow_.Hide();  // no selection, hidden popup, or mid-rename
+            return;
+        }
+
+        if (item->kind == PopupItem::Kind::Register) {
+            const auto cached = registerCache_.find(item->registerName);
+            if (cached == registerCache_.end()) {
+                previewWindow_.Hide();
+                return;
+            }
+            const auto& info = cached->second;
+            if (info.imageData) {
+                previewWindow_.ShowImage(hwnd_, RowAnchorScreenY(), info.imageData, true);
+                return;
+            }
+            if (!info.contentRow) {
+                previewWindow_.Hide();  // masked private / unsupported binary
+                return;
+            }
+            const std::wstring& full = info.fullText;
+            if (full.find(L'\n') == std::wstring::npos && full.size() <= kRowFitChars) {
+                previewWindow_.Hide();  // the row already tells the whole story
+                return;
+            }
+            ShowTextFlyoutWindowed(full, /*preferLeft=*/true);
+            return;
+        }
+
+        const auto cached = displayCache_.find(item->historyId);
+        if (cached == displayCache_.end()) {
+            previewWindow_.Hide();
+            return;
+        }
+
+        const auto& display = cached->second;
+        // Content only — the row already carries the who/when labels.
+        if (display.kind == ClipboardActivityPayloadKind::Image && display.imageData) {
+            previewWindow_.ShowImage(hwnd_, RowAnchorScreenY(), display.imageData, false);
+            return;
+        }
+
+        if (display.kind != ClipboardActivityPayloadKind::Text &&
+            display.kind != ClipboardActivityPayloadKind::Link) {
+            previewWindow_.Hide();
+            return;
+        }
+
+        const std::wstring& full =
+            display.detailText.empty() ? display.previewText : display.detailText;
+        if (full.find(L'\n') == std::wstring::npos && full.size() <= kRowFitChars) {
+            previewWindow_.Hide();  // the row already tells the whole story
+            return;
+        }
+        ShowTextFlyoutWindowed(full, /*preferLeft=*/false);
     }
 
     void DismissHintToast() {
         toastWindow_.Hide();
     }
 
+    // The scroll viewer owning an island-space X: the registers column claims
+    // everything left of the history scroll's origin.
+    ScrollViewer WheelTargetAt(double islandXDips) {
+        if (registersPresent_ && registerScroll_ && listScroll_) {
+            try {
+                const auto origin = listScroll_.TransformToVisual(nullptr)
+                    .TransformPoint(winrt::Windows::Foundation::Point{ 0, 0 });
+                if (islandXDips < origin.X) {
+                    return registerScroll_;
+                }
+            } catch (const winrt::hresult_error&) {
+            }
+        }
+        return listScroll_;
+    }
+
     // ---- actions ----
 
     void ActivateSelected() {
+        DismissHintToast();      // button-borne invocations skip the root handler
+        CommitOrCancelRename();  // an action supersedes an in-flight rename
         const PopupItem* item = model_.SelectedItem();
         if (item == nullptr || !item->actionable) {
             return;
         }
         if (item->kind == PopupItem::Kind::History) {
             clipp::ReshareActivityItem(item->historyId);
+        } else {
+            clipp::MakeRegisterCurrent(item->registerName);
         }
         Dismiss(/*restoreFocus=*/true);
     }
 
     void DeleteSelected() {
+        DismissHintToast();
+        CommitOrCancelRename();
         const PopupItem* item = model_.SelectedItem();
         if (item == nullptr) {
             return;
@@ -1263,7 +1761,151 @@ private:
         if (item->kind == PopupItem::Kind::History) {
             clipp::DeleteActivityItemEverywhere(item->historyId);
             // The watcher event rebuilds the list.
+        } else {
+            clipp::DeleteRegisterEverywhere(item->registerName);
+            RefreshAfterRegisterOp(std::nullopt);  // no register watcher: explicit
         }
+    }
+
+    // "Save": promote the selected clipboard item into an auto-named register
+    // and drop straight into naming it. Masked content — whether the source
+    // marked it or our own heuristic did — carries PRIVATE onto the register.
+    void SaveSelected() {
+        DismissHintToast();
+        CommitOrCancelRename();
+        const PopupItem* item = model_.SelectedItem();
+        if (item == nullptr || item->kind != PopupItem::Kind::History || !item->actionable) {
+            return;
+        }
+        const auto cached = displayCache_.find(item->historyId);
+        if (cached == displayCache_.end()) {
+            return;
+        }
+        const auto kind = cached->second.kind;
+        const bool saveable = kind == ClipboardActivityPayloadKind::Text
+            || kind == ClipboardActivityPayloadKind::Link
+            || kind == ClipboardActivityPayloadKind::Image
+            || kind == ClipboardActivityPayloadKind::PrivateText;
+        if (!saveable) {
+            return;
+        }
+        const bool markPrivate = cached->second.sourceMarked
+            || kind == ClipboardActivityPayloadKind::PrivateText;
+
+        const std::string name = NextAutoRegisterName(g_registerStore.ListNames());
+        if (!clipp::SaveActivityItemAsRegister(item->historyId, name, markPrivate)) {
+            return;
+        }
+
+        // Pivot the popup to the result: the new row must be visible (clear
+        // any filter), selected, and immediately renameable.
+        if (filterBox_ && !filterBox_.Text().empty()) {
+            filterBox_.Text(L"");  // TextChanged clears the model filter + re-renders
+        }
+        editingRegister_ = name;
+        model_.EnterEditMode();
+        RefreshAfterRegisterOp(name);  // renders the new row as the inline editor
+    }
+
+    // ---- inline rename ----
+
+    void BeginRenameSelected() {
+        if (editingRegister_.has_value()) {
+            return;  // already editing
+        }
+        const PopupItem* item = model_.SelectedItem();
+        if (item == nullptr || item->kind != PopupItem::Kind::Register) {
+            return;
+        }
+        editingRegister_ = item->registerName;
+        model_.EnterEditMode();
+        RenderList();  // the selected row re-renders as the editor; Loaded focuses it
+    }
+
+    // The normalized/trimmed editor text, if it names a legal rename target:
+    // passes the shared validator and collides with nothing (other than the
+    // register being renamed).
+    bool NameEditorTarget(std::string& outName) {
+        if (!nameEditor_ || !editingRegister_.has_value()) {
+            return false;
+        }
+        std::string name = WideToUtf8String(std::wstring{ nameEditor_.Text() });
+        const std::size_t first = name.find_first_not_of(' ');
+        if (first == std::string::npos) {
+            outName.clear();
+            return false;
+        }
+        const std::size_t last = name.find_last_not_of(' ');
+        name = name.substr(first, last - first + 1);
+        name = clipp_platform_detail::NormalizeUtf8Canonical(name);
+        outName = name;
+        if (!IsValidRegisterName(name)) {
+            return false;
+        }
+        if (name != *editingRegister_ && registerCache_.count(name) > 0) {
+            return false;  // would silently overwrite a sibling
+        }
+        return true;
+    }
+
+    void ValidateNameEditor() {
+        if (!nameEditor_) {
+            return;
+        }
+        std::string ignored;
+        if (NameEditorTarget(ignored)) {
+            nameEditor_.ClearValue(Control::BorderBrushProperty());
+        } else {
+            nameEditor_.BorderBrush(ArgbBrush(255, 200, 60, 60));
+        }
+    }
+
+    void CommitRename(bool keepSelection) {
+        if (!editingRegister_.has_value()) {
+            return;
+        }
+        std::string newName;
+        if (!NameEditorTarget(newName)) {
+            ValidateNameEditor();  // stay in the editor, painted invalid
+            return;
+        }
+        const std::string oldName = *editingRegister_;
+        EndEditMode();
+        if (newName != oldName) {
+            clipp::RenameRegister(oldName, newName);
+        }
+        RefreshAfterRegisterOp(keepSelection ? std::optional<std::string>(newName)
+                                             : std::nullopt);
+        FocusFilterBox();
+    }
+
+    void CancelRename() {
+        if (!editingRegister_.has_value()) {
+            return;
+        }
+        EndEditMode();
+        RefreshAfterRegisterOp(std::nullopt);
+        FocusFilterBox();
+    }
+
+    // Click-away and action-supersede: commit if the editor holds a valid
+    // name, abandon if not — never trap the user in a red box.
+    void CommitOrCancelRename() {
+        if (!editingRegister_.has_value()) {
+            return;
+        }
+        std::string newName;
+        if (NameEditorTarget(newName)) {
+            CommitRename(/*keepSelection=*/false);
+        } else {
+            CancelRename();
+        }
+    }
+
+    void EndEditMode() {
+        editingRegister_.reset();
+        nameEditor_ = nullptr;
+        model_.LeaveEditMode();
     }
 
     // ---- store watcher (visible only) ----
@@ -1293,15 +1935,65 @@ private:
             return;
         }
         // Coarse but correct: any store change re-snapshots while visible.
+        // Except mid-rename — a re-render would rebuild the editor row and
+        // eat the user's typing; the commit/cancel path refreshes instead.
         self->dispatcher_.TryEnqueue([self]() {
-            if (self->hwnd_ != nullptr && IsWindowVisible(self->hwnd_)) {
+            if (self->hwnd_ != nullptr && IsWindowVisible(self->hwnd_)
+                && !self->editingRegister_.has_value()) {
                 self->RebuildFromStores();
+                self->UpdateColumnLayout();
                 self->RenderList();
             }
         });
     }
 
     // ---- window plumbing ----
+
+    // One column of clipboard stream, or two once any registers exist.
+    double CurrentWidthDips() const {
+        return registersPresent_ ? kPopupWidthTwoColDips : kPopupWidthDips;
+    }
+
+    // Reflect registersPresent_ into the XAML tree (column width, labels) and
+    // — when the flip happens mid-session (first save / last delete while
+    // open) — into the window width, keeping the popup centered where it was.
+    void UpdateColumnLayout() {
+        if (regColumnDef_) {
+            regColumnDef_.Width(registersPresent_
+                ? GridLength{ 1, GridUnitType::Star }
+                : GridLength{ 0, GridUnitType::Pixel });
+        }
+        const auto vis = registersPresent_ ? Visibility::Visible : Visibility::Collapsed;
+        if (registerColumnRoot_) {
+            registerColumnRoot_.Visibility(vis);
+        }
+        if (historyLabel_) {
+            historyLabel_.Visibility(vis);
+        }
+        if (hwnd_ == nullptr || !IsWindowVisible(hwnd_)) {
+            return;  // hidden: the next PositionOnCursorMonitor sizes it
+        }
+        RECT rect{};
+        GetWindowRect(hwnd_, &rect);
+        const UINT dpi = GetDpiForWindow(hwnd_);
+        const int width = DipsToPixels(CurrentWidthDips(), dpi);
+        if (width == rect.right - rect.left) {
+            return;
+        }
+        MONITORINFO info{};
+        info.cbSize = sizeof(info);
+        GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &info);
+        int x = (rect.left + rect.right - width) / 2;
+        if (x + width > info.rcWork.right) {
+            x = info.rcWork.right - width;
+        }
+        if (x < info.rcWork.left) {
+            x = info.rcWork.left;
+        }
+        SetWindowPos(hwnd_, HWND_TOPMOST, x, rect.top, width, rect.bottom - rect.top,
+            SWP_NOACTIVATE);
+        ResizeXamlHost();
+    }
 
     void PositionOnCursorMonitor() {
         POINT cursor{};
@@ -1313,7 +2005,7 @@ private:
             return;
         }
         const UINT dpi = GetDpiForWindow(hwnd_);
-        const int width = DipsToPixels(kPopupWidthDips, dpi);
+        const int width = DipsToPixels(CurrentWidthDips(), dpi);
         const int height = DipsToPixels(kPopupHeightDips, dpi);
         const RECT& work = info.rcWork;
         const int x = work.left + ((work.right - work.left) - width) / 2;
@@ -1421,10 +2113,23 @@ private:
     TextBlock filterHint_{ nullptr };
     ScrollViewer listScroll_{ nullptr };
     StackPanel listPanel_{ nullptr };
+    ScrollViewer registerScroll_{ nullptr };
+    StackPanel registerPanel_{ nullptr };
+    Grid registerColumnRoot_{ nullptr };
+    TextBlock historyLabel_{ nullptr };
+    ColumnDefinition regColumnDef_{ nullptr };
+    Button saveButton_{ nullptr };
+    Button copyButton_{ nullptr };
+    Button deleteButton_{ nullptr };
+    TextBox nameEditor_{ nullptr };
     ToastWindow toastWindow_;
     PreviewWindow previewWindow_;
     std::vector<Border> rowBorders_;
+    std::vector<Border> registerRowBorders_;
     std::unordered_map<uint64_t, ClipboardActivityDisplayItem> displayCache_;
+    std::map<std::string, RegisterRowInfo> registerCache_;
+    std::optional<std::string> editingRegister_;
+    bool registersPresent_ = false;
     PopupModel model_;
     std::size_t watcherID_ = 0;
 };
