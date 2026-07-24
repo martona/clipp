@@ -2,6 +2,10 @@
 
 #include "../../../src/platform/uistrings.h"
 
+// Pulled into the app's Swift bridging header so the register types are visible to
+// SwiftUI alongside the clipboard/network bridges.
+#import "ClippRegisterBridge.h"
+
 NS_ASSUME_NONNULL_BEGIN
 
 @class UIImage;

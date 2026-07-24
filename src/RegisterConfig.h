@@ -3,18 +3,20 @@
 // Is this a build that runs the named-register daemon — i.e. defines
 // g_registerStore, serves register frames, and advertises CAP0_SERVES_REGISTERS?
 //
-// Only the desktop GUI builds (Windows, macOS) do. The headless Linux CLI runs no
-// daemon at all, and the iOS app's register wiring is deferred (Peer.cpp and
-// CryptoChannel.cpp compile on iOS, but g_registerStore is defined only in the
-// desktop main.cpp). Gate all daemon-side register code on this so the iOS and
-// headless builds compile and stay non-participating.
+// The desktop GUI builds (Windows, macOS) AND the iOS app do: the iOS app runs a
+// foreground runtime with a listener, defines g_registerStore (ClippRegisterCore.mm),
+// and compiles the register engine (RegisterStore.cpp / RegisterWire.cpp) + Peer.cpp's
+// REGW/RSYN anti-entropy the same way the desktop does. The headless Linux CLI runs no
+// daemon at all. The share extension compiles no Peer.cpp and never accepts inbound, so
+// the CAP0_SERVES_REGISTERS it (over-)advertises via the shared CryptoChannel is moot —
+// exactly like CAP0_SERVES_NETMAP below (RemoteServesRegisters() gates nothing, and the
+// register-sync push is driven by the connecting peer's own gate, not by our caps). Gate
+// all daemon-side register code on this so the headless build compiles non-participating.
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
 #endif
 
 #if defined(CLIPP_NO_DAEMON)
-#define CLIPP_REGISTERS_DAEMON 0
-#elif defined(__APPLE__) && (TARGET_OS_IPHONE || TARGET_OS_SIMULATOR)
 #define CLIPP_REGISTERS_DAEMON 0
 #else
 #define CLIPP_REGISTERS_DAEMON 1

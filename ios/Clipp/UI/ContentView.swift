@@ -10,9 +10,16 @@ import Combine
 import UIKit
 import ImageIO
 
+enum MainTab: Hashable {
+    case clipboard
+    case registers
+}
+
 struct ContentView: View {
     @StateObject private var clipboardStream = ClipboardStreamViewModel()
+    @StateObject private var registersModel = RegistersViewModel()
 
+    @State private var selectedTab: MainTab = .clipboard
     @State private var activePanel: AppPanel?
     @State private var inspectedItem: ClipboardStreamItem?
     @State private var didCheckInitialNetworkKey = false
@@ -24,47 +31,70 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             ZStack(alignment: .bottom) {
-                ScrollView {
-                    LazyVStack(spacing: 18) {
-                        if !clipboardStream.items.isEmpty {
-                            Text(clipboardStream.items.first?.dayTitle ?? "Recent")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                                .padding(.top, 10)
+                if selectedTab == .clipboard {
+                    ScrollView {
+                        LazyVStack(spacing: 18) {
+                            if !clipboardStream.items.isEmpty {
+                                Text(clipboardStream.items.first?.dayTitle ?? "Recent")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.top, 10)
 
-                            ForEach(clipboardStream.items) { item in
-                                ClipboardGroupView(
-                                    item: item,
-                                    isCopied: clipboardStream.copiedItemID == item.id,
-                                    onInspect: {
-                                        inspectedItem = item
-                                    },
-                                    onCopy: {
-                                        clipboardStream.copy(item)
-                                    }
-                                )
+                                ForEach(clipboardStream.items) { item in
+                                    ClipboardGroupView(
+                                        item: item,
+                                        isCopied: clipboardStream.copiedItemID == item.id,
+                                        onInspect: {
+                                            inspectedItem = item
+                                        },
+                                        onCopy: {
+                                            clipboardStream.copy(item)
+                                        }
+                                    )
+                                }
+                            } else {
+                                EmptyClipboardActivityView()
+                                    .padding(.top, 64)
                             }
-                        } else {
-                            EmptyClipboardActivityView()
-                                .padding(.top, 64)
                         }
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 96)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 96)
-                }
 
-                Button {
-                    clipboardStream.send()
-                } label: {
-                    SendBottomButton(state: clipboardStream.sendState)
+                    Button {
+                        clipboardStream.send()
+                    } label: {
+                        SendBottomButton(state: clipboardStream.sendState)
+                    }
+                    .disabled(clipboardStream.sendState == .sending)
+                    .padding(.bottom, 18)
+                    .accessibilityLabel("Send Clipboard")
+                } else {
+                    RegistersView(model: registersModel)
+
+                    if let undoName = registersModel.undoName {
+                        UndoRegisterBar(name: undoName) {
+                            registersModel.undo()
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 18)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
                 }
-                .disabled(clipboardStream.sendState == .sending)
-                .padding(.bottom, 18)
-                .accessibilityLabel("Send Clipboard")
             }
+            .animation(.easeInOut(duration: 0.2), value: registersModel.undoName)
             .background(Color(.systemGroupedBackground))
             .navigationTitle(CLP_UI_APP_NAME)
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Picker("View", selection: $selectedTab) {
+                        Text("Clipboard").tag(MainTab.clipboard)
+                        Text("Registers").tag(MainTab.registers)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 240)
+                }
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
                         activePanel = .network
@@ -101,9 +131,19 @@ struct ContentView: View {
                 }
             }
             .sheet(item: $inspectedItem) { item in
-                ClipboardInspectSheet(item: item) {
-                    clipboardStream.copy(item)
-                }
+                ClipboardInspectSheet(
+                    item: item,
+                    onCopy: { clipboardStream.copy(item) },
+                    onSaveToRegister: item.canSaveToRegister
+                        ? { name in
+                            if let sourceID = item.activitySourceItem?.activityItemID {
+                                registersModel.save(activityItemID: sourceID,
+                                                     name: name,
+                                                     markPrivate: item.carriesPrivate)
+                            }
+                        }
+                        : nil
+                )
             }
             .fullScreenCover(isPresented: $showWelcome, onDismiss: {
                 if didCompleteWelcome {
@@ -136,6 +176,14 @@ struct ContentView: View {
             }
             .task {
                 await observeClipboardActivity()
+            }
+            .task {
+                await observeRegisters()
+            }
+            .onChange(of: selectedTab) { tab in
+                if tab == .registers {
+                    registersModel.refresh()
+                }
             }
         }
     }
@@ -228,6 +276,15 @@ struct ContentView: View {
         let name = Notification.Name(ClipboardActivityBridge.didChangeNotificationName())
         for await _ in NotificationCenter.default.notifications(named: name) {
             clipboardStream.refreshActivity()
+        }
+    }
+
+    private func observeRegisters() async {
+        registersModel.refresh()
+
+        let name = Notification.Name(RegisterBridge.didChangeNotificationName())
+        for await _ in NotificationCenter.default.notifications(named: name) {
+            registersModel.refresh()
         }
     }
 }
@@ -557,6 +614,24 @@ private struct ClipboardStreamItem: Identifiable {
         return false
     }
 
+    // Can this item become a named register? Private placeholders carry no
+    // content; everything else backed by a store item can be promoted.
+    var canSaveToRegister: Bool {
+        if case .privatePlaceholder = payload {
+            return false
+        }
+        return activitySourceItem != nil
+    }
+
+    // Privacy carries from the source item onto the saved register, matching the
+    // desktop Save (private = sourceMarked OR a private-text heuristic hit).
+    var carriesPrivate: Bool {
+        if case .privateText = payload {
+            return true
+        }
+        return sourceMarked
+    }
+
     var time: String {
         timestamp.formatted(date: .omitted, time: .shortened)
     }
@@ -819,7 +894,9 @@ private struct ClipboardImagePreview: View {
     }
 }
 
-private struct PrivateLineView: View {
+// Internal (not private): the registers UI reuses this for masked private
+// register values — same ••• mask + long-press peek.
+struct PrivateLineView: View {
     let text: String
     let isOutgoing: Bool
     let sourceMarked: Bool
@@ -893,8 +970,13 @@ private struct PrivatePlaceholderView: View {
 private struct ClipboardInspectSheet: View {
     let item: ClipboardStreamItem
     let onCopy: () -> Void
+    // Non-nil when this item can be promoted to a named register. The closure
+    // receives the chosen name; privacy carry is decided by the caller.
+    let onSaveToRegister: ((String) -> Void)?
 
     @Environment(\.dismiss) private var dismiss
+    @State private var saving = false
+    @State private var saveName = ""
 
     var body: some View {
         NavigationStack {
@@ -920,13 +1002,37 @@ private struct ClipboardInspectSheet: View {
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    if item.direction == .incoming {
-                        Button(action: onCopy) {
-                            Image(systemName: "doc.on.doc")
+                    HStack(spacing: 16) {
+                        if onSaveToRegister != nil {
+                            Button {
+                                saveName = ""
+                                saving = true
+                            } label: {
+                                Image(systemName: "bookmark")
+                            }
+                            .accessibilityLabel("Save to Register")
                         }
-                        .accessibilityLabel("Copy")
+
+                        if item.direction == .incoming {
+                            Button(action: onCopy) {
+                                Image(systemName: "doc.on.doc")
+                            }
+                            .accessibilityLabel("Copy")
+                        }
                     }
                 }
+            }
+            .alert("Save to Register", isPresented: $saving) {
+                TextField("Register name", text: $saveName)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Button("Cancel", role: .cancel) {}
+                Button("Save") {
+                    onSaveToRegister?(saveName)
+                    dismiss()
+                }
+            } message: {
+                Text("Give this clipboard item a name to keep it as a register that syncs to your devices.")
             }
         }
     }

@@ -15,6 +15,8 @@
 #include "../../../src/NetworkRuntime.h"
 #include "../../../src/PeerDisplay.h"
 #include "../../../src/PeerManager.h"
+#include "../../../src/RegisterConfig.h"
+#include "../../../src/RegisterStore.h"
 #include "../../../src/Settings.h"
 #include "../../../src/TerminalLogBuffer.h"
 #include "../../../src/platform/uiClippPage.h"
@@ -41,6 +43,10 @@ extern KeyManager g_keyManager;
 extern PeerDisplay g_peerDisplay;
 extern PeerManager g_peerManager;
 extern NetworkRuntime g_networkRuntime;
+#if CLIPP_REGISTERS_DAEMON
+// Defined in ClippRegisterCore.mm (the desktop keeps it in main.cpp).
+extern RegisterStore g_registerStore;
+#endif
 
 namespace {
 constexpr NSInteger kClippNetworkKeyErrorBase = 4100;
@@ -110,6 +116,25 @@ bool EnsureHostID(NSError** error) {
     return false;
 }
 
+#if CLIPP_REGISTERS_DAEMON
+// Configure the register store the way the desktop does in main.cpp — once, before
+// the network runtime (and thus the register anti-entropy in Peer.cpp) starts, so
+// the first inbound RSYN merges against a properly-clocked store. HostId is assumed
+// initialized (StartNetworkRuntimeIfNeeded gates on EnsureHostID first).
+void ConfigureRegisterStoreOnce() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        HostId hostID{};
+        g_settings.getHostID(hostID);
+        g_registerStore.SetLocalHost(hostID);
+        g_registerStore.SetLimits(g_settings.registerTtlSeconds() * 1000ull,
+                                  static_cast<size_t>(g_settings.registerMaxCount()),
+                                  RegisterStore::kDefaultMaxValueBytes);
+        g_registerStore.SeedClockFloor(Hlc{ g_settings.registerHlcFloorMs(), 0 });
+    });
+}
+#endif
+
 void LogNetworkStartupState() {
     g_logger.SetMinimumLevel(Logger::Level::DDebug);
     g_logger.log("iOS", Logger::Level::Info, "============================================================");
@@ -164,6 +189,9 @@ bool StartNetworkRuntimeIfNeeded(NSError** error) {
     }
 
     LogNetworkStartupState();
+#if CLIPP_REGISTERS_DAEMON
+    ConfigureRegisterStoreOnce();
+#endif
     if (!g_networkRuntime.Start()) {
         AssignError(error, kClippNetworkRuntimeErrorBase + 2, @"Unable to start network runtime.");
         return false;
@@ -583,6 +611,58 @@ void CLPIOSReceiveClipboardPayload(std::shared_ptr<const ClipboardPayload> paylo
 
         EnsureClipboardActivityWatcher();
         g_clipboardActivityStore.Add(std::move(payload));
+    }
+}
+
+// Publish `payload` as the local current clipboard AND broadcast it to the mesh:
+// the iOS analog of the desktop ClipboardActions::ApplyAndBroadcastPayload. Sets the
+// UIPasteboard (honoring source-marked-private via localOnly), arms the dedup guard
+// so the value isn't re-detected as a fresh copy, records the item in the activity
+// store, and broadcasts so peers' clipboards follow. The register bridge's "Copy"
+// (make-current) path calls this after building a payload from a register. The caller
+// stamps a fresh origin before making the payload shared. Returns the new item id.
+uint64_t CLPIOSPublishAndBroadcast(std::shared_ptr<const ClipboardPayload> payload) {
+    if (!payload) {
+        return 0;
+    }
+    @autoreleasepool {
+        const bool sourceMarkedPrivate =
+            (payload->meta.flags & NetworkDefs::CLPM_FLAG_SOURCE_MARKED_PRIVATE) != 0;
+        NSDictionary* pasteboardOptions = sourceMarkedPrivate
+            ? @{ UIPasteboardOptionLocalOnly: @YES }
+            : @{};
+
+        if (payload->meta.formatId == CLIPP_FORMAT_UTF8) {
+            NSString* text = ClipboardTextFromPayload(*payload);
+            if (text.length > 0) {
+                if (sourceMarkedPrivate) {
+                    [UIPasteboard.generalPasteboard setItems:@[ @{ @"public.utf8-plain-text": text } ]
+                                                     options:pasteboardOptions];
+                } else {
+                    UIPasteboard.generalPasteboard.string = text;
+                }
+            }
+        } else if (IsClippImageFormat(payload->meta.formatId)) {
+            NSString* pasteboardType = PasteboardTypeForClippImageFormat(payload->meta.formatId);
+            // Images are uncompressed in storage; alias the payload's bytes (no copy).
+            NSData* imageData = DataFromImageBytes(std::shared_ptr<const std::vector<unsigned char>>(
+                payload, &payload->EncodedBytes()));
+            if (pasteboardType != nil && imageData.length > 0) {
+                if (sourceMarkedPrivate) {
+                    [UIPasteboard.generalPasteboard setItems:@[ @{ pasteboardType: imageData } ]
+                                                     options:pasteboardOptions];
+                } else {
+                    [UIPasteboard.generalPasteboard setData:imageData
+                                          forPasteboardType:pasteboardType];
+                }
+            }
+        }
+
+        g_clipboardHashGuard.RememberCurrent(*payload);
+        EnsureClipboardActivityWatcher();
+        const uint64_t activityItemID = g_clipboardActivityStore.Add(payload);
+        g_peerManager.BroadcastClipboard(payload);
+        return activityItemID;
     }
 }
 
