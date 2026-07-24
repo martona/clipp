@@ -6,6 +6,7 @@
 #include "MDNSDiscovery.h"
 #include "NetworkRuntime.h"
 #include "PeerManager.h"
+#include "RegisterPersistenceRuntime.h"
 #include "Settings.h"
 #include "platform/uiClippPage.h"
 #include "NetworkView.h"
@@ -437,6 +438,7 @@ void MacOSNetworkPage::ApplyNetworkNameChange() {
 
     if (newName != currentName && g_settings.set_networkName(newName)) {
         g_keyManager.ClearNetworkKey();
+        clipp::RegisterPersistenceKeyChanged();
         g_networkRuntime.Restart();
         SetupPasswordFields();
         if (networkKeyChangedHandler_) {
@@ -503,6 +505,8 @@ void MacOSNetworkPage::OnDerivedKey(const KeyManager::NetworkKey& key) {
         return;
     }
 
+    // New group, new sealed-snapshot file: flush the old, load the new.
+    clipp::RegisterPersistenceKeyChanged();
     g_networkRuntime.Restart();
     NewPasswordHashReceived();
     if (networkKeyChangedHandler_) {

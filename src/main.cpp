@@ -30,6 +30,7 @@
 #include "ClipboardWire.h"
 #include "ClipboardFormat.h"
 #include "RegisterStore.h"
+#include "RegisterPersistenceRuntime.h"
 #include "CryptoChannel.h"
 #include "LocalPeerName.h"
 #include "platform/uistrings.h"
@@ -379,7 +380,8 @@ int main(int argc, char* argv[]) {
 
     // Named-register store: configure origin + policy, and seed the HLC clock from
     // the persisted floor so a regressed wall clock can't make a fresh local write
-    // lose the LWW compare against mesh state. Register data itself is ephemeral.
+    // lose the LWW compare against mesh state. Register data is persisted as a
+    // sealed snapshot (StartRegisterPersistence below); the floor stays as the belt.
     g_registerStore.SetLocalHost(hostID);
     g_registerStore.SetLimits(g_settings.registerTtlSeconds() * 1000ull,
                               static_cast<size_t>(g_settings.registerMaxCount()),
@@ -402,6 +404,10 @@ int main(int argc, char* argv[]) {
     } else {
         g_logger.log(__FUNCTION__, Logger::Level::Warning, "Network key unavailable: %s", keyErrorMessage.c_str());
     }
+
+    // Load the persisted registers BEFORE the network stack starts: the first
+    // inbound RSYN must run against the loaded store, not re-pull everything.
+    clipp::StartRegisterPersistence();
 
     if (!StartClipboardNotification(OnClipboardNotification)) {
         g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to start clipboard notification thread!");
@@ -442,6 +448,11 @@ int main(int argc, char* argv[]) {
 
     g_peerManager.ClearPeers();
     g_logger.log(__FUNCTION__, Logger::Level::Info, "Peer manager cleared.");
+
+    // After the network stack: the last inbound records are in the store, so
+    // the final flush writes the complete picture.
+    clipp::StopRegisterPersistence();
+    g_logger.log(__FUNCTION__, Logger::Level::Info, "Register persistence stopped.");
 
     StopSingleInstanceServer();
 

@@ -4,6 +4,7 @@
 #include "Logger.h"
 #include "MDNSDiscovery.h"
 #include "NetworkRuntime.h"
+#include "RegisterPersistenceRuntime.h"
 #include "Settings.h"
 #include "platform/uiClippPage.h"
 #include "platform/uistrings.h"
@@ -120,6 +121,7 @@ void NetworkPage::BuildNetworkSecretSection(winrt::Windows::UI::Xaml::Controls::
         if (newName != g_settings.networkName() && !newName.empty()) {
             g_settings.set_networkName(newName);
             g_keyManager.ClearNetworkKey();
+            clipp::RegisterPersistenceKeyChanged();
             // Full restart so other peers see our DNS-SD goodbye + our re-announce
             // (clears their backoff queue) and our own browser re-discovers the
             // network with the new key.
@@ -298,6 +300,8 @@ void NetworkPage::OnDerivedKey(const KeyManager::NetworkKey* key) {
 
     g_settings.set_networkName(g_settings.networkName());
     g_keyManager.SetNetworkKey(*key);
+    // New group, new sealed-snapshot file: flush the old, load the new.
+    clipp::RegisterPersistenceKeyChanged();
     g_networkRuntime.Restart();
 
     if (uiDispatcher_) {

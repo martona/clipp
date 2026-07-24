@@ -237,7 +237,7 @@ clipp touch 'ssh.*'     # refresh the 90-day timer without reading
 
 The **`--private`** flag: `clipp copy --private otp` masks the value in `ls -v` and refuses to print it to a terminal on `paste`; pipe or redirect it to actually read it. For values you'd rather not leave on screen.
 
-Like the command-line clipboard, registers are text-only in this release; and like the clipboard, they survive only in the GUI apps' memory. They're available as long as at least one instance of the desktop app is running. They achieve eventual consistency through LWW-CRDT when it comes to multiple writes at the same time, or group splits due to networking conditions. Due to the complexity it introduces (tombstone records) a sane-but-comfortable max age of 90 days was chosen for all records; this is refreshed on register read _and_ write, or explicitly with `clipp touch`.
+Like the command-line clipboard, registers are text-only in this release. Unlike the clipboard, they're durable: the desktop apps persist registers across restarts in an encrypted snapshot (sealed with a key derived from your group secret — see [PRIVACY.md](PRIVACY.md)), and the mesh syncs them between devices. They achieve eventual consistency through LWW-CRDT when it comes to multiple writes at the same time, or group splits due to networking conditions. Due to the complexity it introduces (tombstone records) a sane-but-comfortable max age of 90 days was chosen for all records; this is refreshed on register read _and_ write, or explicitly with `clipp touch`.
 
 ### Discovery diagnostics
 

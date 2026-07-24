@@ -14,7 +14,8 @@
 
 - **Network credentials.** The group name and the cryptographic key derived from your shared passphrase are stored in your operating system's secure credential store — Keychain on iOS and macOS, Credential Manager / DPAPI on Windows. Credentials never leave your device unless you intentionally copy them to another of your own devices to pair it.
 - **Preferences.** Your settings are stored in your operating system's preferences storage (`UserDefaults` on Apple platforms, the Windows registry on Windows). These contain feature toggles and your chosen group name.
-- **Activity history.** Recent clipboard items received from peers are kept in memory only and discarded when Clipp quits. Clipp does not write clipboard content to disk.
+- **Activity history.** Recent clipboard items received from peers are kept in memory only and discarded when Clipp quits. On desktop, Clipp does not write clipboard content to disk.
+- **Named registers.** Registers — the named slots you deliberately save — are persisted on desktop so they survive restarts: one file per group, encrypted with XChaCha20-Poly1305 under a key derived from your group secret. Without your group credentials the file is unreadable. The live clipboard and the activity history are never part of this file.
 
 ## What goes over the network
 
@@ -46,4 +47,4 @@ Open an issue at <https://github.com/martona/clipp/issues>.
 
 ---
 
-**Last updated:** May 28, 2026
+**Last updated:** July 24, 2026

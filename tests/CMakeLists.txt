@@ -16,11 +16,13 @@ add_executable(clipp-tests
     test_register_store.cpp
     test_register_wire.cpp
     test_binary_registers.cpp
+    test_register_persistence.cpp
     test_clipboard_activity_store.cpp
     test_popup_model.cpp
     "${CMAKE_SOURCE_DIR}/src/Hlc.cpp"
     "${CMAKE_SOURCE_DIR}/src/RegisterStore.cpp"
     "${CMAKE_SOURCE_DIR}/src/RegisterWire.cpp"
+    "${CMAKE_SOURCE_DIR}/src/RegisterPersistence.cpp"
     "${CMAKE_SOURCE_DIR}/src/ClipboardActivityStore.cpp"
     "${CMAKE_SOURCE_DIR}/src/PopupModel.cpp"
 )

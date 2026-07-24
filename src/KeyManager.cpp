@@ -242,6 +242,7 @@ namespace {
         KeyManager::KeyRole::TcpHandshakeServerToClient,
         KeyManager::KeyRole::MDNS,
         KeyManager::KeyRole::Fingerprint,
+        KeyManager::KeyRole::RegisterStorage,
     };
 
     constexpr std::array<std::array<char, crypto_kdf_CONTEXTBYTES>, KeyManager::KeyRoleCount> kKeyRoleContexts = {{
@@ -249,6 +250,7 @@ namespace {
         {'C', 'L', 'P', 'S', '2', 'C', '0', '1'},
         {'C', 'L', 'P', 'M', 'D', 'N', 'S', '1'},
         {'C', 'L', 'P', 'F', 'N', 'G', 'R', '1'},
+        {'C', 'L', 'P', 'R', 'E', 'G', 'S', '1'},
     }};
 
     size_t KeyRoleIndex(KeyManager::KeyRole role) {
@@ -261,6 +263,8 @@ namespace {
             return 2;
         case KeyManager::KeyRole::Fingerprint:
             return 3;
+        case KeyManager::KeyRole::RegisterStorage:
+            return 4;
         default:
             return KeyManager::KeyRoleCount;
         }

@@ -74,8 +74,16 @@ partition with active local reads of a concurrently-deleted register. Eaten
 knowingly.
 
 ### Persistence
-Register data is **ephemeral** (RAM-only; mesh re-heal is the durability story —
-single-device users get nothing persistent, all-devices-restart loses state).
+> **SUPERSEDED 2026-07-24** (after the popup's "Save" verb created a real
+> durability expectation): registers ARE persisted on desktop as one sealed
+> AEAD snapshot per group — see `src/RegisterPersistence.{h,cpp}` +
+> `RegisterPersistenceRuntime` and the design record in
+> `.claude/VISUAL-PASTE-PLAN.md`. The HLC-floor persistence below remains,
+> as the belt under the snapshot.
+
+Original stance (historical): register data is **ephemeral** (RAM-only; mesh
+re-heal is the durability story — single-device users get nothing persistent,
+all-devices-restart loses state).
 The **one** persisted artifact is the **HLC floor**, because the mesh is now the
 durable store: after an ephemeral wipe + a regressed wall clock, a fresh local
 write could land below the mesh's existing HLC and silently lose the LWW

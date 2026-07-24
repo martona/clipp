@@ -11,7 +11,7 @@
 class KeyManager {
 public:
     static constexpr size_t NetworkKeySize = 32;
-    static constexpr size_t KeyRoleCount = 4;
+    static constexpr size_t KeyRoleCount = 5;
 
     using NetworkKey = std::array<unsigned char, NetworkKeySize>;
 
@@ -20,6 +20,9 @@ public:
         TcpHandshakeServerToClient = 2,
         MDNS = 3,
         Fingerprint = 4,
+        // Seals the at-rest register snapshot (RegisterPersistence). Purpose-
+        // bound and local-only — never leaves the device or touches the wire.
+        RegisterStorage = 5,
     };
 
     explicit KeyManager(Settings& settings);

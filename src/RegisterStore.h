@@ -182,6 +182,14 @@ public:
     void SetLimits(uint64_t ttlMs, size_t maxCount, size_t maxValueBytes);
     void SeedClockFloor(const Hlc& floor);   // startup: lift the clock to the persisted floor
     Hlc ClockHighWater() const;              // for floor persistence (Phase 2)
+
+    // Fires (outside the lock) after any change to REPLICATED state: upserts,
+    // deletes, remote merges, and Read's `touched` refresh. The "" mirror and
+    // drop-on-access expiry pruning do NOT fire — the mirror is never
+    // persisted/replicated, and expiry is a deterministic function every
+    // replica (and the persisted file) reaches on its own. One listener;
+    // persistence uses it as its dirty hook.
+    void SetChangeListener(std::function<void()> listener);
     size_t LiveCount() const;                // live values (excludes tombstones, expired)
     size_t PhysicalCount() const;            // all resident records (drop-on-access test seam)
 
@@ -190,8 +198,11 @@ private:
     size_t LiveCountLocked() const;
     WriteResult UpsertLocked(const std::string& name, std::string value, uint8_t valueFlags, const HostId& origin);
     DeleteResult DeleteLocked(const std::string& name, const HostId& origin);
+    bool ApplyRemoteLocked(RegisterRecord incoming);
+    void NotifyChanged();  // copies the listener under the lock, invokes outside
 
     mutable std::mutex mutex_;
+    std::function<void()> changeListener_;
     HlcClock clock_;
     std::map<std::string, RegisterRecord> records_;
     HostId localHost_;

@@ -147,39 +147,65 @@ RegisterStore::WriteResult RegisterStore::UpsertLocked(const std::string& name, 
 
 RegisterStore::WriteResult RegisterStore::Upsert(const std::string& name, std::string value,
                                                  bool isPrivate) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return UpsertLocked(name, std::move(value),
-                        isPrivate ? RegisterFlags::Private : uint8_t{ 0 }, localHost_);
+    WriteResult result;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        result = UpsertLocked(name, std::move(value),
+                              isPrivate ? RegisterFlags::Private : uint8_t{ 0 }, localHost_);
+    }
+    if (result == WriteResult::Ok) {
+        NotifyChanged();
+    }
+    return result;
 }
 
 RegisterStore::WriteResult RegisterStore::Upsert(const std::string& name, std::string value,
                                                  bool isPrivate, const HostId& origin) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return UpsertLocked(name, std::move(value),
-                        isPrivate ? RegisterFlags::Private : uint8_t{ 0 }, origin);
+    WriteResult result;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        result = UpsertLocked(name, std::move(value),
+                              isPrivate ? RegisterFlags::Private : uint8_t{ 0 }, origin);
+    }
+    if (result == WriteResult::Ok) {
+        NotifyChanged();
+    }
+    return result;
 }
 
 RegisterStore::WriteResult RegisterStore::UpsertWithFlags(const std::string& name, std::string value,
                                                           uint8_t valueFlags, const HostId& origin) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return UpsertLocked(name, std::move(value), valueFlags, origin);
+    WriteResult result;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        result = UpsertLocked(name, std::move(value), valueFlags, origin);
+    }
+    if (result == WriteResult::Ok) {
+        NotifyChanged();
+    }
+    return result;
 }
 
 std::optional<RegisterRecord> RegisterStore::Read(const std::string& name) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    const auto it = records_.find(name);
-    if (it == records_.end()) {
-        return std::nullopt;
+    std::optional<RegisterRecord> result;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto it = records_.find(name);
+        if (it == records_.end()) {
+            return std::nullopt;
+        }
+        if (IsExpired(it->second, nowMs_(), ttlMs_)) {
+            records_.erase(it);  // drop-on-access
+            return std::nullopt;
+        }
+        if (it->second.IsTombstone()) {
+            return std::nullopt;
+        }
+        it->second.touched = clock_.Now();  // LRU refresh
+        result = it->second;
     }
-    if (IsExpired(it->second, nowMs_(), ttlMs_)) {
-        records_.erase(it);  // drop-on-access
-        return std::nullopt;
-    }
-    if (it->second.IsTombstone()) {
-        return std::nullopt;
-    }
-    it->second.touched = clock_.Now();  // LRU refresh
-    return it->second;
+    NotifyChanged();  // the `touched` bump is replicated state (expiry fairness)
+    return result;
 }
 
 RegisterStore::DeleteResult RegisterStore::DeleteLocked(const std::string& name, const HostId& origin) {
@@ -210,13 +236,27 @@ RegisterStore::DeleteResult RegisterStore::DeleteLocked(const std::string& name,
 }
 
 RegisterStore::DeleteResult RegisterStore::Delete(const std::string& name) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return DeleteLocked(name, localHost_);
+    DeleteResult result;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        result = DeleteLocked(name, localHost_);
+    }
+    if (result == DeleteResult::Deleted) {
+        NotifyChanged();
+    }
+    return result;
 }
 
 RegisterStore::DeleteResult RegisterStore::Delete(const std::string& name, const HostId& origin) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return DeleteLocked(name, origin);
+    DeleteResult result;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        result = DeleteLocked(name, origin);
+    }
+    if (result == DeleteResult::Deleted) {
+        NotifyChanged();
+    }
+    return result;
 }
 
 void RegisterStore::MirrorDefault(std::string value) {
@@ -335,7 +375,18 @@ std::vector<std::string> RegisterStore::PlanPush(
 }
 
 bool RegisterStore::ApplyRemote(RegisterRecord incoming) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    bool changed = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        changed = ApplyRemoteLocked(std::move(incoming));
+    }
+    if (changed) {
+        NotifyChanged();
+    }
+    return changed;
+}
+
+bool RegisterStore::ApplyRemoteLocked(RegisterRecord incoming) {
     if (incoming.name.empty()) {
         return false;  // "" is the local-only mirror; a peer can never inject it
     }
@@ -368,6 +419,22 @@ bool RegisterStore::ApplyRemote(RegisterRecord incoming) {
     }
     it->second = std::move(merged);
     return true;
+}
+
+void RegisterStore::SetChangeListener(std::function<void()> listener) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    changeListener_ = std::move(listener);
+}
+
+void RegisterStore::NotifyChanged() {
+    std::function<void()> listener;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        listener = changeListener_;
+    }
+    if (listener) {
+        listener();
+    }
 }
 
 void RegisterStore::SeedClockFloor(const Hlc& floor) {
