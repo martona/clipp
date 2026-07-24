@@ -152,16 +152,6 @@ void StartRegisterPersistence() {
     if (g_running) {
         return;
     }
-    // The listener only flips a flag under the runtime mutex, so it is safe
-    // from any store-mutating thread (peers, UI, CLI gateway) and stays
-    // harmlessly attached after shutdown.
-    g_registerStore.SetChangeListener([] {
-        {
-            std::lock_guard<std::mutex> lock(g_mutex);
-            g_dirty = true;
-        }
-        g_cv.notify_all();
-    });
 
     RegisterPersistence::SealKey key{};
     std::string path;
@@ -178,6 +168,21 @@ void StartRegisterPersistence() {
         g_logger.log("RegisterPersistence", Logger::Level::Debug,
                      "No network key yet; registers stay in RAM until pairing.");
     }
+
+    // Armed AFTER the load, or every ApplyRemote above would mark the store
+    // dirty and the writer would re-seal the exact records it just read.
+    // Startup is single-threaded until the network runtime starts, so nothing
+    // can slip a mutation into the gap. The listener only flips a flag under
+    // the runtime mutex, so it is safe from any store-mutating thread (peers,
+    // UI, CLI gateway) and stays harmlessly attached after shutdown.
+    g_registerStore.SetChangeListener([] {
+        {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            g_dirty = true;
+        }
+        g_cv.notify_all();
+    });
+
     g_running = true;
     g_stop = false;
     g_writer = std::thread(WriterLoop);
