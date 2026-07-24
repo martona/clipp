@@ -4,6 +4,7 @@
 #include "MDNSDiscovery.h"
 #include "NetworkRuntime.h"
 #include "PeerManager.h"
+#include "PopupHotkeys.h"
 #include "Settings.h"
 #include "platform.h"
 #include "platform/uiSettingsPage.h"
@@ -482,6 +483,91 @@ void SettingsPage::BuildView() {
     content.Children().Append(feedbackHeader);
     content.Children().Append(feedbackSection);
 
+    // Popup summon shortcuts: two capture buttons (click, then press the new
+    // chord; Esc cancels, Delete clears the slot).
+    TextBlock hotkeyHeader;
+    hotkeyHeader.Text(CLP_W(CLP_UI_POPUP_HOTKEYS));
+    hotkeyHeader.FontSize(16);
+    hotkeyHeader.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+
+    Grid hotkeySection;
+    hotkeySection.CornerRadius(CornerRadius{ 4 });
+    hotkeySection.BorderThickness(ThicknessHelper::FromLengths(1, 1, 1, 1));
+    hotkeySection.BorderBrush(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(50, 150, 150, 150)));
+    hotkeySection.Padding(ThicknessHelper::FromLengths(16, 12, 16, 12));
+    hotkeySection.RowSpacing(12);
+    hotkeySection.ColumnSpacing(16);
+
+    ColumnDefinition hotkeyLabelColumn;
+    hotkeyLabelColumn.Width(GridLength{ 130, GridUnitType::Pixel });
+    ColumnDefinition hotkeyFieldColumn;
+    hotkeyFieldColumn.Width(GridLength{ 1, GridUnitType::Star });
+    hotkeySection.ColumnDefinitions().Append(hotkeyLabelColumn);
+    hotkeySection.ColumnDefinitions().Append(hotkeyFieldColumn);
+
+    const auto makeHotkeyButton = [this](int slot) {
+        Button button;
+        button.MinWidth(190);
+        button.HorizontalAlignment(HorizontalAlignment::Left);
+        button.Click([this, slot](auto const&, auto const&) {
+            BeginHotkeyCapture(slot);
+        });
+        button.PreviewKeyDown([this](auto const&, Input::KeyRoutedEventArgs const& args) {
+            HandleHotkeyCaptureKey(args);
+        });
+        button.LostFocus([this](auto const&, auto const&) {
+            CancelHotkeyCapture();
+        });
+        return button;
+    };
+    hotkeyPrimaryButton_ = makeHotkeyButton(0);
+    hotkeySecondaryButton_ = makeHotkeyButton(1);
+
+    const auto addHotkeyRow = [&hotkeySection](int rowIndex, TextBlock const& label,
+                                               Button const& button) {
+        RowDefinition row;
+        row.Height(GridLength{ 1, GridUnitType::Auto });
+        hotkeySection.RowDefinitions().Append(row);
+        Grid::SetRow(label, rowIndex);
+        Grid::SetColumn(label, 0);
+        Grid::SetRow(button, rowIndex);
+        Grid::SetColumn(button, 1);
+        hotkeySection.Children().Append(label);
+        hotkeySection.Children().Append(button);
+    };
+    addHotkeyRow(0, MakeLabel(CLP_W(CLP_UI_POPUP_HOTKEY_PRIMARY)), hotkeyPrimaryButton_);
+    addHotkeyRow(1, MakeLabel(CLP_W(CLP_UI_POPUP_HOTKEY_SECONDARY)), hotkeySecondaryButton_);
+
+    RowDefinition hotkeyHelpRow;
+    hotkeyHelpRow.Height(GridLength{ 1, GridUnitType::Auto });
+    hotkeySection.RowDefinitions().Append(hotkeyHelpRow);
+    TextBlock hotkeyHelp;
+    hotkeyHelp.Text(CLP_W(CLP_UI_POPUP_HOTKEY_HELP));
+    hotkeyHelp.FontSize(12);
+    hotkeyHelp.Opacity(0.75);
+    hotkeyHelp.TextWrapping(TextWrapping::WrapWholeWords);
+    Grid::SetRow(hotkeyHelp, 2);
+    Grid::SetColumn(hotkeyHelp, 0);
+    Grid::SetColumnSpan(hotkeyHelp, 2);
+    hotkeySection.Children().Append(hotkeyHelp);
+
+    RowDefinition hotkeyStatusRow;
+    hotkeyStatusRow.Height(GridLength{ 1, GridUnitType::Auto });
+    hotkeySection.RowDefinitions().Append(hotkeyStatusRow);
+    hotkeyStatus_ = TextBlock();
+    hotkeyStatus_.FontSize(12);
+    hotkeyStatus_.Foreground(SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(255, 200, 90, 60)));
+    hotkeyStatus_.TextWrapping(TextWrapping::WrapWholeWords);
+    hotkeyStatus_.Visibility(Visibility::Collapsed);
+    Grid::SetRow(hotkeyStatus_, 3);
+    Grid::SetColumn(hotkeyStatus_, 0);
+    Grid::SetColumnSpan(hotkeyStatus_, 2);
+    hotkeySection.Children().Append(hotkeyStatus_);
+
+    content.Children().Append(hotkeyHeader);
+    content.Children().Append(hotkeySection);
+    RefreshHotkeyButtonLabels();
+
     TextBlock hostIDHeader;
     hostIDHeader.Text(CLP_W(CLP_UI_HOST_ID));
     hostIDHeader.FontSize(16);
@@ -761,6 +847,139 @@ void SettingsPage::ApplyPrivacySettingChange() {
 
     statusMessage_.Text(CLP_W(CLP_UI_PRIVACY_SETTINGS_APPLIED));
     ShowStatusMessage();
+}
+
+// ---- popup hotkey capture ----
+
+void SettingsPage::RefreshHotkeyButtonLabels() {
+    if (hotkeyPrimaryButton_) {
+        hotkeyPrimaryButton_.Content(winrt::box_value(winrt::hstring{
+            clipp::FormatPopupHotkeyChord(g_settings.popupHotkeyPrimary()) }));
+    }
+    if (hotkeySecondaryButton_) {
+        hotkeySecondaryButton_.Content(winrt::box_value(winrt::hstring{
+            clipp::FormatPopupHotkeyChord(g_settings.popupHotkeySecondary()) }));
+    }
+}
+
+void SettingsPage::SetHotkeyStatus(const wchar_t* text) {
+    if (!hotkeyStatus_) {
+        return;
+    }
+    if (text == nullptr || text[0] == L'\0') {
+        hotkeyStatus_.Text(L"");
+        hotkeyStatus_.Visibility(winrt::Windows::UI::Xaml::Visibility::Collapsed);
+    } else {
+        hotkeyStatus_.Text(winrt::hstring{ text });
+        hotkeyStatus_.Visibility(winrt::Windows::UI::Xaml::Visibility::Visible);
+    }
+}
+
+void SettingsPage::BeginHotkeyCapture(int slot) {
+    capturingHotkeySlot_ = slot;
+    SetHotkeyStatus(nullptr);
+    const auto& button = slot == 0 ? hotkeyPrimaryButton_ : hotkeySecondaryButton_;
+    if (button) {
+        button.Content(winrt::box_value(winrt::hstring{ CLP_W(CLP_UI_POPUP_HOTKEY_CAPTURE) }));
+    }
+}
+
+void SettingsPage::CancelHotkeyCapture() {
+    if (capturingHotkeySlot_ < 0) {
+        return;
+    }
+    capturingHotkeySlot_ = -1;
+    RefreshHotkeyButtonLabels();
+}
+
+void SettingsPage::CommitHotkeyChord(uint32_t chord) {
+    const int slot = capturingHotkeySlot_;
+    capturingHotkeySlot_ = -1;
+
+    const uint32_t previous =
+        slot == 0 ? g_settings.popupHotkeyPrimary() : g_settings.popupHotkeySecondary();
+    if (chord == previous) {
+        RefreshHotkeyButtonLabels();
+        return;
+    }
+
+    if (slot == 0) {
+        g_settings.setPopupHotkeyPrimary(chord);
+    } else {
+        g_settings.setPopupHotkeySecondary(chord);
+    }
+    const unsigned failed = clipp::ReapplyPopupHotkeys();
+    if (chord != 0 && (failed & (slot == 0 ? 1u : 2u)) != 0) {
+        // Another app owns it: report, revert, re-register the old state.
+        if (slot == 0) {
+            g_settings.setPopupHotkeyPrimary(previous);
+        } else {
+            g_settings.setPopupHotkeySecondary(previous);
+        }
+        clipp::ReapplyPopupHotkeys();
+        SetHotkeyStatus(CLP_W(CLP_UI_POPUP_HOTKEY_IN_USE));
+    } else {
+        SetHotkeyStatus(nullptr);
+        statusMessage_.Text(CLP_W(CLP_UI_POPUP_HOTKEY_APPLIED));
+        ShowStatusMessage();
+    }
+    RefreshHotkeyButtonLabels();
+}
+
+void SettingsPage::HandleHotkeyCaptureKey(
+    winrt::Windows::UI::Xaml::Input::KeyRoutedEventArgs const& args) {
+    if (capturingHotkeySlot_ < 0) {
+        return;  // not capturing: let the button behave like a button
+    }
+    using winrt::Windows::System::VirtualKey;
+    const auto key = args.Key();
+
+    if (key == VirtualKey::Escape) {
+        CancelHotkeyCapture();
+        args.Handled(true);
+        return;
+    }
+    if (key == VirtualKey::Delete || key == VirtualKey::Back) {
+        CommitHotkeyChord(0);  // explicit "no shortcut" for this slot
+        args.Handled(true);
+        return;
+    }
+
+    // Modifiers alone keep the capture open — wait for the real key.
+    switch (key) {
+    case VirtualKey::Control:
+    case VirtualKey::LeftControl:
+    case VirtualKey::RightControl:
+    case VirtualKey::Shift:
+    case VirtualKey::LeftShift:
+    case VirtualKey::RightShift:
+    case VirtualKey::Menu:
+    case VirtualKey::LeftMenu:
+    case VirtualKey::RightMenu:
+    case VirtualKey::LeftWindows:
+    case VirtualKey::RightWindows:
+        args.Handled(true);
+        return;
+    default:
+        break;
+    }
+
+    uint32_t mods = 0;
+    if (GetKeyState(VK_CONTROL) & 0x8000) mods |= MOD_CONTROL;
+    if (GetKeyState(VK_MENU) & 0x8000)    mods |= MOD_ALT;
+    if (GetKeyState(VK_SHIFT) & 0x8000)   mods |= MOD_SHIFT;
+    if ((GetKeyState(VK_LWIN) & 0x8000) || (GetKeyState(VK_RWIN) & 0x8000)) {
+        mods |= MOD_WIN;
+    }
+    // Shift alone can't carry a global chord — it would shadow plain typing.
+    if ((mods & (MOD_CONTROL | MOD_ALT | MOD_WIN)) == 0) {
+        SetHotkeyStatus(CLP_W(CLP_UI_POPUP_HOTKEY_NEEDS_MODIFIER));
+        args.Handled(true);
+        return;
+    }
+
+    CommitHotkeyChord((mods << 16) | (static_cast<uint32_t>(key) & 0xFFFF));
+    args.Handled(true);
 }
 
 winrt::hstring SettingsPage::ToHString(const std::string& value) {

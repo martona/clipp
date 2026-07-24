@@ -55,6 +55,18 @@
 #define CLP_UI_POPUP_RENAME_TIP_MAC "Rename (F2)"
 #define CLP_UI_POPUP_DELETE_TIP_MAC "Delete everywhere (⌦)"
 #define CLP_UI_POPUP_UNDO_TIP_MAC "Undo the last delete (⌘Z)"
+
+// Settings: the popup's configurable summon shortcuts.
+#define CLP_UI_POPUP_HOTKEYS "Clipboard history popup"
+#define CLP_UI_POPUP_HOTKEY_PRIMARY "Primary shortcut"
+#define CLP_UI_POPUP_HOTKEY_SECONDARY "Secondary shortcut"
+#define CLP_UI_POPUP_HOTKEY_CAPTURE "Press the new shortcut..."
+#define CLP_UI_POPUP_HOTKEY_NONE "None"
+#define CLP_UI_POPUP_HOTKEY_HELP "Summons the popup from anywhere. Click a shortcut to change it; while capturing, Esc cancels and Delete clears the slot. With both cleared, the tray or menu bar item still opens it."
+#define CLP_UI_POPUP_HOTKEY_NEEDS_MODIFIER "Include Ctrl, Alt, or Win in the shortcut."
+#define CLP_UI_POPUP_HOTKEY_NEEDS_MODIFIER_MAC "Include ⌘, ⌃, or ⌥ in the shortcut."
+#define CLP_UI_POPUP_HOTKEY_IN_USE "That shortcut is already taken by another app."
+#define CLP_UI_POPUP_HOTKEY_APPLIED "Popup shortcut updated."
 #define CLP_UI_LINK "Link"
 #define CLP_UI_TEXT "Text"
 #define CLP_UI_IMAGE "Image"

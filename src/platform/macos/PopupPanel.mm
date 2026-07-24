@@ -1850,39 +1850,177 @@ OSStatus PopupHotKeyHandler(EventHandlerCallRef nextHandler, EventRef event, voi
 
 namespace clipp {
 
+namespace {
+
+// Keycode → display name: named specials, else the current keyboard layout's
+// character for the key (uppercased), else a numeric fallback.
+NSString* PopupKeycodeName(UInt32 keyCode) {
+    switch (keyCode) {
+    case kVK_Help:          return @"Insert";  // the PC-Insert position
+    case kVK_Return:        return @"Return";
+    case kVK_Space:         return @"Space";
+    case kVK_Tab:           return @"Tab";
+    case kVK_Escape:        return @"Esc";
+    case kVK_Delete:        return @"⌫";
+    case kVK_ForwardDelete: return @"⌦";
+    case kVK_Home:          return @"Home";
+    case kVK_End:           return @"End";
+    case kVK_PageUp:        return @"Page Up";
+    case kVK_PageDown:      return @"Page Down";
+    case kVK_LeftArrow:     return @"←";
+    case kVK_RightArrow:    return @"→";
+    case kVK_UpArrow:       return @"↑";
+    case kVK_DownArrow:     return @"↓";
+    case kVK_F1:  return @"F1";
+    case kVK_F2:  return @"F2";
+    case kVK_F3:  return @"F3";
+    case kVK_F4:  return @"F4";
+    case kVK_F5:  return @"F5";
+    case kVK_F6:  return @"F6";
+    case kVK_F7:  return @"F7";
+    case kVK_F8:  return @"F8";
+    case kVK_F9:  return @"F9";
+    case kVK_F10: return @"F10";
+    case kVK_F11: return @"F11";
+    case kVK_F12: return @"F12";
+    default:
+        break;
+    }
+
+    TISInputSourceRef source = TISCopyCurrentKeyboardLayoutInputSource();
+    NSString* name = nil;
+    if (source != nullptr) {
+        CFDataRef layoutData = static_cast<CFDataRef>(
+            TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData));
+        if (layoutData != nullptr) {
+            const UCKeyboardLayout* layout =
+                reinterpret_cast<const UCKeyboardLayout*>(CFDataGetBytePtr(layoutData));
+            UInt32 deadKeys = 0;
+            UniChar chars[8]{};
+            UniCharCount length = 0;
+            if (UCKeyTranslate(layout, static_cast<UInt16>(keyCode), kUCKeyActionDisplay, 0,
+                               LMGetKbdType(), kUCKeyTranslateNoDeadKeysBit,
+                               &deadKeys, 8, &length, chars) == noErr
+                && length > 0) {
+                name = [[NSString stringWithCharacters:chars length:length] uppercaseString];
+            }
+        }
+        CFRelease(source);
+    }
+    if (name.length > 0) {
+        return name;
+    }
+    return [NSString stringWithFormat:@"Key %u", static_cast<unsigned>(keyCode)];
+}
+
+}  // namespace
+
+NSString* FormatPopupHotkeyChord(uint32_t chord) {
+    if (chord == 0) {
+        return CLP_NS(CLP_UI_POPUP_HOTKEY_NONE);
+    }
+    const UInt32 mods = chord >> 16;
+    NSMutableString* text = [[NSMutableString alloc] init];
+    // Canonical macOS modifier order: ⌃ ⌥ ⇧ ⌘.
+    if (mods & controlKey) [text appendString:@"⌃"];
+    if (mods & optionKey)  [text appendString:@"⌥"];
+    if (mods & shiftKey)   [text appendString:@"⇧"];
+    if (mods & cmdKey)     [text appendString:@"⌘"];
+    [text appendString:PopupKeycodeName(chord & 0xFFFF)];
+    return text;
+}
+
+BOOL PopupHotkeyMenuEquivalent(uint32_t chord, NSString** outKey, NSUInteger* outModifierFlags) {
+    if (chord == 0 || outKey == nullptr || outModifierFlags == nullptr) {
+        return NO;
+    }
+    // Menu key equivalents need a typable character; specials (Insert/Help,
+    // F-keys, navigation) don't get one — the menu item just goes bare.
+    const UInt32 keyCode = chord & 0xFFFF;
+    TISInputSourceRef source = TISCopyCurrentKeyboardLayoutInputSource();
+    if (source == nullptr) {
+        return NO;
+    }
+    NSString* character = nil;
+    CFDataRef layoutData = static_cast<CFDataRef>(
+        TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData));
+    if (layoutData != nullptr) {
+        const UCKeyboardLayout* layout =
+            reinterpret_cast<const UCKeyboardLayout*>(CFDataGetBytePtr(layoutData));
+        UInt32 deadKeys = 0;
+        UniChar chars[8]{};
+        UniCharCount length = 0;
+        if (UCKeyTranslate(layout, static_cast<UInt16>(keyCode), kUCKeyActionDisplay, 0,
+                           LMGetKbdType(), kUCKeyTranslateNoDeadKeysBit,
+                           &deadKeys, 8, &length, chars) == noErr
+            && length == 1 && chars[0] > 0x20 && chars[0] < 0xF700) {
+            character = [[NSString stringWithCharacters:chars length:1] lowercaseString];
+        }
+    }
+    CFRelease(source);
+    if (character.length != 1) {
+        return NO;
+    }
+
+    const UInt32 mods = chord >> 16;
+    NSUInteger flags = 0;
+    if (mods & cmdKey)     flags |= NSEventModifierFlagCommand;
+    if (mods & controlKey) flags |= NSEventModifierFlagControl;
+    if (mods & optionKey)  flags |= NSEventModifierFlagOption;
+    if (mods & shiftKey)   flags |= NSEventModifierFlagShift;
+    *outKey = character;
+    *outModifierFlags = flags;
+    return YES;
+}
+
 void InstallPopupHotkeys() {
-    if (g_hotKeyHandler != nullptr) {
-        return;
+    if (g_hotKeyHandler == nullptr) {
+        EventTypeSpec spec{ kEventClassKeyboard, kEventHotKeyPressed };
+        if (InstallEventHandler(GetEventDispatcherTarget(), PopupHotKeyHandler,
+                                1, &spec, nullptr, &g_hotKeyHandler) != noErr) {
+            g_logger.log(__FUNCTION__, Logger::Level::Warning,
+                         "Popup hotkey event handler installation failed; the menu item still works.");
+            return;
+        }
     }
-    EventTypeSpec spec{ kEventClassKeyboard, kEventHotKeyPressed };
-    if (InstallEventHandler(GetEventDispatcherTarget(), PopupHotKeyHandler,
-                            1, &spec, nullptr, &g_hotKeyHandler) != noErr) {
-        g_logger.log(__FUNCTION__, Logger::Level::Warning,
-                     "Popup hotkey event handler installation failed; the menu item still works.");
-        return;
-    }
+    ReapplyPopupHotkeys();
+}
 
-    // Primary: ⌘Insert — kVK_Help is the PC-Insert position (external
-    // keyboards); most Apple laptops lack the key, hence the secondary.
-    EventHotKeyID primaryId{ 'CLPP', 1 };
-    if (RegisterEventHotKey(kVK_Help, cmdKey, primaryId,
-                            GetEventDispatcherTarget(), 0, &g_hotKeyPrimary) == noErr) {
-        g_logger.log(__FUNCTION__, Logger::Level::Info, "Popup hotkey registered: Cmd+Insert.");
-    } else {
+unsigned ReapplyPopupHotkeys() {
+    if (g_hotKeyHandler == nullptr) {
+        return 0;  // handler never installed; nothing to (re)register against
+    }
+    if (g_hotKeyPrimary != nullptr) {
+        UnregisterEventHotKey(g_hotKeyPrimary);
         g_hotKeyPrimary = nullptr;
-        g_logger.log(__FUNCTION__, Logger::Level::Info, "Cmd+Insert unavailable.");
+    }
+    if (g_hotKeySecondary != nullptr) {
+        UnregisterEventHotKey(g_hotKeySecondary);
+        g_hotKeySecondary = nullptr;
     }
 
-    // Secondary: ⌃⌘V — typable on every keyboard.
-    EventHotKeyID secondaryId{ 'CLPP', 2 };
-    if (RegisterEventHotKey(kVK_ANSI_V, cmdKey | controlKey, secondaryId,
-                            GetEventDispatcherTarget(), 0, &g_hotKeySecondary) == noErr) {
-        g_logger.log(__FUNCTION__, Logger::Level::Info, "Popup hotkey registered: Ctrl+Cmd+V.");
-    } else {
-        g_hotKeySecondary = nullptr;
-        g_logger.log(__FUNCTION__, Logger::Level::Warning,
-                     "Ctrl+Cmd+V unavailable; the menu item still opens the popup.");
-    }
+    unsigned failed = 0;
+    const auto tryRegister = [&failed](uint32_t chord, UInt32 slotId,
+                                       EventHotKeyRef* ref, unsigned failBit) {
+        if (chord == 0) {
+            return;  // slot explicitly disabled
+        }
+        EventHotKeyID hotKeyId{ 'CLPP', slotId };
+        if (RegisterEventHotKey(chord & 0xFFFF, chord >> 16, hotKeyId,
+                                GetEventDispatcherTarget(), 0, ref) == noErr) {
+            g_logger.log(__FUNCTION__, Logger::Level::Info, "Popup hotkey registered: %s.",
+                         FormatPopupHotkeyChord(chord).UTF8String);
+        } else {
+            *ref = nullptr;
+            failed |= failBit;
+            g_logger.log(__FUNCTION__, Logger::Level::Warning,
+                         "Popup hotkey %s could not be registered (in use elsewhere).",
+                         FormatPopupHotkeyChord(chord).UTF8String);
+        }
+    };
+    tryRegister(g_settings.popupHotkeyPrimary(), 1, &g_hotKeyPrimary, 1u);
+    tryRegister(g_settings.popupHotkeySecondary(), 2, &g_hotKeySecondary, 2u);
+    return failed;
 }
 
 void TogglePopupPanel() {

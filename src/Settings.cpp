@@ -16,6 +16,8 @@ namespace {
     constexpr wchar_t kMaskShortTextPreviewsName[] = L"MaskShortTextPreviews";
     constexpr wchar_t kAnimateFlowFeedbackName[] = L"AnimateFlowFeedback";
     constexpr wchar_t kPopupHintShownCountName[] = L"PopupHintShownCount";
+    constexpr wchar_t kPopupHotkeyPrimaryName[] = L"PopupHotkeyPrimary";
+    constexpr wchar_t kPopupHotkeySecondaryName[] = L"PopupHotkeySecondary";
     constexpr wchar_t kOriginSequenceFloorName[] = L"OriginSequenceFloor";
     constexpr wchar_t kRegisterTtlSecondsName[] = L"RegisterTtlSeconds";
     constexpr wchar_t kRegisterMaxCountName[] = L"RegisterMaxCount";
@@ -223,6 +225,34 @@ void Settings::notePopupHintShown() {
     WriteUint64Value(kPopupHintShownCountName, next);
 }
 
+uint32_t Settings::popupHotkeyPrimary() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return popupHotkeyPrimary_;
+}
+
+uint32_t Settings::popupHotkeySecondary() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return popupHotkeySecondary_;
+}
+
+void Settings::setPopupHotkeyPrimary(uint32_t chord) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        popupHotkeyPrimary_ = chord;
+    }
+    // An explicit 0 persists too: "disabled" must survive restarts distinctly
+    // from "never configured" (which falls back to the default).
+    WriteUint64Value(kPopupHotkeyPrimaryName, chord);
+}
+
+void Settings::setPopupHotkeySecondary(uint32_t chord) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        popupHotkeySecondary_ = chord;
+    }
+    WriteUint64Value(kPopupHotkeySecondaryName, chord);
+}
+
 uint64_t Settings::nextOriginSequenceNumber() {
     std::lock_guard<std::mutex> lock(mutex_);
     const uint64_t next = ++originSequenceCounter_;
@@ -369,6 +399,13 @@ bool Settings::LoadCache() {
     uint64_t popupHintShownCount = 0;
     if (ReadUint64Value(kPopupHintShownCountName, popupHintShownCount)) {
         popupHintShownCount_ = popupHintShownCount;
+    }
+    uint64_t popupHotkey = 0;
+    if (ReadUint64Value(kPopupHotkeyPrimaryName, popupHotkey)) {
+        popupHotkeyPrimary_ = static_cast<uint32_t>(popupHotkey);
+    }
+    if (ReadUint64Value(kPopupHotkeySecondaryName, popupHotkey)) {
+        popupHotkeySecondary_ = static_cast<uint32_t>(popupHotkey);
     }
 
     // Origin sequence counter: load the persisted floor (the value the previous

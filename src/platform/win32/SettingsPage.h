@@ -1,9 +1,11 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 #include <winrt/Windows.UI.Xaml.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
+#include <winrt/Windows.UI.Xaml.Input.h>
 
 class SettingsPage {
 public:
@@ -34,6 +36,12 @@ private:
     void ApplyPrivacySettingChange();
     void RefreshFeedbackControls();
     void ApplyFeedbackSettingChange();
+    void RefreshHotkeyButtonLabels();
+    void BeginHotkeyCapture(int slot);
+    void CancelHotkeyCapture();
+    void HandleHotkeyCaptureKey(winrt::Windows::UI::Xaml::Input::KeyRoutedEventArgs const& args);
+    void CommitHotkeyChord(uint32_t chord);
+    void SetHotkeyStatus(const wchar_t* text);
 
     static winrt::hstring ToHString(const std::string& value);
 
@@ -52,6 +60,11 @@ private:
     winrt::Windows::UI::Xaml::Controls::CheckBox maskShortTextPreviewsCheck_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::CheckBox honorPrivacyMarkersCheck_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::CheckBox animateFlowFeedbackCheck_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::Button hotkeyPrimaryButton_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::Button hotkeySecondaryButton_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::TextBlock hotkeyStatus_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBlock statusMessage_{ nullptr };
+    // -1 = not capturing; 0/1 = which slot the next keystroke re-binds.
+    int capturingHotkeySlot_{ -1 };
     bool loadingSettings_{ false };
 };

@@ -47,6 +47,24 @@ public:
     // action), then never again.
     static constexpr uint64_t PopupHintMaxShows = 5;
 
+    // Popup summon hotkeys, PLATFORM-NATIVE chords: (modifiers << 16) | key.
+    // Windows: RegisterHotKey MOD_* bits + virtual-key code. macOS: Carbon
+    // cmdKey/shiftKey/optionKey/controlKey bits + Carbon keycode. 0 = slot
+    // explicitly disabled; an ABSENT stored value means the default below
+    // (settings never roam between devices, so native encoding is safe).
+    // Two slots so an Insert-less Mac laptop keeps a typable chord while a
+    // desk with a full keyboard gets both.
+#if defined(_WIN32)
+    static constexpr uint32_t DefaultPopupHotkeyPrimary = (0x8u << 16) | 0x2D;    // Win+Insert
+    static constexpr uint32_t DefaultPopupHotkeySecondary = (0xAu << 16) | 0x56;  // Ctrl+Win+V
+#elif defined(__APPLE__)
+    static constexpr uint32_t DefaultPopupHotkeyPrimary = (0x0100u << 16) | 0x72;    // Cmd+Insert(Help)
+    static constexpr uint32_t DefaultPopupHotkeySecondary = (0x1100u << 16) | 0x09;  // Ctrl+Cmd+V
+#else
+    static constexpr uint32_t DefaultPopupHotkeyPrimary = 0;
+    static constexpr uint32_t DefaultPopupHotkeySecondary = 0;
+#endif
+
     Settings();
 
     static bool IsValidPort(int value);
@@ -85,6 +103,14 @@ public:
     // the toast at PopupHintMaxShows.
     uint64_t popupHintShownCount() const;
     void notePopupHintShown();
+
+    // The two popup summon chords (see the Default* constants for encoding).
+    // Setters persist immediately; callers re-register via the platform's
+    // ReapplyPopupHotkeys after a change.
+    uint32_t popupHotkeyPrimary() const;
+    uint32_t popupHotkeySecondary() const;
+    void setPopupHotkeyPrimary(uint32_t chord);
+    void setPopupHotkeySecondary(uint32_t chord);
 
     // Named-register settings (stored-only). TTL in seconds; cap in records.
     uint64_t registerTtlSeconds() const;
@@ -135,6 +161,8 @@ private:
     // Reserved-ahead persisted HLC wall-ms floor for the register clock.
     uint64_t registerHlcFloorMs_{ 0 };
     uint64_t popupHintShownCount_{ 0 };
+    uint32_t popupHotkeyPrimary_{ DefaultPopupHotkeyPrimary };
+    uint32_t popupHotkeySecondary_{ DefaultPopupHotkeySecondary };
     mutable std::mutex mutex_;
 };
 

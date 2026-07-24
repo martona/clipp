@@ -2,6 +2,10 @@
 
 #ifdef __APPLE__
 
+#import <Foundation/Foundation.h>
+
+#include <cstdint>
+
 // The visual-paste popup, macOS shell: a NONACTIVATING borderless NSPanel
 // summoned by a global Carbon hotkey or the status menu. Because the panel
 // becomes key without activating the app, the previously frontmost app never
@@ -17,10 +21,24 @@
 namespace clipp {
 
 // Register the global hotkeys (Carbon RegisterEventHotKey — no accessibility
-// permission needed, MAS-safe): primary ⌘Insert (kVK_Help — the PC-Insert
-// position; most Apple laptop keyboards lack the key) and secondary ⌃⌘V so
-// laptops have a typable chord. Call once from the status-menu setup.
+// permission needed, MAS-safe). Both chords come from Settings
+// (popupHotkeyPrimary/Secondary, Carbon-modifier<<16|keycode encoding;
+// defaults ⌘Insert + ⌃⌘V). Call once from the status-menu setup.
 void InstallPopupHotkeys();
+
+// Re-register both chords from Settings, replacing the current
+// registrations (the settings page calls this after a change). Returns a
+// bitmask of slots that FAILED to register (bit 0 = primary, bit 1 =
+// secondary) — in practice "already taken by another app".
+unsigned ReapplyPopupHotkeys();
+
+// Human-readable chord for the settings page ("⌃⌘V", "Insert" spelled out);
+// the NONE string for 0.
+NSString* FormatPopupHotkeyChord(uint32_t chord);
+
+// Menu-bar key-equivalent form of a chord, when it has one (function keys
+// and Insert/Help do not). Returns NO — leave the menu item bare — otherwise.
+BOOL PopupHotkeyMenuEquivalent(uint32_t chord, NSString** outKey, NSUInteger* outModifierFlags);
 
 // Hotkey / menu entry point: show centered on the mouse's screen, or hide if
 // currently visible.

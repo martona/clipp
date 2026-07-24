@@ -10,12 +10,14 @@
 #include "platform.h"
 #include "platform/uiSettingsPage.h"
 #include "platform/uistrings.h"
+#include "PopupPanel.h"
 #include "UiHelpers.h"
 
 #include <cstddef>
 #include <cstdint>
 
 #import <AppKit/AppKit.h>
+#import <Carbon/Carbon.h>
 
 extern Settings g_settings;
 extern NetworkRuntime g_networkRuntime;
@@ -33,6 +35,8 @@ extern ClipboardActivityStore g_clipboardActivityStore;
 - (void)maskShortTextPreviewsChanged:(id)sender;
 - (void)animateFlowFeedbackChanged:(id)sender;
 - (void)launchAtLoginChanged:(id)sender;
+- (void)hotkeyPrimaryClicked:(id)sender;
+- (void)hotkeySecondaryClicked:(id)sender;
 @end
 
 @implementation MacOSSettingsPageFieldDelegate
@@ -92,6 +96,20 @@ extern ClipboardActivityStore g_clipboardActivityStore;
     (void)sender;
     if (owner_ != nullptr) {
         owner_->OnLaunchAtLoginChanged();
+    }
+}
+
+- (void)hotkeyPrimaryClicked:(id)sender {
+    (void)sender;
+    if (owner_ != nullptr) {
+        owner_->OnHotkeyButtonClicked(0);
+    }
+}
+
+- (void)hotkeySecondaryClicked:(id)sender {
+    (void)sender;
+    if (owner_ != nullptr) {
+        owner_->OnHotkeyButtonClicked(1);
     }
 }
 
@@ -547,6 +565,66 @@ void MacOSSettingsPage::BuildView() {
         [animateHelp.bottomAnchor constraintEqualToAnchor:feedbackSection.bottomAnchor constant:-kSectionInsetY],
     ]];
 
+    // Popup summon shortcuts: two capture buttons (click, then press the new
+    // chord; Esc cancels, Delete clears the slot).
+    NSTextField* hotkeyHeader = [NSTextField labelWithString:CLP_NS(CLP_UI_POPUP_HOTKEYS)];
+    hotkeyHeader.translatesAutoresizingMaskIntoConstraints = NO;
+    hotkeyHeader.font = [NSFont systemFontOfSize:16 weight:NSFontWeightSemibold];
+    hotkeyHeader.textColor = [NSColor labelColor];
+
+    NSBox* hotkeySection = MacOSMakeGroupBox();
+
+    NSTextField* hotkeyPrimaryLabel = MacOSMakeLabel(CLP_NS(CLP_UI_POPUP_HOTKEY_PRIMARY));
+    NSTextField* hotkeySecondaryLabel = MacOSMakeLabel(CLP_NS(CLP_UI_POPUP_HOTKEY_SECONDARY));
+    hotkeyPrimaryButton_ = [NSButton buttonWithTitle:@"" target:fieldDelegate_
+                                              action:@selector(hotkeyPrimaryClicked:)];
+    hotkeyPrimaryButton_.translatesAutoresizingMaskIntoConstraints = NO;
+    hotkeyPrimaryButton_.bezelStyle = NSBezelStyleRounded;
+    hotkeySecondaryButton_ = [NSButton buttonWithTitle:@"" target:fieldDelegate_
+                                                action:@selector(hotkeySecondaryClicked:)];
+    hotkeySecondaryButton_.translatesAutoresizingMaskIntoConstraints = NO;
+    hotkeySecondaryButton_.bezelStyle = NSBezelStyleRounded;
+
+    NSTextField* hotkeyHelp = MacOSMakeWrappingLabel(CLP_NS(CLP_UI_POPUP_HOTKEY_HELP),
+                                                     12.0,
+                                                     [NSColor secondaryLabelColor]);
+    hotkeyStatus_ = MacOSMakeWrappingLabel(@"", 12.0, [NSColor systemOrangeColor]);
+    hotkeyStatus_.hidden = YES;
+
+    [hotkeySection addSubview:hotkeyPrimaryLabel];
+    [hotkeySection addSubview:hotkeyPrimaryButton_];
+    [hotkeySection addSubview:hotkeySecondaryLabel];
+    [hotkeySection addSubview:hotkeySecondaryButton_];
+    [hotkeySection addSubview:hotkeyHelp];
+    [hotkeySection addSubview:hotkeyStatus_];
+
+    NSMutableArray<NSLayoutConstraint*>* hotkeyConstraints = [NSMutableArray array];
+    [hotkeyConstraints addObjectsFromArray:@[
+        [hotkeyPrimaryLabel.leadingAnchor constraintEqualToAnchor:hotkeySection.leadingAnchor constant:kSectionInsetX],
+        [hotkeyPrimaryLabel.widthAnchor constraintEqualToConstant:150.0],
+        [hotkeyPrimaryLabel.centerYAnchor constraintEqualToAnchor:hotkeyPrimaryButton_.centerYAnchor],
+        [hotkeyPrimaryButton_.leadingAnchor constraintEqualToAnchor:hotkeyPrimaryLabel.trailingAnchor constant:12.0],
+        [hotkeyPrimaryButton_.widthAnchor constraintGreaterThanOrEqualToConstant:170.0],
+        [hotkeyPrimaryButton_.topAnchor constraintEqualToAnchor:hotkeySection.topAnchor constant:kSectionInsetY],
+
+        [hotkeySecondaryLabel.leadingAnchor constraintEqualToAnchor:hotkeySection.leadingAnchor constant:kSectionInsetX],
+        [hotkeySecondaryLabel.widthAnchor constraintEqualToConstant:150.0],
+        [hotkeySecondaryLabel.centerYAnchor constraintEqualToAnchor:hotkeySecondaryButton_.centerYAnchor],
+        [hotkeySecondaryButton_.leadingAnchor constraintEqualToAnchor:hotkeySecondaryLabel.trailingAnchor constant:12.0],
+        [hotkeySecondaryButton_.widthAnchor constraintGreaterThanOrEqualToConstant:170.0],
+        [hotkeySecondaryButton_.topAnchor constraintEqualToAnchor:hotkeyPrimaryButton_.bottomAnchor constant:10.0],
+
+        [hotkeyHelp.leadingAnchor constraintEqualToAnchor:hotkeySection.leadingAnchor constant:kSectionInsetX],
+        [hotkeyHelp.trailingAnchor constraintEqualToAnchor:hotkeySection.trailingAnchor constant:-kSectionInsetX],
+        [hotkeyHelp.topAnchor constraintEqualToAnchor:hotkeySecondaryButton_.bottomAnchor constant:10.0],
+
+        [hotkeyStatus_.leadingAnchor constraintEqualToAnchor:hotkeySection.leadingAnchor constant:kSectionInsetX],
+        [hotkeyStatus_.trailingAnchor constraintEqualToAnchor:hotkeySection.trailingAnchor constant:-kSectionInsetX],
+        [hotkeyStatus_.topAnchor constraintEqualToAnchor:hotkeyHelp.bottomAnchor constant:6.0],
+        [hotkeyStatus_.bottomAnchor constraintEqualToAnchor:hotkeySection.bottomAnchor constant:-kSectionInsetY],
+    ]];
+    RefreshHotkeyButtonLabels();
+
     NSTextField* hostIDHeader = [NSTextField labelWithString:CLP_NS(CLP_UI_HOST_ID)];
     hostIDHeader.translatesAutoresizingMaskIntoConstraints = NO;
     hostIDHeader.font = [NSFont systemFontOfSize:16 weight:NSFontWeightSemibold];
@@ -578,6 +656,8 @@ void MacOSSettingsPage::BuildView() {
     [contentRoot addSubview:privacySection];
     [contentRoot addSubview:feedbackHeader];
     [contentRoot addSubview:feedbackSection];
+    [contentRoot addSubview:hotkeyHeader];
+    [contentRoot addSubview:hotkeySection];
     [contentRoot addSubview:networkHeader];
     [contentRoot addSubview:section];
     [contentRoot addSubview:hostIDHeader];
@@ -639,9 +719,17 @@ void MacOSSettingsPage::BuildView() {
         [feedbackSection.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
         [feedbackSection.topAnchor constraintEqualToAnchor:feedbackHeader.bottomAnchor constant:16.0],
 
+        [hotkeyHeader.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
+        [hotkeyHeader.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
+        [hotkeyHeader.topAnchor constraintEqualToAnchor:feedbackSection.bottomAnchor constant:18.0],
+
+        [hotkeySection.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
+        [hotkeySection.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
+        [hotkeySection.topAnchor constraintEqualToAnchor:hotkeyHeader.bottomAnchor constant:16.0],
+
         [networkHeader.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
         [networkHeader.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
-        [networkHeader.topAnchor constraintEqualToAnchor:feedbackSection.bottomAnchor constant:18.0],
+        [networkHeader.topAnchor constraintEqualToAnchor:hotkeySection.bottomAnchor constant:18.0],
 
         [section.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
         [section.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
@@ -679,6 +767,7 @@ void MacOSSettingsPage::BuildView() {
     [NSLayoutConstraint activateConstraints:rowConstraints];
     [NSLayoutConstraint activateConstraints:privacyConstraints];
     [NSLayoutConstraint activateConstraints:feedbackConstraints];
+    [NSLayoutConstraint activateConstraints:hotkeyConstraints];
     [NSLayoutConstraint activateConstraints:hostIDConstraints];
 }
 
@@ -895,6 +984,125 @@ void MacOSSettingsPage::ApplyFeedbackSettingChange() {
 
     MacOSSetFieldText(statusMessage_, CLP_NS(CLP_UI_FEEDBACK_SETTINGS_APPLIED));
     ShowStatusMessage();
+}
+
+// ---- popup hotkey capture ----
+
+void MacOSSettingsPage::RefreshHotkeyButtonLabels() {
+    if (hotkeyPrimaryButton_ != nil) {
+        hotkeyPrimaryButton_.title =
+            clipp::FormatPopupHotkeyChord(g_settings.popupHotkeyPrimary());
+    }
+    if (hotkeySecondaryButton_ != nil) {
+        hotkeySecondaryButton_.title =
+            clipp::FormatPopupHotkeyChord(g_settings.popupHotkeySecondary());
+    }
+}
+
+void MacOSSettingsPage::SetHotkeyStatus(NSString* text) {
+    if (hotkeyStatus_ == nil) {
+        return;
+    }
+    if (text.length == 0) {
+        hotkeyStatus_.hidden = YES;
+        MacOSSetFieldText(hotkeyStatus_, @"");
+    } else {
+        MacOSSetFieldText(hotkeyStatus_, text);
+        hotkeyStatus_.hidden = NO;
+    }
+}
+
+void MacOSSettingsPage::OnHotkeyButtonClicked(int slot) {
+    if (capturingHotkeySlot_ == slot) {
+        CancelHotkeyCapture();  // second click on the armed button = cancel
+        return;
+    }
+    CancelHotkeyCapture();  // switching slots re-arms cleanly
+    capturingHotkeySlot_ = slot;
+    SetHotkeyStatus(@"");
+    NSButton* button = slot == 0 ? hotkeyPrimaryButton_ : hotkeySecondaryButton_;
+    if (button != nil) {
+        button.title = CLP_NS(CLP_UI_POPUP_HOTKEY_CAPTURE);
+    }
+
+    // Capture the next keystroke app-locally. Modifier-only presses arrive as
+    // flagsChanged (not keyDown), so waiting for a real key is automatic.
+    MacOSSettingsPage* owner = this;
+    hotkeyMonitor_ = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+                                                           handler:^NSEvent*(NSEvent* event) {
+        if (event.keyCode == kVK_Escape) {
+            owner->CancelHotkeyCapture();
+            return nil;
+        }
+        if (event.keyCode == kVK_Delete || event.keyCode == kVK_ForwardDelete) {
+            owner->CommitHotkeyChord(0);  // explicit "no shortcut" for this slot
+            return nil;
+        }
+
+        uint32_t mods = 0;
+        if (event.modifierFlags & NSEventModifierFlagCommand) mods |= 0x0100;  // cmdKey
+        if (event.modifierFlags & NSEventModifierFlagShift)   mods |= 0x0200;  // shiftKey
+        if (event.modifierFlags & NSEventModifierFlagOption)  mods |= 0x0800;  // optionKey
+        if (event.modifierFlags & NSEventModifierFlagControl) mods |= 0x1000;  // controlKey
+        // Shift alone can't carry a global chord — it would shadow typing.
+        if ((mods & (0x0100 | 0x0800 | 0x1000)) == 0) {
+            owner->SetHotkeyStatus(CLP_NS(CLP_UI_POPUP_HOTKEY_NEEDS_MODIFIER_MAC));
+            return nil;
+        }
+        owner->CommitHotkeyChord((mods << 16) | (event.keyCode & 0xFFFF));
+        return nil;
+    }];
+}
+
+void MacOSSettingsPage::CancelHotkeyCapture() {
+    if (hotkeyMonitor_ != nil) {
+        [NSEvent removeMonitor:hotkeyMonitor_];
+        hotkeyMonitor_ = nil;
+    }
+    capturingHotkeySlot_ = -1;
+    RefreshHotkeyButtonLabels();
+}
+
+void MacOSSettingsPage::CommitHotkeyChord(uint32_t chord) {
+    const int slot = capturingHotkeySlot_;
+    if (hotkeyMonitor_ != nil) {
+        [NSEvent removeMonitor:hotkeyMonitor_];
+        hotkeyMonitor_ = nil;
+    }
+    capturingHotkeySlot_ = -1;
+    if (slot < 0) {
+        RefreshHotkeyButtonLabels();
+        return;
+    }
+
+    const uint32_t previous =
+        slot == 0 ? g_settings.popupHotkeyPrimary() : g_settings.popupHotkeySecondary();
+    if (chord == previous) {
+        RefreshHotkeyButtonLabels();
+        return;
+    }
+
+    if (slot == 0) {
+        g_settings.setPopupHotkeyPrimary(chord);
+    } else {
+        g_settings.setPopupHotkeySecondary(chord);
+    }
+    const unsigned failed = clipp::ReapplyPopupHotkeys();
+    if (chord != 0 && (failed & (slot == 0 ? 1u : 2u)) != 0) {
+        // Another app owns it: report, revert, re-register the old state.
+        if (slot == 0) {
+            g_settings.setPopupHotkeyPrimary(previous);
+        } else {
+            g_settings.setPopupHotkeySecondary(previous);
+        }
+        clipp::ReapplyPopupHotkeys();
+        SetHotkeyStatus(CLP_NS(CLP_UI_POPUP_HOTKEY_IN_USE));
+    } else {
+        SetHotkeyStatus(@"");
+        MacOSSetFieldText(statusMessage_, CLP_NS(CLP_UI_POPUP_HOTKEY_APPLIED));
+        ShowStatusMessage();
+    }
+    RefreshHotkeyButtonLabels();
 }
 
 void MacOSSettingsPage::RefreshLaunchAtLoginControls() {

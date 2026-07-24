@@ -246,6 +246,7 @@ bool UnregisterClippAutoStart() {
 @property(nonatomic, assign) NSUInteger nudgeFrameIndex;
 @property(nonatomic, strong) NSMenuItem* lastFlowItem;
 @property(nonatomic, strong) NSMenuItem* lastFlowSeparator;
+@property(nonatomic, strong) NSMenuItem* historyMenuItem;
 @property(nonatomic, assign) BOOL lastFlowValid;
 @property(nonatomic, assign) BOOL lastFlowReceived;
 @property(nonatomic, copy) NSString* lastFlowPeer;
@@ -253,6 +254,7 @@ bool UnregisterClippAutoStart() {
 - (void)openClipp:(id)sender;
 - (void)openClippPage:(NSInteger)pageIndex;
 - (void)noteClipboardFlowReceived:(BOOL)received peer:(NSString*)peer;
+- (void)refreshHistoryMenuEquivalent;
 @end
 
 void RequestMacOSShowMainWindow(bool showNetworkPage) {
@@ -1006,15 +1008,16 @@ static void MacClipboardFlowHandler(clipp::ClipboardFlowDirection direction, con
     openItem.target = self;
     [menu addItem:openItem];
 
-    // The visual-paste popup; the shown equivalent (⌃⌘V) doubles as the
-    // discoverable spelling of the global hotkey.
+    // The visual-paste popup; the shown key equivalent doubles as the
+    // discoverable spelling of the global hotkey and is refreshed from the
+    // configured chord at menu-open time (menuWillOpen:).
     NSMenuItem* historyItem = [[NSMenuItem alloc] initWithTitle:CLP_NS(CLP_UI_TRAY_POPUP)
                                                          action:@selector(openHistoryPopup:)
-                                                  keyEquivalent:@"v"];
-    historyItem.keyEquivalentModifierMask =
-        NSEventModifierFlagControl | NSEventModifierFlagCommand;
+                                                  keyEquivalent:@""];
     historyItem.target = self;
+    self.historyMenuItem = historyItem;
     [menu addItem:historyItem];
+    [self refreshHistoryMenuEquivalent];
 
     [menu addItem:[NSMenuItem separatorItem]];
 
@@ -1110,8 +1113,29 @@ static void MacClipboardFlowHandler(clipp::ClipboardFlowDirection direction, con
     }];
 }
 
+- (void)refreshHistoryMenuEquivalent {
+    if (self.historyMenuItem == nil) {
+        return;
+    }
+    // Prefer the secondary chord (the typable one by default); specials like
+    // Insert have no menu-equivalent form and leave the item bare.
+    uint32_t chord = g_settings.popupHotkeySecondary();
+    NSString* key = nil;
+    NSUInteger flags = 0;
+    if (!clipp::PopupHotkeyMenuEquivalent(chord, &key, &flags)) {
+        chord = g_settings.popupHotkeyPrimary();
+        if (!clipp::PopupHotkeyMenuEquivalent(chord, &key, &flags)) {
+            self.historyMenuItem.keyEquivalent = @"";
+            return;
+        }
+    }
+    self.historyMenuItem.keyEquivalent = key;
+    self.historyMenuItem.keyEquivalentModifierMask = flags;
+}
+
 - (void)menuWillOpen:(NSMenu*)menu {
     (void)menu;
+    [self refreshHistoryMenuEquivalent];
     if (!self.lastFlowValid) {
         return;
     }

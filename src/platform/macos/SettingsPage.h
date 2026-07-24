@@ -2,9 +2,12 @@
 
 #ifdef __APPLE__
 
+#include <cstdint>
+
 @class NSView;
 @class NSButton;
 @class NSSlider;
+@class NSString;
 @class NSTextField;
 @class MacOSSettingsPageFieldDelegate;
 
@@ -27,6 +30,7 @@ public:
     void OnMaskShortTextPreviewsChanged();
     void OnAnimateFlowFeedbackChanged();
     void OnLaunchAtLoginChanged();
+    void OnHotkeyButtonClicked(int slot);
 
 private:
     void BuildView();
@@ -48,6 +52,10 @@ private:
     void ApplyFeedbackSettingChange();
     void RefreshLaunchAtLoginControls();
     void ApplyLaunchAtLoginChange();
+    void RefreshHotkeyButtonLabels();
+    void CancelHotkeyCapture();
+    void CommitHotkeyChord(uint32_t chord);
+    void SetHotkeyStatus(NSString* text);
 
     NSView* root_ = nullptr;
     NSView* statusContainer_ = nullptr;
@@ -67,6 +75,13 @@ private:
     NSButton* honorPrivacyMarkersCheckbox_ = nullptr;
     NSButton* animateFlowFeedbackCheckbox_ = nullptr;
     NSButton* launchAtLoginCheckbox_ = nullptr;
+    NSButton* hotkeyPrimaryButton_ = nullptr;
+    NSButton* hotkeySecondaryButton_ = nullptr;
+    NSTextField* hotkeyStatus_ = nullptr;
+    // Live keyDown monitor while a hotkey capture is armed; nil otherwise.
+    id hotkeyMonitor_ = nullptr;
+    // -1 = not capturing; 0/1 = which slot the next keystroke re-binds.
+    int capturingHotkeySlot_ = -1;
     NSTextField* statusMessage_ = nullptr;
     MacOSSettingsPageFieldDelegate* fieldDelegate_ = nullptr;
     bool loadingSettings_ = false;

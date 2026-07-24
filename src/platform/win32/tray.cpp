@@ -37,10 +37,13 @@
     #endif
 #endif
 
+#include "PopupHotkeys.h"
+
 // Custom message ID for our tray icon events
 #define WM_TRAYICON (WM_USER + 1)
-// Global summon hotkey for the visual-paste popup (RegisterHotKey id).
+// Global summon hotkeys for the visual-paste popup (RegisterHotKey ids).
 #define HOTKEY_ID_POPUP 1
+#define HOTKEY_ID_POPUP_SECONDARY 2
 // Posted by the clipboard-flow handler (network/clipboard threads) to run the
 // icon nudge on the tray thread. wParam = ClipboardFlowDirection.
 #define WM_CLIPFLOW (WM_USER + 2)
@@ -295,7 +298,7 @@ LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             break;
 
         case WM_HOTKEY:
-            if (wParam == HOTKEY_ID_POPUP) {
+            if (wParam == HOTKEY_ID_POPUP || wParam == HOTKEY_ID_POPUP_SECONDARY) {
                 clipp::TogglePopupWindow();
             }
             break;
@@ -378,6 +381,7 @@ LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
         case WM_DESTROY:
             clipp::SetClipboardFlowHandler(nullptr);
             UnregisterHotKey(hwnd, HOTKEY_ID_POPUP);
+            UnregisterHotKey(hwnd, HOTKEY_ID_POPUP_SECONDARY);
             clipp::DestroyPopupWindow();
             KillTimer(hwnd, IDT_NUDGE);
             DestroyNudgeFrames();
@@ -413,18 +417,10 @@ void TrayIconMessageLoop(bool showNetworkPageOnStartup) {
     g_trayWindow = CreateWindowExW(WS_EX_TOOLWINDOW, wc.lpszClassName, L"", WS_POPUP,
         0, 0, 0, 0, nullptr, nullptr, hInstance, nullptr);
 
-    // Visual-paste popup summon hotkey: Win+Insert (probe-verified free), with
-    // Win+Alt+V as the fallback when something else owns it. MOD_NOREPEAT so a
-    // held chord doesn't machine-gun the toggle. Failure is non-fatal — the
-    // tray menu keeps the popup reachable.
-    if (RegisterHotKey(g_trayWindow, HOTKEY_ID_POPUP, MOD_WIN | MOD_NOREPEAT, VK_INSERT)) {
-        g_logger.log(__FUNCTION__, Logger::Level::Info, L"Popup hotkey registered: Win+Insert.");
-    } else if (RegisterHotKey(g_trayWindow, HOTKEY_ID_POPUP, MOD_WIN | MOD_ALT | MOD_NOREPEAT, 'V')) {
-        g_logger.log(__FUNCTION__, Logger::Level::Info, L"Win+Insert unavailable; popup hotkey is Win+Alt+V.");
-    } else {
-        g_logger.log(__FUNCTION__, Logger::Level::Warning,
-            L"No popup hotkey could be registered; the tray menu still opens it.");
-    }
+    // Visual-paste popup summon hotkeys: two user-configurable chords from
+    // Settings (defaults Win+Insert and Ctrl+Win+V). Failure is non-fatal —
+    // the tray menu keeps the popup reachable.
+    clipp::ReapplyPopupHotkeys();
 
     g_nid.cbSize = sizeof(NOTIFYICONDATAW);
     g_nid.hWnd = g_trayWindow;
@@ -490,3 +486,82 @@ void TrayIconShutdown() {
         PostMessageW(g_trayWindow, WM_CLOSE, 0, 0);
     }
 }
+
+namespace clipp {
+
+std::wstring FormatPopupHotkeyChord(uint32_t chord) {
+    if (chord == 0) {
+        return CLP_W(CLP_UI_POPUP_HOTKEY_NONE);
+    }
+    const UINT mods = chord >> 16;
+    const UINT vk = chord & 0xFFFF;
+
+    std::wstring text;
+    const auto append = [&text](const wchar_t* part) {
+        if (!text.empty()) {
+            text += L" + ";
+        }
+        text += part;
+    };
+    if (mods & MOD_WIN)     append(L"Win");
+    if (mods & MOD_CONTROL) append(L"Ctrl");
+    if (mods & MOD_ALT)     append(L"Alt");
+    if (mods & MOD_SHIFT)   append(L"Shift");
+
+    // GetKeyNameText wants a scancode; the navigation cluster and a few others
+    // are extended keys — without the E0 bit their names come back as the
+    // numpad variants ("Num 0" for Insert).
+    UINT scanCode = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
+    switch (vk) {
+    case VK_INSERT: case VK_DELETE: case VK_HOME: case VK_END:
+    case VK_PRIOR: case VK_NEXT:
+    case VK_LEFT: case VK_RIGHT: case VK_UP: case VK_DOWN:
+    case VK_DIVIDE: case VK_NUMLOCK:
+        scanCode |= 0x100;
+        break;
+    default:
+        break;
+    }
+    wchar_t keyName[64]{};
+    if (scanCode != 0
+        && GetKeyNameTextW(static_cast<LONG>(scanCode << 16), keyName, cntof(keyName)) > 0) {
+        append(keyName);
+    } else {
+        wchar_t fallback[16]{};
+        swprintf_s(fallback, L"0x%02X", vk);
+        append(fallback);
+    }
+    return text;
+}
+
+unsigned ReapplyPopupHotkeys() {
+    if (g_trayWindow == NULL) {
+        return 0;
+    }
+    UnregisterHotKey(g_trayWindow, HOTKEY_ID_POPUP);
+    UnregisterHotKey(g_trayWindow, HOTKEY_ID_POPUP_SECONDARY);
+
+    unsigned failed = 0;
+    const auto tryRegister = [&failed](int id, uint32_t chord, unsigned failBit) {
+        if (chord == 0) {
+            return;  // slot explicitly disabled
+        }
+        // MOD_NOREPEAT so a held chord doesn't machine-gun the toggle.
+        const UINT mods = (chord >> 16) | MOD_NOREPEAT;
+        const UINT vk = chord & 0xFFFF;
+        if (RegisterHotKey(g_trayWindow, id, mods, vk)) {
+            g_logger.log(__FUNCTION__, Logger::Level::Info,
+                L"Popup hotkey registered: %ls.", FormatPopupHotkeyChord(chord).c_str());
+        } else {
+            failed |= failBit;
+            g_logger.log(__FUNCTION__, Logger::Level::Warning,
+                L"Popup hotkey %ls could not be registered (in use elsewhere).",
+                FormatPopupHotkeyChord(chord).c_str());
+        }
+    };
+    tryRegister(HOTKEY_ID_POPUP, g_settings.popupHotkeyPrimary(), 1u);
+    tryRegister(HOTKEY_ID_POPUP_SECONDARY, g_settings.popupHotkeySecondary(), 2u);
+    return failed;
+}
+
+}  // namespace clipp
