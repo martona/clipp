@@ -236,12 +236,13 @@ void NetworkRuntime::ThreadProc() {
     Reconciler().Reset();  // no carryover from a previous run
     Reconciler().SetWakeCallback([this]() { SignalWake(/*interfacesChanged=*/false); });
 
-    bool mdnsStarted = false;
     bool listenerStarted = false;
 
-    if (MDNSDiscovery::Start(&NetworkRuntime::OnDiscoveryEvent)) {
-        mdnsStarted = true;
-    } else {
+    discoveryRunning_ = MDNSDiscovery::Start(&NetworkRuntime::OnDiscoveryEvent);
+    if (!discoveryRunning_) {
+        // Not fatal: an ifaceless boot lands here (DnsServiceBrowse ->
+        // ERROR_NO_NETWORK). The change monitor below stays armed, and the
+        // fingerprint-change path retries the full Start once addresses exist.
         g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to start DNS-SD discovery!");
     }
 
@@ -251,7 +252,7 @@ void NetworkRuntime::ThreadProc() {
         g_logger.log(__FUNCTION__, Logger::Level::Error, "Failed to start TCP listener thread!");
     }
 
-    if (mdnsStarted || listenerStarted) {
+    if (discoveryRunning_ || listenerStarted) {
         g_logger.log(__FUNCTION__, Logger::Level::Info, "Network runtime started.");
     }
 
@@ -306,8 +307,9 @@ void NetworkRuntime::ThreadProc() {
         listener_.Stop();
     }
 
-    if (mdnsStarted) {
+    if (discoveryRunning_) {  // may have started late, via the recovery path
         MDNSDiscovery::Stop();
+        discoveryRunning_ = false;
         g_logger.log(__FUNCTION__, Logger::Level::Info, "DNS-SD discovery stopped.");
     }
 
@@ -367,13 +369,34 @@ void NetworkRuntime::ProcessWake(std::chrono::steady_clock::time_point now) {
     if (republishPending_) {
         const auto sinceLast = now - lastRepublish_;
         if (sinceLast >= kMinRepublishInterval) {
-            g_logger.log("MaybeRepublishForNetworkChange", Logger::Level::Debug,
-                "Interface address set changed (fingerprint %016llx -> %016llx); re-announcing discovery.",
-                static_cast<unsigned long long>(lastAddrHash_), static_cast<unsigned long long>(pendingHash_));
-            MDNSDiscovery::Republish();
-            lastAddrHash_ = pendingHash_;
-            lastRepublish_ = now;
-            republishPending_ = false;
+            // Full re-init (browse AND announce), not just a re-announce: an
+            // interface swap can leave the BROWSE half stale — Republish()
+            // only refreshes the announce — and after an ifaceless boot
+            // (DnsServiceBrowse -> ERROR_NO_NETWORK) discovery never started
+            // at all. Stop+Start is rare (cooldown-coalesced) and cheap, and
+            // the reconciler exists precisely so the resulting re-announce /
+            // re-resolve churn never touches a healthy connection: peers see
+            // goodbye + fresh instance within their removal grace, and our
+            // re-resolves land as same-endpoint keeps.
+            if (discoveryRunning_) {
+                MDNSDiscovery::Stop();
+                discoveryRunning_ = false;
+            }
+            discoveryRunning_ = MDNSDiscovery::Start(&NetworkRuntime::OnDiscoveryEvent);
+            if (discoveryRunning_) {
+                g_logger.log("MaybeRepublishForNetworkChange", Logger::Level::Info,
+                    "Interface address set changed (fingerprint %016llx -> %016llx); DNS-SD discovery re-initialized.",
+                    static_cast<unsigned long long>(lastAddrHash_), static_cast<unsigned long long>(pendingHash_));
+                lastAddrHash_ = pendingHash_;
+                lastRepublish_ = now;
+                republishPending_ = false;
+            } else {
+                // Still no usable network; republishPending_ stays set, so the
+                // cooldown timer doubles as the retry timer until Start sticks.
+                g_logger.log("MaybeRepublishForNetworkChange", Logger::Level::Debug,
+                    "DNS-SD discovery failed to (re)start after interface change; will retry.");
+                lastRepublish_ = now;
+            }
         } else {
             // Still cooling down; ComputeNextWake() will time us out at lastRepublish_ +
             // cooldown to fire it. DDebug -- this can recur across wakes within the window.

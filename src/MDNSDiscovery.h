@@ -53,6 +53,10 @@ void Stop();
 // interface change may have altered the address we advertise. No-op if discovery is
 // not currently publishing (browse-only contexts, or no network key yet). Cheap
 // relative to a full NetworkRuntime::Restart(), which drops every peer.
+// Withdraw the current announce (mDNS goodbye) and re-register under a fresh
+// instance name, leaving the browse untouched. CURRENTLY UNUSED: the runtime's
+// interface-change path does a full Stop+Start instead, because an interface
+// swap can also leave the browse half stale. Kept as the lighter primitive.
 void Republish();
 
 // Host id collision warning is raised when we see another peer advertising our hostId.

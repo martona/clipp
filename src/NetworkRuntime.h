@@ -58,6 +58,11 @@ private:
     uint64_t pendingHash_ = 0;        // latest fingerprint awaiting a (cooled-down) republish
     bool republishPending_ = false;
     std::chrono::steady_clock::time_point lastRepublish_{};
+    // Whether DNS-SD discovery is actually up. Start can fail outright on an
+    // ifaceless boot (DnsServiceBrowse -> ERROR_NO_NETWORK); the fingerprint-
+    // change path then attempts a full re-Start instead of a Republish (which
+    // would address a component that never lived).
+    bool discoveryRunning_ = false;
 };
 
 extern NetworkRuntime g_networkRuntime;
