@@ -318,6 +318,17 @@ private:
             return 0;
         }
 
+        case WM_DPICHANGED: {
+            // Per-monitor v2 contract: take the system's suggested bounds when
+            // the window crosses a DPI boundary. The island rescales its own
+            // content; WM_SIZE keeps the host child filling the client area.
+            const RECT* suggested = reinterpret_cast<const RECT*>(lParam);
+            SetWindowPos(hwnd_, nullptr, suggested->left, suggested->top,
+                suggested->right - suggested->left, suggested->bottom - suggested->top,
+                SWP_NOZORDER | SWP_NOACTIVATE);
+            return 0;
+        }
+
         case WM_CLOSE:
             ShowWindow(hwnd_, SW_HIDE);
             return 0;
