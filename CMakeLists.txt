@@ -272,23 +272,73 @@ if (WIN32)
         )
     endif()
 
-    add_executable(clipp-win32-shim
-        "src/clipp-win32-shim/clipp-win32-shim.cpp"
+    # The CLI companion: clipp.com (renamed clipp.exe in the MSIX package, exposed as
+    # the `clipp` execution alias). It used to be a thin shim that CreateProcess'd the
+    # GUI exe to run the command line -- but once that exe became uiAccess-stamped, a
+    # plain CreateProcess of it fails with ERROR_ELEVATION_REQUIRED (740; uiAccess
+    # targets must go through the AppInfo broker, which severs handle inheritance). So
+    # the console binary now OWNS the CLI, exactly as the headless Linux binary does:
+    # main.cpp in its no-daemon profile + the CLI / one-shot-networking closure, minus
+    # the six daemon TUs (mirrors the clipp-linux cut) and the entire XAML GUI. No
+    # process launch, no integrity-level boundary. The three win32 platform TUs it
+    # keeps are the non-GUI ones the CLI actually needs: registry Settings, DataPaths
+    # (log dir), and the crash handler.
+    set(CLIPP_CLI_SOURCES ${CLIPP_COMMON_SOURCES})
+    list(REMOVE_ITEM CLIPP_CLI_SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/NetworkRuntime.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/Listener.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/Peer.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/PeerManager.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/PeerDisplay.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/ClipboardActivityStore.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/ClipboardActivityDisplay.cpp"
+    )
+    add_executable(clipp-win32-cli
+        ${CLIPP_CLI_SOURCES}
+        "src/platform/win32/Settings.cpp"
+        "src/platform/win32/DataPaths.cpp"
+        "src/platform/win32/CrashHandler.cpp"
         "${CLIPP_WIN32_RC}"
     )
-    # The generated .rc lives outside src/, so the rc compiler needs an explicit
-    # /i path to find "resource.h" and the resources\\*.{ico,png} references.
-    target_include_directories(clipp-win32-shim PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-    target_compile_definitions(clipp-win32-shim PRIVATE WIN32 UNICODE _UNICODE _CONSOLE CLIPP_RESOURCE_SHIM)
+    clipp_apply_common_target_settings(clipp-win32-cli)
+    # CLIPP_NO_DAEMON is the shared "no mesh daemon, no GUI" profile
+    # main.cpp/Cli.cpp/RegisterConfig.h key off (the Linux CLI target sets it too);
+    # "Windows CLI build" is simply _WIN32 && CLIPP_NO_DAEMON, no extra flag needed.
+    # CLIPP_RESOURCE_SHIM keeps the .rc naming as clipp.com and skips the UI symbol font.
+    target_compile_definitions(clipp-win32-cli PRIVATE
+        WIN32 UNICODE _UNICODE _CONSOLE CLIPP_NO_DAEMON=1 CLIPP_RESOURCE_SHIM)
+    target_link_libraries(clipp-win32-cli PRIVATE
+        ws2_32       # one-shot peer sockets
+        Crypt32      # DPAPI network-key storage (KeyManager)
+        Normaliz     # Unicode NFC for the key-derivation canonicalization
+        dnsapi       # DNS-SD browse (peer discovery)
+        iphlpapi     # GetAdaptersAddresses (shared discovery helpers)
+        shell32      # SHGetKnownFolderPath (DataPaths / crash dir)
+        ole32        # CoTaskMemFree for the above
+        advapi32     # registry-backed Settings
+        dbghelp      # MiniDumpWriteDump for the on-crash handler
+    )
     if (MSVC)
-        target_compile_options(clipp-win32-shim PRIVATE /utf-8)
+        # Console subsystem + dead-strip. /OPT:REF drops the compiled-but-unreferenced
+        # dead code (the daemon-adjacent TUs that survive the cut but are never called
+        # here) so their references to omitted globals never reach the final link --
+        # the Debug default keeps them, so set it explicitly (the headless Linux build
+        # gets the same effect from --gc-sections).
+        target_link_options(clipp-win32-cli PRIVATE
+            "/SUBSYSTEM:CONSOLE" "/ENTRY:mainCRTStartup" "/OPT:REF" "/OPT:ICF")
     endif()
-    set_target_properties(clipp-win32-shim PROPERTIES
+    set_target_properties(clipp-win32-cli PROPERTIES
         OUTPUT_NAME "clipp"
         SUFFIX ".com"
+        # Distinct linker PDB: the MSVC PDB name defaults to OUTPUT_NAME, so both
+        # clipp.exe and clipp.com would otherwise write clipp.pdb in the shared output
+        # dir and collide when the two targets link in parallel (LNK1201 -- writing to
+        # the program database failed). clipp.com.pdb pairs with the binary; the
+        # release symbols zip globs *.pdb, so it still ships.
+        PDB_NAME "clipp.com"
     )
 
-    foreach (target_name IN ITEMS darkmode32 clipp-win32 clipp-win32-shim)
+    foreach (target_name IN ITEMS darkmode32 clipp-win32 clipp-win32-cli)
         set_target_properties(${target_name} PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY "${CLIPP_WINDOWS_OUTPUT_DIR}"
             LIBRARY_OUTPUT_DIRECTORY "${CLIPP_WINDOWS_OUTPUT_DIR}"
@@ -468,8 +518,10 @@ elseif (UNIX AND NOT APPLE)
     )
     clipp_apply_common_target_settings(clipp-linux)
     # Drives the terminal-only collapse of main() (no daemon/clipboard/tray) and the
-    # omission of the `gui` subcommand in Cli.cpp.
-    target_compile_definitions(clipp-linux PRIVATE CLIPP_HEADLESS=1)
+    # omission of the `gui` subcommand in Cli.cpp. CLIPP_NO_DAEMON is the shared
+    # no-mesh-daemon/no-GUI profile (the Windows clipp.com companion sets it too);
+    # Linux-platform bits (POSIX SIGPIPE, Avahi) key off __linux__ directly.
+    target_compile_definitions(clipp-linux PRIVATE CLIPP_NO_DAEMON=1)
     target_link_libraries(clipp-linux PRIVATE
         Threads::Threads
         PkgConfig::AVAHI

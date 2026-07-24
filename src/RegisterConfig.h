@@ -12,7 +12,7 @@
 #include <TargetConditionals.h>
 #endif
 
-#if defined(CLIPP_HEADLESS)
+#if defined(CLIPP_NO_DAEMON)
 #define CLIPP_REGISTERS_DAEMON 0
 #elif defined(__APPLE__) && (TARGET_OS_IPHONE || TARGET_OS_SIMULATOR)
 #define CLIPP_REGISTERS_DAEMON 0
@@ -26,8 +26,9 @@
 // listener; foregrounded it answers, suspended it shows as unreachable — both
 // honest). The headless CLI runs no daemon. The share extension compiles no
 // Peer.cpp and never accepts inbound, so the cap it (over-)advertises via the
-// shared CryptoChannel is moot — see the LocalCaps comment.
-#if defined(CLIPP_HEADLESS)
+// shared CryptoChannel is moot — see the LocalCaps comment. The no-daemon builds
+// (headless Linux CLI + Windows clipp.com companion) run no listener at all.
+#if defined(CLIPP_NO_DAEMON)
 #define CLIPP_SERVES_NETMAP 0
 #else
 #define CLIPP_SERVES_NETMAP 1

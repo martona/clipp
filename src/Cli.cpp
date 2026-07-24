@@ -1956,10 +1956,12 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
     CLI::App* versionCommand = app.add_subcommand("version", "Print the clipp version (full 4-part build stamp)");
     versionCommand->callback([&]() { action = Action::Version; });
 
-#ifndef CLIPP_HEADLESS
+#ifndef CLIPP_NO_DAEMON
     // Explicit opt-in to the GUI from a terminal (a bare launch there prints usage
     // instead). Listed in --help but not advertised harder than that. Omitted from
-    // the terminal-only build, which has no GUI to launch.
+    // the no-daemon builds, which have no GUI to launch (the Windows clipp.com
+    // companion CAN'T launch the uiAccess GUI anyway -- that was the whole reason it
+    // became a standalone CLI).
     CLI::App* guiCommand = app.add_subcommand(
         "gui", "Launch the graphical app (the default when not started from a terminal)");
     guiCommand->callback([&]() { action = Action::Gui; });
@@ -1987,7 +1989,7 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
         const auto redirected = [](StreamDisposition d) {
             return d == StreamDisposition::Pipe || d == StreamDisposition::File;
         };
-#ifndef CLIPP_HEADLESS
+#ifndef CLIPP_NO_DAEMON
         // GUI-style launch guard. Dock / double-click / autostart / wrapper-launcher
         // contexts show no stdin, at most a pipe-or-null stdout (macOS LaunchServices
         // points stdout at /dev/null or a logging pipe — never a regular file), and
@@ -2034,7 +2036,7 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
     // of silently launching the terminal-blocking GUI. On desktop this is gated on a console (a
     // no-console launch falls through to the GUI via the `gui`/nullopt path below);
     // the headless build has no GUI, so a bare launch ALWAYS prints help.
-#ifdef CLIPP_HEADLESS
+#ifdef CLIPP_NO_DAEMON
     const bool bareLaunchPrintsHelp = (action == Action::None);
 #else
     const bool bareLaunchPrintsHelp = (action == Action::None && launchedFromConsole);

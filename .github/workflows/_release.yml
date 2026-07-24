@@ -109,17 +109,17 @@ jobs:
       - name: Verify Windows artifacts
         run: |
           $exe = ".\build\windows-release\clipp.exe"
-          $shim = ".\build\windows-release\clipp.com"
+          $cli = ".\build\windows-release\clipp.com"
           if (-not (Test-Path $exe)) {
             throw "Missing expected executable: $exe"
           }
-          if (-not (Test-Path $shim)) {
-            throw "Missing expected console shim: $shim"
+          if (-not (Test-Path $cli)) {
+            throw "Missing expected console CLI binary: $cli"
           }
           # The tree carries no version (CMake defaults to 0.0.0.0); the release
           # version exists only in this workflow's input, so assert it actually
           # reached both binaries' VERSIONINFO.
-          foreach ($f in @($exe, $shim)) {
+          foreach ($f in @($exe, $cli)) {
             $vi = [Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path $f))
             if ($vi.FileVersion -ne "${{ inputs.version }}") {
               throw "$f FileVersion '$($vi.FileVersion)' != requested '${{ inputs.version }}'"

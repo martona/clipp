@@ -3,7 +3,7 @@ set -e
 
 # Builds the terminal-only Linux binary (clipp). No GUI, no tray, no local
 # clipboard I/O, no background sync daemon -- just the CLI verbs copy/paste/key/
-# hostid (the CLIPP_HEADLESS target). See project_linux_port / CMakeLists.txt
+# hostid (the CLIPP_NO_DAEMON target). See project_linux_port / CMakeLists.txt
 # (the `elseif (UNIX AND NOT APPLE)` branch).
 #
 # Mirrors scripts/build_macos.sh's vcpkg bootstrap + Ninja flow, minus everything

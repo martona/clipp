@@ -15,10 +15,12 @@
 #include "Settings.h"
 #include "utils.h"
 
-#ifndef CLIPP_HEADLESS
-// Daemon / GUI-side headers. The terminal-only Linux build (CLIPP_HEADLESS) runs no
-// clipboard notifier, peer mesh, or network runtime, so it neither needs nor links
-// these. See project_linux_port.
+#ifndef CLIPP_NO_DAEMON
+// Daemon / GUI-side headers. The no-daemon builds -- the terminal-only Linux CLI and
+// the Windows CLI companion (clipp.com) -- run no clipboard notifier, peer mesh, or
+// network runtime, so they neither need nor link these. CLIPP_NO_DAEMON is set by
+// CMake for both; Linux-platform bits key off __linux__ directly. See
+// project_linux_port.
 #include "NetworkRuntime.h"
 #include "Peer.h"
 #include "PeerManager.h"
@@ -53,8 +55,8 @@
 #endif
 
 Settings g_settings;
-#ifndef CLIPP_HEADLESS
-// Daemon-side singletons. The terminal-only Linux build excludes their translation
+#ifndef CLIPP_NO_DAEMON
+// Daemon-side singletons. The no-daemon builds exclude their translation
 // units and the fall-through that drives them, so they must not be instantiated.
 PeerDisplay g_peerDisplay;
 PeerManager g_peerManager;
@@ -63,7 +65,11 @@ ClipboardActivityStore g_clipboardActivityStore;
 RegisterStore g_registerStore;
 #endif
 
-#ifdef _WIN32
+// Single-instance + tray-signalling helpers, and the /SUBSYSTEM:windows pragma:
+// GUI-only, and excluded from the CLI companion (which is a real console binary and
+// links no tray). ConsoleCtrlHandler here calls into tray.cpp, so it must not be
+// compiled where tray.cpp isn't linked.
+#if defined(_WIN32) && !defined(CLIPP_NO_DAEMON)
     namespace {
     constexpr wchar_t kSingleInstanceMutexName[] = L"Local\\ClippSingleInstanceMutex";
     constexpr wchar_t kTrayWindowClassName[] = L"ClippHiddenTrayWindow";
@@ -144,26 +150,27 @@ bool UnregisterClippAutoStart() {
 
 bool InitializeConsoleOutput() {
     #ifdef _WIN32
-    // We are a /SUBSYSTEM:windows binary, so the OS never gives us a console of our
-    // own. Two DISTINCT mechanisms get output to a terminal and we need BOTH --
-    // do not "simplify" this to one (see the git history where dropping AttachConsole
+    // Shared by both Windows binaries. In the console companion (clipp.com) the CRT
+    // already binds real console/redirect handles, so the work below is a harmless
+    // confirm-and-rebind. It EARNS its keep in the GUI binary (clipp-win32, a
+    // /SUBSYSTEM:windows PE with no console of its own), where CLI args are only a
+    // dev/debug path but must still print: two DISTINCT mechanisms are both needed --
+    // do not "simplify" to one (see the git history where dropping AttachConsole
     // silently killed all output for `clipp -h`, `key show`, etc. in a plain shell):
     //
     //   * Redirected streams (`clipp paste > out.txt`, `echo x | clipp copy`): the
-    //     clipp.com shim forwards these as real file/pipe handles, which inherit and
-    //     work in any process. GetFileType reports DISK/PIPE -> bind the CRT fd to
-    //     the handle via _open_osfhandle/_dup2.
+    //     shell hands over real file/pipe handles, which work in any process.
+    //     GetFileType reports DISK/PIPE -> bind the CRT fd to the handle via
+    //     _open_osfhandle/_dup2.
     //   * Non-redirected (interactive) streams: a console is a CHARACTER DEVICE; a
     //     handle to it only functions in a process ATTACHED to that console, and a
-    //     GUI-subsystem child is not auto-attached even though the shim forwarded
-    //     the handle -- it arrives NULL/UNKNOWN and writes go nowhere. So we must
+    //     GUI-subsystem process is not auto-attached -- the handle arrives
+    //     NULL/UNKNOWN and writes go nowhere. So we must
     //     AttachConsole(ATTACH_PARENT_PROCESS) to reconnect to the launching
     //     terminal, then reopen CONIN$/CONOUT$.
     //
     // This does NOT pollute a real GUI launch: a double-click / autostart parent has
-    // no console, so AttachConsole fails and we bail out silently below. The only
-    // GUI-via-terminal path is the explicit `clipp gui`, where attaching (and
-    // logging to stderr) is exactly the intent.
+    // no console, so AttachConsole fails and we bail out silently below.
     struct StdStream {
         DWORD stdId;
         FILE* file;
@@ -247,7 +254,7 @@ bool InitializeConsoleOutput() {
 #endif
 }
 
-#ifndef CLIPP_HEADLESS
+#ifndef CLIPP_NO_DAEMON
 void OnClipboardNotification(PlatformWindowHandle hwnd) {
     g_logger.log(__FUNCTION__, Logger::Level::Debug, "Clipboard notification received");
     auto clipboardData = ReadClipboardData(hwnd);
@@ -293,19 +300,21 @@ void OnClipboardNotification(PlatformWindowHandle hwnd) {
         payload->EncodedBytes().size(),
         static_cast<unsigned long long>(payload->meta.uncompressedDataSize));
 }
-#endif // CLIPP_HEADLESS
+#endif // CLIPP_NO_DAEMON
 
 int main(int argc, char* argv[]) {
 
-#ifdef CLIPP_HEADLESS
-    // Terminal-only build: CLI socket sends pass MSG_NOSIGNAL (utils_socket.h), but
-    // ignore SIGPIPE too as cheap insurance against any write path that misses it.
+#ifdef __linux__
+    // Linux CLI: socket sends pass MSG_NOSIGNAL (utils_socket.h), but ignore SIGPIPE
+    // too as cheap insurance against any write path that misses it. (Windows has no
+    // SIGPIPE; the macOS build ignores it in its own startup path below.)
     signal(SIGPIPE, SIG_IGN);
 #endif
 
-    // True when we were launched from a console/terminal: on Windows the clipp.com
-    // shim forwarded our std handles; on macOS/Linux stdout is a TTY. Drives the
-    // command-line vs GUI disposition in cli::Run below.
+    // True when we were launched from a console/terminal (the console companion
+    // clipp.com natively has one; the GUI binary attaches its launching terminal's
+    // if any). On macOS/Linux stdout is a TTY. Drives the command-line vs GUI
+    // disposition in cli::Run below.
     const bool launchedFromConsole = InitializeConsoleOutput();
 
     // Command-line mode: if a recognized command (copy/paste/key/hostid) ran,
@@ -318,9 +327,10 @@ int main(int argc, char* argv[]) {
         return *commandExitCode;
     }
 
-#ifdef CLIPP_HEADLESS
-    // No GUI/daemon to fall through to. On the headless build cli::Run prints help
-    // for a bare launch and never returns nullopt, but exit cleanly regardless.
+#ifdef CLIPP_NO_DAEMON
+    // No GUI/daemon to fall through to (headless Linux CLI or the Windows clipp.com
+    // companion). cli::Run prints help for a bare launch and never returns nullopt
+    // here, but exit cleanly regardless.
     return 0;
 #else
     g_logger.log(__FUNCTION__, Logger::Level::Info, L"==================================================================");
@@ -461,5 +471,5 @@ int main(int argc, char* argv[]) {
     #endif
 
     return 0;
-#endif // CLIPP_HEADLESS
+#endif // CLIPP_NO_DAEMON
 }
