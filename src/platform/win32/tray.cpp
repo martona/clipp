@@ -75,7 +75,11 @@ static clipp::ClipboardFlowDirection g_flowDirection = clipp::ClipboardFlowDirec
 static std::wstring g_flowPeerName;
 static std::chrono::steady_clock::time_point g_flowWhen{};
 
-static constexpr int  kNudgeOffsets[] = { 1, 2, 1 };  // travel magnitudes; sign = direction
+// Travel magnitudes in thousandths of the icon height — the icon is 16px only
+// at 96 DPI now (PMv2: 24 at 150%, 32 at 200%). At 16px this reproduces the
+// original {1,2,1}-pixel curve; larger icons get proportional (slightly
+// up-rounded) travel instead of a sub-pixel shimmy. Sign = direction.
+static constexpr int  kNudgeTravelPermille[] = { 80, 150, 80 };
 static constexpr UINT kNudgeFrameMs = 90;
 static HICON g_nudgeFrames[2][3] = {};  // [Sent][frame], [Received][frame]
 static int   g_nudgeFrameIndex = -1;    // -1 = idle
@@ -153,11 +157,26 @@ static void EnsureNudgeFrames() {
     if (g_nudgeFrames[0][0] != nullptr || g_nid.hIcon == nullptr) {
         return;
     }
+    // The authored curve rides the real icon height (LoadIconMetric hands us
+    // the DPI-scaled size).
+    int height = 16;
+    ICONINFO info{};
+    if (GetIconInfo(g_nid.hIcon, &info)) {
+        BITMAP bm{};
+        if (info.hbmColor != nullptr &&
+            GetObjectW(info.hbmColor, sizeof(bm), &bm) != 0 && bm.bmHeight > 0) {
+            height = bm.bmHeight;
+        }
+        if (info.hbmColor != nullptr) DeleteObject(info.hbmColor);
+        if (info.hbmMask != nullptr) DeleteObject(info.hbmMask);
+    }
     for (size_t i = 0; i < 3; ++i) {
+        const int scaled = MulDiv(height, kNudgeTravelPermille[i], 1000);
+        const int offset = scaled < 1 ? 1 : scaled;
         // Screen y grows downward, and ComposeOffsetIcon's positive rowDelta
         // moves content up — so Sent gets +offset (up), Received −offset (down).
-        g_nudgeFrames[0][i] = ComposeOffsetIcon(g_nid.hIcon, kNudgeOffsets[i]);
-        g_nudgeFrames[1][i] = ComposeOffsetIcon(g_nid.hIcon, -kNudgeOffsets[i]);
+        g_nudgeFrames[0][i] = ComposeOffsetIcon(g_nid.hIcon, offset);
+        g_nudgeFrames[1][i] = ComposeOffsetIcon(g_nid.hIcon, -offset);
     }
 }
 
