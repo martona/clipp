@@ -55,6 +55,13 @@
 #define CLP_UI_POPUP_RENAME_TIP_MAC "Rename (F2)"
 #define CLP_UI_POPUP_DELETE_TIP_MAC "Delete everywhere (⌦)"
 #define CLP_UI_POPUP_UNDO_TIP_MAC "Undo the last delete (⌘Z)"
+// macOS Accessibility onboarding toast: the popup's paste keystroke needs a
+// switch flipped in System Settings; this walks the user there.
+#define CLP_UI_POPUP_AX_TITLE_MAC "Let Clipp paste for you"
+#define CLP_UI_POPUP_AX_BODY_MAC "To paste into other apps, Clipp needs Accessibility permissions. macOS will ask you to confirm the change."
+#define CLP_UI_POPUP_AX_BUTTON_MAC "Open System Settings…"
+#define CLP_UI_POPUP_AX_GRANTED_MAC "✓ All set — Clipp can now paste"
+#define CLP_UI_POPUP_AX_CLOSE_TIP "Dismiss"
 
 // Settings: the popup's configurable summon shortcuts.
 #define CLP_UI_POPUP_HOTKEYS "Clipboard history popup"

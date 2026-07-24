@@ -50,6 +50,10 @@ constexpr CGFloat kPopupHeight = 540.0;
 constexpr CGFloat kFlyoutMaxTextWidth = 360.0;
 constexpr CGFloat kFlyoutMaxHeight = 520.0;
 constexpr CGFloat kFlyoutGap = 8.0;
+constexpr CGFloat kAxToastTextWidth = 320.0;
+// A floating (post-popup) onboarding toast gives up quietly if the grant
+// never arrives: 5 minutes at the 0.5s poll.
+constexpr int kAxToastIdleTicks = 600;
 
 // ---- NSString-side find helpers -------------------------------------------
 // The model filters on std::wstring (UTF-32 on macOS), but highlight ranges
@@ -213,6 +217,19 @@ struct RegisterRowInfo {
 }
 @end
 
+// Buttons living on a satellite: the window never becomes key, so every click
+// arrives as a "first mouse" — a stock button would swallow it as
+// window-activation and demand a second click.
+@interface ClippFirstMouseButton : NSButton
+@end
+
+@implementation ClippFirstMouseButton
+- (BOOL)acceptsFirstMouse:(NSEvent*)event {
+    (void)event;
+    return YES;
+}
+@end
+
 // One compact list row: click selects, double-click activates, right-click
 // asks the controller for the context menu.
 @interface ClippPopupRowView : NSView
@@ -232,6 +249,8 @@ struct RegisterRowInfo {
     std::size_t watcherID_;
     bool registersPresent_;
     bool flyoutUpdatePending_;
+    bool axJourneyStarted_;
+    int axPollTicks_;
 }
 @property(nonatomic, strong) ClippPopupMainPanel* panel;
 @property(nonatomic, strong) NSSearchField* filterField;
@@ -259,6 +278,12 @@ struct RegisterRowInfo {
 @property(nonatomic, strong) NSTextField* flyoutText;
 @property(nonatomic, strong) NSImageView* flyoutImage;
 @property(nonatomic, strong) ClippPopupSatellitePanel* toastPanel;
+@property(nonatomic, strong) ClippPopupSatellitePanel* axToastPanel;
+@property(nonatomic, strong) NSTextField* axToastTitle;
+@property(nonatomic, strong) NSTextField* axToastBody;
+@property(nonatomic, strong) NSButton* axGrantButton;
+@property(nonatomic, strong) NSButton* axCloseButton;
+@property(nonatomic, strong) NSTimer* axPollTimer;
 
 - (void)toggle;
 - (void)dismiss;
@@ -329,6 +354,8 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
         watcherID_ = 0;
         registersPresent_ = false;
         flyoutUpdatePending_ = false;
+        axJourneyStarted_ = false;
+        axPollTicks_ = 0;
         self.registerRowViews = [[NSMutableArray alloc] init];
         self.historyRowViews = [[NSMutableArray alloc] init];
         [self buildPanel];
@@ -486,6 +513,7 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
 
     [self buildFlyout];
     [self buildToast];
+    [self buildAxToast];
 }
 
 - (NSTextField*)makeColumnLabel:(NSString*)text {
@@ -623,6 +651,96 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
     self.toastPanel = toast;
 }
 
+// The Accessibility onboarding toast. Shown at every summon while the paste
+// keystroke's grant is missing (no opt-out: pasting is the popup's reason to
+// exist — decline the grant and the popup is simply not for you). The button
+// raises the system prompt (whose real value is registering Clipp in the
+// Accessibility pane's LIST — a ready-made row to switch on instead of a "+"
+// file-picker hunt) and deep-links to the pane. System Settings taking focus
+// light-dismisses the popup; mid-journey the toast deliberately outlives it,
+// floating as the walkthrough companion, polling until the grant lands, then
+// flashing a ✓ receipt and closing itself.
+- (void)buildAxToast {
+    ClippPopupSatellitePanel* toast = [[ClippPopupSatellitePanel alloc]
+        initWithContentRect:NSMakeRect(0, 0, 360, 120)
+                  styleMask:(NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel)
+                    backing:NSBackingStoreBuffered
+                      defer:NO];
+    toast.releasedWhenClosed = NO;
+    toast.level = NSStatusWindowLevel;
+    toast.opaque = NO;
+    toast.backgroundColor = [NSColor clearColor];
+    toast.hasShadow = YES;
+    toast.hidesOnDeactivate = NO;
+    toast.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces
+        | NSWindowCollectionBehaviorFullScreenAuxiliary;
+
+    NSView* root = [[NSView alloc] initWithFrame:NSZeroRect];
+    root.wantsLayer = YES;
+    root.layer.backgroundColor = [NSColor colorWithCalibratedWhite:0.16 alpha:0.97].CGColor;
+    root.layer.cornerRadius = 12.0;
+    toast.contentView = root;
+
+    // Forced-dark chip like the hint toast: explicit light colors, not
+    // labelColor — the system appearance may well be light.
+    NSTextField* title = [NSTextField labelWithString:CLP_NS(CLP_UI_POPUP_AX_TITLE_MAC)];
+    title.translatesAutoresizingMaskIntoConstraints = NO;
+    title.font = [NSFont systemFontOfSize:13.0 weight:NSFontWeightSemibold];
+    title.textColor = [NSColor whiteColor];
+    self.axToastTitle = title;
+
+    NSTextField* body = [NSTextField wrappingLabelWithString:CLP_NS(CLP_UI_POPUP_AX_BODY_MAC)];
+    body.translatesAutoresizingMaskIntoConstraints = NO;
+    body.font = [NSFont systemFontOfSize:12.0];
+    body.textColor = [NSColor colorWithCalibratedWhite:0.85 alpha:1.0];
+    body.preferredMaxLayoutWidth = kAxToastTextWidth;
+    body.selectable = NO;
+    self.axToastBody = body;
+
+    NSButton* grant = [ClippFirstMouseButton buttonWithTitle:CLP_NS(CLP_UI_POPUP_AX_BUTTON_MAC)
+                                                      target:self
+                                                      action:@selector(axGrantClicked:)];
+    grant.translatesAutoresizingMaskIntoConstraints = NO;
+    grant.refusesFirstResponder = YES;
+    self.axGrantButton = grant;
+
+    NSButton* close = [ClippFirstMouseButton
+        buttonWithImage:MacOSMakeSymbolImage(@"xmark", CLP_NS(CLP_UI_POPUP_AX_CLOSE_TIP), 10.0,
+                                             [NSColor colorWithCalibratedWhite:0.7 alpha:1.0])
+                 target:self
+                 action:@selector(axCloseClicked:)];
+    close.translatesAutoresizingMaskIntoConstraints = NO;
+    close.bordered = NO;
+    close.toolTip = CLP_NS(CLP_UI_POPUP_AX_CLOSE_TIP);
+    close.refusesFirstResponder = YES;
+    self.axCloseButton = close;
+
+    NSStackView* stack = [[NSStackView alloc] initWithFrame:NSZeroRect];
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
+    stack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    stack.alignment = NSLayoutAttributeLeading;
+    stack.spacing = 6.0;
+    stack.detachesHiddenViews = YES;  // the ✓ state collapses to one line
+    [stack addArrangedSubview:title];
+    [stack addArrangedSubview:body];
+    [stack addArrangedSubview:grant];
+
+    [root addSubview:stack];
+    [root addSubview:close];
+    [NSLayoutConstraint activateConstraints:@[
+        [stack.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:14.0],
+        [stack.trailingAnchor constraintLessThanOrEqualToAnchor:root.trailingAnchor constant:-14.0],
+        [stack.topAnchor constraintEqualToAnchor:root.topAnchor constant:10.0],
+        [stack.bottomAnchor constraintEqualToAnchor:root.bottomAnchor constant:-12.0],
+        [close.trailingAnchor constraintEqualToAnchor:root.trailingAnchor constant:-7.0],
+        [close.topAnchor constraintEqualToAnchor:root.topAnchor constant:7.0],
+        // The title must not run under the ✕.
+        [title.trailingAnchor constraintLessThanOrEqualToAnchor:close.leadingAnchor constant:-6.0],
+    ]];
+
+    self.axToastPanel = toast;
+}
+
 // ---- lifecycle -------------------------------------------------------------
 
 - (void)toggle {
@@ -668,9 +786,16 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
                                                  name:NSWindowDidResignKeyNotification
                                                object:self.panel];
 
-    if (g_settings.popupHintShownCount() < Settings::PopupHintMaxShows) {
-        [self showToast];
-        g_settings.notePopupHintShown();
+    if (!AXIsProcessTrusted()) {
+        // Paste onboarding outranks (and supersedes) the keyboard-hint toast:
+        // until the grant lands, "Return to paste" would half-lie anyway.
+        [self showAxToast];
+    } else {
+        [self closeAxToast];  // sweep a stale journey/receipt leftover
+        if (g_settings.popupHintShownCount() < Settings::PopupHintMaxShows) {
+            [self showToast];
+            g_settings.notePopupHintShown();
+        }
     }
 
     [self scheduleFlyoutUpdate];
@@ -689,6 +814,13 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
                                                   object:self.panel];
     [self endWatcher];
     [self.toastPanel orderOut:nil];
+    // The onboarding toast normally lives and dies with the popup — EXCEPT
+    // mid-journey (grant button clicked): System Settings stealing focus is
+    // the very thing that triggered this dismiss, and the toast must stay
+    // behind to finish the walkthrough.
+    if (!axJourneyStarted_) {
+        [self closeAxToast];
+    }
     [self.flyoutPanel orderOut:nil];
     // Session-scoped peeks: anything revealed inside the popup is forgotten
     // the moment it hides.
@@ -703,8 +835,10 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
 
 - (void)destroy {
     [self dismiss];
+    [self closeAxToast];  // a mid-journey toast dies with the app (and its timer)
     [self.flyoutPanel close];
     [self.toastPanel close];
+    [self.axToastPanel close];
     [self.panel close];
 }
 
@@ -1354,6 +1488,112 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
     [self.toastPanel orderOut:nil];
 }
 
+// Show — or re-anchor, when a summon re-adopts a floating journey toast —
+// the Accessibility onboarding above the popup, and start polling for the
+// grant. Unlike the hint toast this one is NOT dismissed by interaction: it
+// sits outside the panel and obstructs nothing, and manual ⌘V keeps working
+// underneath it.
+- (void)showAxToast {
+    // (Re)enter the prompting state; a fresh button click re-arms the journey.
+    axJourneyStarted_ = false;
+    self.axToastTitle.stringValue = CLP_NS(CLP_UI_POPUP_AX_TITLE_MAC);
+    self.axToastBody.hidden = NO;
+    self.axGrantButton.hidden = NO;
+    self.axCloseButton.hidden = NO;
+
+    NSView* root = self.axToastPanel.contentView;
+    [root layoutSubtreeIfNeeded];
+    const NSSize fit = [root fittingSize];
+    const NSRect panelFrame = self.panel.frame;
+    NSScreen* screen = self.panel.screen != nil ? self.panel.screen : [NSScreen mainScreen];
+    const NSRect work = screen.visibleFrame;
+    CGFloat y = NSMaxY(panelFrame) + 10.0;
+    if (y + fit.height > NSMaxY(work)) {
+        y = NSMaxY(work) - fit.height;  // not enough sky: overlap the panel's top
+    }
+    const NSRect frame = NSMakeRect(
+        panelFrame.origin.x + (panelFrame.size.width - fit.width) / 2.0,
+        y, fit.width, fit.height);
+    [self.axToastPanel setFrame:frame display:YES];
+    [self.axToastPanel orderFront:nil];
+
+    axPollTicks_ = 0;
+    if (self.axPollTimer == nil) {
+        self.axPollTimer = [NSTimer timerWithTimeInterval:0.5
+                                                   target:self
+                                                 selector:@selector(axPollTick:)
+                                                 userInfo:nil
+                                                  repeats:YES];
+        // Common modes: the default mode stalls while the user scrolls the lists.
+        [[NSRunLoop mainRunLoop] addTimer:self.axPollTimer forMode:NSRunLoopCommonModes];
+    }
+}
+
+- (void)closeAxToast {
+    [self.axPollTimer invalidate];
+    self.axPollTimer = nil;
+    axJourneyStarted_ = false;
+    [self.axToastPanel orderOut:nil];
+}
+
+- (void)axPollTick:(NSTimer*)timer {
+    (void)timer;
+    if (!AXIsProcessTrusted()) {
+        // A floating toast whose journey went cold must not outstay its
+        // welcome — the user may have abandoned System Settings entirely.
+        ++axPollTicks_;
+        if (!self.panel.visible && axPollTicks_ > kAxToastIdleTicks) {
+            [self closeAxToast];
+        }
+        return;
+    }
+
+    // Granted — no relaunch needed, CGEventPost works from here on. Flash the
+    // receipt, then bow out.
+    [self.axPollTimer invalidate];
+    self.axPollTimer = nil;
+    axJourneyStarted_ = false;
+    g_logger.log(__FUNCTION__, Logger::Level::Info,
+                 "Accessibility permission granted; popup paste keystroke enabled.");
+    self.axToastTitle.stringValue = CLP_NS(CLP_UI_POPUP_AX_GRANTED_MAC);
+    self.axToastBody.hidden = YES;
+    self.axGrantButton.hidden = YES;
+    self.axCloseButton.hidden = YES;
+    NSView* root = self.axToastPanel.contentView;
+    [root layoutSubtreeIfNeeded];
+    const NSSize fit = [root fittingSize];
+    NSRect frame = self.axToastPanel.frame;
+    frame = NSMakeRect(NSMidX(frame) - fit.width / 2.0, NSMaxY(frame) - fit.height,
+                       fit.width, fit.height);
+    [self.axToastPanel setFrame:frame display:YES];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.6 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        // Only while still showing the receipt — an ungranted re-prompt since
+        // (revoke + re-summon inside the delay) must not be swept away.
+        if (self.axGrantButton.hidden) {
+            [self closeAxToast];
+        }
+    });
+}
+
+- (void)axGrantClicked:(id)sender {
+    (void)sender;
+    // The journey begins: System Settings will take focus and light-dismiss
+    // the popup; this flag keeps the toast floating through the excursion.
+    axJourneyStarted_ = true;
+    // The system prompt fires only on the very first ask; the deep link
+    // covers every later click. Both land the user in the same pane.
+    NSDictionary* options = @{ (__bridge id)kAXTrustedCheckOptionPrompt : @YES };
+    AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options);
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:
+        @"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"]];
+}
+
+- (void)axCloseClicked:(id)sender {
+    (void)sender;
+    [self closeAxToast];
+}
+
 // ---- actions ---------------------------------------------------------------
 
 - (void)activateSelected {
@@ -1384,7 +1624,7 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
 // for our key panel to finish resigning. Requires the user to have granted
 // Accessibility (Privacy & Security); ungranted, the paste is skipped
 // silently and the clipboard is simply set (manual ⌘V works). The onboarding
-// flow for that grant is a separate, later step.
+// for that grant is the summon-time toast (showAxToast).
 - (void)schedulePasteKeystroke {
     if (!AXIsProcessTrusted()) {
         g_logger.log(__FUNCTION__, Logger::Level::Debug,

@@ -16,7 +16,9 @@
 // current mesh-wide and then PASTES it (⌘V via CGEventPost — gated on the
 // Accessibility grant, silently skipped without it; Shift suppresses the
 // keystroke), and the toolbar fronts the shared ClipboardActions
-// (save / paste / rename / privacy / delete / undo).
+// (save / paste / rename / privacy / delete / undo). While the Accessibility
+// grant is missing, every summon shows an onboarding toast above the panel
+// that walks the user to System Settings and polls until the grant lands.
 //
 // All entry points are main-thread. The panel is created lazily on first
 // summon and kept alive after.
