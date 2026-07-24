@@ -30,6 +30,8 @@ public:
 
 private:
     void BuildView();
+    winrt::Windows::UI::Xaml::Controls::Border BuildTeachBanner();
+    void UpdateTeachBanner();
     winrt::Windows::UI::Xaml::Controls::Grid BuildActivitySection();
     winrt::Windows::UI::Xaml::Controls::Grid BuildActivityRow(uint64_t itemID);
 
@@ -60,6 +62,8 @@ private:
     NavigateCallback showNetworkPage_;
 
     winrt::Windows::UI::Xaml::Controls::Grid root_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::Border teachBanner_{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::TextBlock teachBannerText_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::ScrollViewer activityScroll_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::StackPanel activityItemsPanel_{ nullptr };
     winrt::Windows::UI::Xaml::Controls::StackPanel activityEmptyState_{ nullptr };

@@ -104,6 +104,11 @@ public:
     uint64_t popupHintShownCount() const;
     void notePopupHintShown();
 
+    // The Clipboard page's teach-the-hotkey banner: dismissed forever once the
+    // user closes it (no un-dismiss UI; by design).
+    bool popupTeachBannerDismissed() const;
+    void notePopupTeachBannerDismissed();
+
     // The two popup summon chords (see the Default* constants for encoding).
     // Setters persist immediately; callers re-register via the platform's
     // ReapplyPopupHotkeys after a change.
@@ -161,6 +166,7 @@ private:
     // Reserved-ahead persisted HLC wall-ms floor for the register clock.
     uint64_t registerHlcFloorMs_{ 0 };
     uint64_t popupHintShownCount_{ 0 };
+    bool popupTeachBannerDismissed_{ false };
     uint32_t popupHotkeyPrimary_{ DefaultPopupHotkeyPrimary };
     uint32_t popupHotkeySecondary_{ DefaultPopupHotkeySecondary };
     mutable std::mutex mutex_;

@@ -74,6 +74,12 @@
 #define CLP_UI_POPUP_HOTKEY_NEEDS_MODIFIER_MAC "Include ⌘, ⌃, or ⌥ in the shortcut."
 #define CLP_UI_POPUP_HOTKEY_IN_USE "That shortcut is already taken by another app."
 #define CLP_UI_POPUP_HOTKEY_APPLIED "Popup shortcut updated."
+// Clipboard-page hotkey nudge (dismissible forever). The chord names are
+// formatted at the use site so the banner follows the live settings.
+#define CLP_UI_POPUP_TEACH_PREFIX "Press "
+#define CLP_UI_POPUP_TEACH_OR " or "
+#define CLP_UI_POPUP_TEACH_SUFFIX " to bring up your clipboard history and paste from the past."
+#define CLP_UI_POPUP_TEACH_DISMISS "Dismiss"
 #define CLP_UI_LINK "Link"
 #define CLP_UI_TEXT "Text"
 #define CLP_UI_IMAGE "Image"

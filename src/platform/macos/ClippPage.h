@@ -11,7 +11,9 @@
 #include <vector>
 
 @class NSMutableArray;
+@class NSBox;
 @class NSButton;
+@class NSLayoutConstraint;
 @class NSScrollView;
 @class NSStackView;
 @class NSTextField;
@@ -42,9 +44,11 @@ public:
     void CopyActivityItem(uint64_t itemID);
     void DeleteActivityItem(uint64_t itemID);
     void ShowNetworkPage();
+    void DismissTeachBanner();
 
 private:
     void BuildView();
+    void UpdateTeachBanner();
     NSView* BuildActivityRow(uint64_t itemID);
     void RefreshActivityItems(const std::vector<ClipboardActivityItemHeader>& items);
     void AddActivityItem(uint64_t itemID);
@@ -69,6 +73,12 @@ private:
     NSStackView* activityEmptyState_ = nullptr;
     NSTextField* activityEmptyMessage_ = nullptr;
     NSButton* activityEmptyNetworkButton_ = nullptr;
+    NSBox* teachBanner_ = nullptr;
+    NSTextField* teachBannerLabel_ = nullptr;
+    // The scroll's top pins to the banner while it shows, to the page top
+    // otherwise. Exactly one of these is active at any time.
+    NSLayoutConstraint* scrollTopToBanner_ = nullptr;
+    NSLayoutConstraint* scrollTopToRoot_ = nullptr;
     NSView* nextKeyViewAfterPage_ = nullptr;
     MacOSClippPageTarget* actionTarget_ = nullptr;
     NSMutableArray* activityItemTargets_ = nil;

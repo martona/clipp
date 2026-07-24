@@ -16,6 +16,7 @@ namespace {
     constexpr wchar_t kMaskShortTextPreviewsName[] = L"MaskShortTextPreviews";
     constexpr wchar_t kAnimateFlowFeedbackName[] = L"AnimateFlowFeedback";
     constexpr wchar_t kPopupHintShownCountName[] = L"PopupHintShownCount";
+    constexpr wchar_t kPopupTeachBannerDismissedName[] = L"PopupTeachBannerDismissed";
     constexpr wchar_t kPopupHotkeyPrimaryName[] = L"PopupHotkeyPrimary";
     constexpr wchar_t kPopupHotkeySecondaryName[] = L"PopupHotkeySecondary";
     constexpr wchar_t kOriginSequenceFloorName[] = L"OriginSequenceFloor";
@@ -225,6 +226,23 @@ void Settings::notePopupHintShown() {
     WriteUint64Value(kPopupHintShownCountName, next);
 }
 
+bool Settings::popupTeachBannerDismissed() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return popupTeachBannerDismissed_;
+}
+
+void Settings::notePopupTeachBannerDismissed() {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (popupTeachBannerDismissed_) {
+            return;  // idempotent: every popup summon reports in here
+        }
+        popupTeachBannerDismissed_ = true;
+    }
+    // One write, ever: dismissal is permanent by design.
+    WriteUint32Value(kPopupTeachBannerDismissedName, 1);
+}
+
 uint32_t Settings::popupHotkeyPrimary() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return popupHotkeyPrimary_;
@@ -399,6 +417,10 @@ bool Settings::LoadCache() {
     uint64_t popupHintShownCount = 0;
     if (ReadUint64Value(kPopupHintShownCountName, popupHintShownCount)) {
         popupHintShownCount_ = popupHintShownCount;
+    }
+    int popupTeachBannerDismissed = 0;
+    if (ReadUint32Value(kPopupTeachBannerDismissedName, popupTeachBannerDismissed)) {
+        popupTeachBannerDismissed_ = (popupTeachBannerDismissed != 0);
     }
     uint64_t popupHotkey = 0;
     if (ReadUint64Value(kPopupHotkeyPrimaryName, popupHotkey)) {

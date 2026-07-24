@@ -3,6 +3,8 @@
 #include "Clipboard.h"
 #include "ClipboardActions.h"
 #include "KeyManager.h"
+#include "PopupHotkeys.h"
+#include "Settings.h"
 #include "platform/uiClippPage.h"
 #include "platform/uistrings.h"
 #include "utils.h"
@@ -38,6 +40,7 @@
 #include <winrt/Windows.UI.Xaml.Automation.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
 #include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
+#include <winrt/Windows.UI.Xaml.Documents.h>
 #include <winrt/Windows.UI.Xaml.Input.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
 #include <winrt/Windows.UI.Xaml.Media.Animation.h>
@@ -161,10 +164,119 @@ void ClippPage::BuildView() {
     root_.HorizontalAlignment(HorizontalAlignment::Stretch);
     root_.VerticalAlignment(VerticalAlignment::Stretch);
 
-    root_.Children().Append(BuildActivitySection());
+    // Row 0: the teach-the-hotkey banner (auto height, collapses away).
+    // Row 1: the activity stream.
+    RowDefinition bannerRow;
+    bannerRow.Height(GridLength{ 1, GridUnitType::Auto });
+    RowDefinition contentRow;
+    contentRow.Height(GridLength{ 1, GridUnitType::Star });
+    root_.RowDefinitions().Append(bannerRow);
+    root_.RowDefinitions().Append(contentRow);
+
+    auto banner = BuildTeachBanner();
+    Grid::SetRow(banner, 0);
+    root_.Children().Append(banner);
+
+    auto section = BuildActivitySection();
+    Grid::SetRow(section, 1);
+    root_.Children().Append(section);
 
     uiDispatcher_ = winrt::Windows::System::DispatcherQueue::GetForCurrentThread();
+    UpdateTeachBanner();
     RefreshActivityItems(activityStore_.Snapshot());
+}
+
+// The teach-the-hotkey banner: dismissible-forever nudge naming the popup
+// chord(s). Same navy "Clipp talking about itself" accent as the macOS
+// banners — deliberately theme-invariant, distinct from page content in both
+// light and dark mode.
+winrt::Windows::UI::Xaml::Controls::Border ClippPage::BuildTeachBanner() {
+    using namespace winrt::Windows::UI::Xaml;
+    using namespace winrt::Windows::UI::Xaml::Controls;
+
+    Border banner;
+    banner.Background(MakeBrush(235, 0, 82, 148));
+    banner.CornerRadius(CornerRadiusHelper::FromUniformRadius(8));
+    banner.Margin(ThicknessHelper::FromLengths(24, 16, 24, 0));
+    banner.Padding(ThicknessHelper::FromLengths(14, 10, 6, 10));
+    banner.Visibility(Visibility::Collapsed);
+
+    Grid content;
+    ColumnDefinition textColumn;
+    textColumn.Width(GridLength{ 1, GridUnitType::Star });
+    ColumnDefinition dismissColumn;
+    dismissColumn.Width(GridLength{ 1, GridUnitType::Auto });
+    content.ColumnDefinitions().Append(textColumn);
+    content.ColumnDefinitions().Append(dismissColumn);
+
+    teachBannerText_ = TextBlock();
+    teachBannerText_.FontSize(13);
+    teachBannerText_.TextWrapping(TextWrapping::WrapWholeWords);
+    teachBannerText_.VerticalAlignment(VerticalAlignment::Center);
+    teachBannerText_.Foreground(MakeBrush(255, 255, 255, 255));
+    Grid::SetColumn(teachBannerText_, 0);
+    content.Children().Append(teachBannerText_);
+
+    Button dismiss;
+    dismiss.Content(winrt::box_value(winrt::hstring{ L"✕" }));
+    dismiss.FontSize(11);
+    dismiss.Background(MakeBrush(0, 0, 0, 0));
+    dismiss.BorderThickness(ThicknessHelper::FromUniformLength(0));
+    dismiss.Foreground(MakeBrush(217, 255, 255, 255));
+    dismiss.Padding(ThicknessHelper::FromLengths(8, 2, 8, 2));
+    dismiss.VerticalAlignment(VerticalAlignment::Center);
+    ToolTipService::SetToolTip(dismiss,
+        winrt::box_value(winrt::hstring{ CLP_W(CLP_UI_POPUP_TEACH_DISMISS) }));
+    dismiss.Click([this](auto const&, auto const&) {
+        g_settings.notePopupTeachBannerDismissed();
+        UpdateTeachBanner();
+    });
+    Grid::SetColumn(dismiss, 1);
+    content.Children().Append(dismiss);
+
+    banner.Child(content);
+    teachBanner_ = banner;
+    return banner;
+}
+
+// Recompute visibility and text from the live settings: hidden once dismissed
+// (forever) or while both hotkey slots are cleared (nothing to teach). Called
+// on build and on every OnShown, so a hotkey re-config shows up on the next
+// visit to this page.
+void ClippPage::UpdateTeachBanner() {
+    using namespace winrt::Windows::UI::Xaml;
+    using namespace winrt::Windows::UI::Xaml::Documents;
+
+    if (!teachBanner_) {
+        return;
+    }
+    const uint32_t primary = g_settings.popupHotkeyPrimary();
+    const uint32_t secondary = g_settings.popupHotkeySecondary();
+    const bool show = !g_settings.popupTeachBannerDismissed()
+        && (primary != 0 || secondary != 0);
+    if (!show) {
+        teachBanner_.Visibility(Visibility::Collapsed);
+        return;
+    }
+
+    // The chords are the payload — set them semibold.
+    teachBannerText_.Inlines().Clear();
+    const auto appendRun = [this](const std::wstring& text, bool chord) {
+        Run run;
+        run.Text(winrt::hstring{ text });
+        if (chord) {
+            run.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+        }
+        teachBannerText_.Inlines().Append(run);
+    };
+    appendRun(CLP_W(CLP_UI_POPUP_TEACH_PREFIX), false);
+    appendRun(clipp::FormatPopupHotkeyChord(primary != 0 ? primary : secondary), true);
+    if (primary != 0 && secondary != 0) {
+        appendRun(CLP_W(CLP_UI_POPUP_TEACH_OR), false);
+        appendRun(clipp::FormatPopupHotkeyChord(secondary), true);
+    }
+    appendRun(CLP_W(CLP_UI_POPUP_TEACH_SUFFIX), false);
+    teachBanner_.Visibility(Visibility::Visible);
 }
 
 winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivitySection() {
@@ -824,6 +936,7 @@ void ClippPage::OnShown() {
     BeginActivityNotifications();
     if (uiDispatcher_) {
         uiDispatcher_.TryEnqueue([this]() {
+            UpdateTeachBanner();
             UpdateActivityEmptyState();
             RefreshActivityItems(activityStore_.Snapshot());
         });
@@ -844,6 +957,8 @@ void ClippPage::OnDestroy() {
     activityEmptyState_ = nullptr;
     activityEmptyMessage_ = nullptr;
     activityEmptyNetworkButton_ = nullptr;
+    teachBanner_ = nullptr;
+    teachBannerText_ = nullptr;
 }
 
 void ClippPage::OnNetworkKeyChanged() {

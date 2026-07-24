@@ -707,6 +707,10 @@ private:
         SetForegroundWindow(hwnd_);
         FocusFilterBox();
 
+        // Summoning by any route proves the ClippPage teach banner's lesson
+        // landed — retire it for good (idempotent; the page re-checks on show).
+        g_settings.notePopupTeachBannerDismissed();
+
         // First-runs coaching: a pill ABOVE the popup (its own no-activate
         // window — zero popup real estate) on each of the first
         // PopupHintMaxShows summons; the first action retires it.

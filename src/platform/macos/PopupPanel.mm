@@ -752,6 +752,10 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
 }
 
 - (void)summon {
+    // Summoning by any route proves the ClippPage teach banner's lesson
+    // landed — retire it for good (idempotent; the page re-checks on show).
+    g_settings.notePopupTeachBannerDismissed();
+
     [self rebuildFromStores];
     [self updateColumnLayoutAndFrame:NO];
     self.filterField.stringValue = @"";

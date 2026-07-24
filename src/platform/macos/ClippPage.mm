@@ -5,6 +5,8 @@
 #include "Clipboard.h"
 #include "ClipboardActions.h"
 #include "KeyManager.h"
+#include "PopupPanel.h"
+#include "Settings.h"
 #include "platform/uiClippPage.h"
 #include "platform/uistrings.h"
 #include "UiHelpers.h"
@@ -24,6 +26,7 @@
 #import <dispatch/dispatch.h>
 
 extern KeyManager g_keyManager;
+extern Settings g_settings;
 
 @interface MacOSClippPageTarget : NSObject {
 @private
@@ -34,6 +37,7 @@ extern KeyManager g_keyManager;
 - (void)copyActivityItem:(id)sender;
 - (void)deleteActivityItem:(id)sender;
 - (void)showNetworkPage:(id)sender;
+- (void)teachBannerDismissClicked:(id)sender;
 @end
 
 @implementation MacOSClippPageTarget
@@ -65,6 +69,13 @@ extern KeyManager g_keyManager;
     (void)sender;
     if (owner_ != nullptr) {
         owner_->ShowNetworkPage();
+    }
+}
+
+- (void)teachBannerDismissClicked:(id)sender {
+    (void)sender;
+    if (owner_ != nullptr) {
+        owner_->DismissTeachBanner();
     }
 }
 
@@ -648,14 +659,58 @@ void MacOSClippPage::BuildView() {
     [activityEmptyState_ addArrangedSubview:activityEmptyMessage_];
     [activityEmptyState_ addArrangedSubview:activityEmptyNetworkButton_];
 
+    // Teach-the-hotkey banner: the clipp navy "Clipp talking about itself"
+    // chip (same accent as the CLI-path banner) pinned above the stream until
+    // dismissed forever. Text is composed in UpdateTeachBanner from the live
+    // hotkey settings.
+    teachBanner_ = [[NSBox alloc] initWithFrame:NSZeroRect];
+    teachBanner_.translatesAutoresizingMaskIntoConstraints = NO;
+    teachBanner_.boxType = NSBoxCustom;
+    teachBanner_.titlePosition = NSNoTitle;
+    teachBanner_.borderType = NSNoBorder;
+    teachBanner_.cornerRadius = 8.0;
+    teachBanner_.fillColor = [NSColor colorWithCalibratedRed:0.0 green:0.32 blue:0.58 alpha:0.92];
+    teachBanner_.hidden = YES;
+
+    teachBannerLabel_ = MacOSMakeWrappingLabel(@"", 12.0, [NSColor whiteColor]);
+
+    NSButton* teachDismiss = [NSButton
+        buttonWithImage:MacOSMakeSymbolImage(@"xmark", CLP_NS(CLP_UI_POPUP_TEACH_DISMISS), 11.0,
+                                             [NSColor whiteColor])
+                 target:actionTarget_
+                 action:@selector(teachBannerDismissClicked:)];
+    teachDismiss.translatesAutoresizingMaskIntoConstraints = NO;
+    teachDismiss.bezelStyle = NSBezelStyleRegularSquare;
+    teachDismiss.bordered = NO;
+    teachDismiss.imagePosition = NSImageOnly;
+    teachDismiss.contentTintColor = [NSColor colorWithCalibratedWhite:1.0 alpha:0.85];
+    teachDismiss.toolTip = CLP_NS(CLP_UI_POPUP_TEACH_DISMISS);
+
+    [teachBanner_ addSubview:teachBannerLabel_];
+    [teachBanner_ addSubview:teachDismiss];
+
     [documentView addSubview:activityItemsPanel_];
+    [root_ addSubview:teachBanner_];
     [root_ addSubview:activityScroll_];
     [root_ addSubview:activityEmptyState_];
 
     [NSLayoutConstraint activateConstraints:@[
+        [teachBanner_.leadingAnchor constraintEqualToAnchor:root_.leadingAnchor constant:kPageInset],
+        [teachBanner_.trailingAnchor constraintEqualToAnchor:root_.trailingAnchor constant:-kPageInset],
+        [teachBanner_.topAnchor constraintEqualToAnchor:root_.topAnchor constant:12.0],
+
+        [teachBannerLabel_.leadingAnchor constraintEqualToAnchor:teachBanner_.leadingAnchor constant:14.0],
+        [teachBannerLabel_.topAnchor constraintEqualToAnchor:teachBanner_.topAnchor constant:9.0],
+        [teachBannerLabel_.bottomAnchor constraintEqualToAnchor:teachBanner_.bottomAnchor constant:-9.0],
+        [teachBannerLabel_.trailingAnchor constraintLessThanOrEqualToAnchor:teachDismiss.leadingAnchor constant:-8.0],
+
+        [teachDismiss.trailingAnchor constraintEqualToAnchor:teachBanner_.trailingAnchor constant:-8.0],
+        [teachDismiss.centerYAnchor constraintEqualToAnchor:teachBanner_.centerYAnchor],
+        [teachDismiss.widthAnchor constraintEqualToConstant:20.0],
+        [teachDismiss.heightAnchor constraintEqualToConstant:20.0],
+
         [activityScroll_.leadingAnchor constraintEqualToAnchor:root_.leadingAnchor],
         [activityScroll_.trailingAnchor constraintEqualToAnchor:root_.trailingAnchor],
-        [activityScroll_.topAnchor constraintEqualToAnchor:root_.topAnchor],
         [activityScroll_.bottomAnchor constraintEqualToAnchor:root_.bottomAnchor],
 
         [documentView.widthAnchor constraintEqualToAnchor:activityScroll_.contentView.widthAnchor],
@@ -671,7 +726,68 @@ void MacOSClippPage::BuildView() {
         [activityEmptyState_.trailingAnchor constraintLessThanOrEqualToAnchor:root_.trailingAnchor constant:-kPageInset],
     ]];
 
+    // The scroll's top edge follows the banner's visibility; exactly one of
+    // this pair is active at any time (UpdateTeachBanner flips them).
+    scrollTopToRoot_ = [activityScroll_.topAnchor constraintEqualToAnchor:root_.topAnchor];
+    scrollTopToBanner_ = [activityScroll_.topAnchor constraintEqualToAnchor:teachBanner_.bottomAnchor
+                                                                   constant:4.0];
+    scrollTopToRoot_.active = YES;
+
+    UpdateTeachBanner();
     UpdateActivityEmptyState();
+}
+
+// Recompute the teach banner's visibility and text from the live settings:
+// hidden once dismissed (forever) or while both hotkey slots are cleared
+// (nothing to teach). Runs on build and on every OnShown, so a hotkey
+// re-config shows up on the next visit to this page.
+void MacOSClippPage::UpdateTeachBanner() {
+    if (teachBanner_ == nullptr) {
+        return;
+    }
+    const uint32_t primary = g_settings.popupHotkeyPrimary();
+    const uint32_t secondary = g_settings.popupHotkeySecondary();
+    const bool show = !g_settings.popupTeachBannerDismissed()
+        && (primary != 0 || secondary != 0);
+    teachBanner_.hidden = !show;
+    scrollTopToBanner_.active = NO;
+    scrollTopToRoot_.active = NO;
+    (show ? scrollTopToBanner_ : scrollTopToRoot_).active = YES;
+    if (!show) {
+        return;
+    }
+
+    // The chords are the payload — set them semibold.
+    NSMutableParagraphStyle* paragraph = [[NSMutableParagraphStyle alloc] init];
+    paragraph.lineBreakMode = NSLineBreakByWordWrapping;
+    NSDictionary* plainAttrs = @{
+        NSFontAttributeName: [NSFont systemFontOfSize:12.0],
+        NSForegroundColorAttributeName: [NSColor whiteColor],
+        NSParagraphStyleAttributeName: paragraph,
+    };
+    NSDictionary* chordAttrs = @{
+        NSFontAttributeName: [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
+        NSForegroundColorAttributeName: [NSColor whiteColor],
+        NSParagraphStyleAttributeName: paragraph,
+    };
+    NSMutableAttributedString* text = [[NSMutableAttributedString alloc] init];
+    const auto append = [&text](NSString* piece, NSDictionary* attrs) {
+        [text appendAttributedString:
+            [[NSAttributedString alloc] initWithString:piece attributes:attrs]];
+    };
+    append(CLP_NS(CLP_UI_POPUP_TEACH_PREFIX), plainAttrs);
+    append(clipp::FormatPopupHotkeyChord(primary != 0 ? primary : secondary), chordAttrs);
+    if (primary != 0 && secondary != 0) {
+        append(CLP_NS(CLP_UI_POPUP_TEACH_OR), plainAttrs);
+        append(clipp::FormatPopupHotkeyChord(secondary), chordAttrs);
+    }
+    append(CLP_NS(CLP_UI_POPUP_TEACH_SUFFIX), plainAttrs);
+    teachBannerLabel_.attributedStringValue = text;
+}
+
+void MacOSClippPage::DismissTeachBanner() {
+    g_settings.notePopupTeachBannerDismissed();
+    UpdateTeachBanner();
 }
 
 NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
@@ -1110,6 +1226,7 @@ void MacOSClippPage::OnShown() {
     auto state = pageState_;
     dispatch_async(dispatch_get_main_queue(), ^{
         if (state->alive.load()) {
+            this->UpdateTeachBanner();
             this->UpdateActivityEmptyState();
             this->RefreshActivityItems(this->activityStore_.Snapshot());
         }
@@ -1141,6 +1258,10 @@ void MacOSClippPage::OnDestroy() {
     activityEmptyState_ = nullptr;
     activityEmptyMessage_ = nullptr;
     activityEmptyNetworkButton_ = nullptr;
+    teachBanner_ = nullptr;
+    teachBannerLabel_ = nullptr;
+    scrollTopToBanner_ = nullptr;
+    scrollTopToRoot_ = nullptr;
 }
 
 void MacOSClippPage::OnNetworkKeyChanged() {
