@@ -45,8 +45,10 @@
 #define CLP_UI_POPUP_SAVE_TIP "Save as a register (Ctrl+S)"
 #define CLP_UI_POPUP_RENAME_TIP "Rename (F2)"
 #define CLP_UI_POPUP_DELETE_TIP "Delete everywhere (Del)"
-#define CLP_UI_POPUP_MAKE_PRIVATE "Make private"
-#define CLP_UI_POPUP_MAKE_PUBLIC "Make public"
+// "Mark", not "make", and never "public": private is a MARKER (masks the
+// preview, gates paste-to-terminal) — "make public" read like publishing.
+#define CLP_UI_POPUP_MAKE_PRIVATE "Mark private"
+#define CLP_UI_POPUP_MAKE_PUBLIC "Mark non-private"
 #define CLP_UI_POPUP_UNDO_TIP "Undo the last delete (Ctrl+Z)"
 #define CLP_UI_POPUP_UNDO_OF_PREFIX "Undo delete of "
 // macOS flavors of the popup shortcut hints (same actions, native key names).

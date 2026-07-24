@@ -30,7 +30,7 @@
 #include "RegisterWire.h"
 #include "Settings.h"
 #include "platform.h"
-#include "platform/LogPaths.h"
+#include "platform/DataPaths.h"
 #include "version.h"
 
 #ifdef _WIN32

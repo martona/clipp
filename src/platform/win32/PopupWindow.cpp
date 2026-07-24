@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <limits>
 #include <map>
+#include <set>
 #include <memory>
 #include <optional>
 #include <string>
@@ -764,6 +765,7 @@ private:
         // Session-scoped peeks: anything revealed inside the popup is
         // forgotten the moment it hides.
         uiClippPage::ForgetAllPeekedItems();
+        peekedRegisterNames_.clear();
         ShowWindow(hwnd_, SW_HIDE);
         if (restoreFocus && previousForeground_ != nullptr && IsWindow(previousForeground_)) {
             SetForegroundWindow(previousForeground_);
@@ -1207,7 +1209,7 @@ private:
             // primary handle — so they participate in find (and light up).
             item.searchText = info.name;
 
-            if (rec.IsPrivate()) {
+            if (rec.IsPrivate() && peekedRegisterNames_.count(rec.name) == 0) {
                 info.previewText = L"••••••••";  // fixed width: not length-revealing
             } else if (rec.IsBinary()) {
                 RegisterWire::BinaryValueInfo bin{};
@@ -1330,8 +1332,55 @@ private:
         RenderHighlight();
     }
 
+    // The eye on a masked row: a small trailing button toggling the (session-
+    // scoped) peek. `peeked` picks the glyph; `onToggle` flips the state and
+    // re-renders. Returns the row child: the content wrapped in a grid with
+    // the eye in a trailing auto column.
+    Grid WrapWithPeekButton(StackPanel const& content, bool peeked,
+                            std::function<void()> onToggle) {
+        FontIcon eyeIcon;
+        eyeIcon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
+        eyeIcon.FontSize(13);
+        eyeIcon.Glyph(peeked ? L"\xED1A" : L"\xE7B3");
+
+        Button eye;
+        eye.Content(eyeIcon);
+        eye.MinWidth(0);
+        eye.MinHeight(0);
+        eye.Width(26);
+        eye.Height(26);
+        eye.Padding(ThicknessHelper::FromLengths(0, 0, 0, 0));
+        eye.BorderThickness(ThicknessHelper::FromLengths(0, 0, 0, 0));
+        eye.Background(ArgbBrush(0, 0, 0, 0));
+        eye.Opacity(0.65);
+        eye.VerticalAlignment(VerticalAlignment::Center);
+        ToolTipService::SetToolTip(eye, winrt::box_value(winrt::hstring{
+            peeked ? CLP_W(CLP_UI_PEEK_HIDE) : CLP_W(CLP_UI_PEEK) }));
+        eye.Click([onToggle = std::move(onToggle)](auto const&, auto const&) {
+            onToggle();
+        });
+
+        Grid wrap;
+        ColumnDefinition contentColumn;
+        contentColumn.Width(GridLength{ 1, GridUnitType::Star });
+        ColumnDefinition eyeColumn;
+        eyeColumn.Width(GridLength{ 1, GridUnitType::Auto });
+        wrap.ColumnDefinitions().Append(contentColumn);
+        wrap.ColumnDefinitions().Append(eyeColumn);
+        Grid::SetColumn(content, 0);
+        wrap.Children().Append(content);
+        Grid::SetColumn(eye, 1);
+        wrap.Children().Append(eye);
+        return wrap;
+    }
+
     Border BuildRow(const PopupItem& item, std::size_t index) {
         const auto cached = displayCache_.find(item.historyId);
+        // Masked-private text carries its unmasked twin; that (and only that)
+        // is what the eye can reveal. Placeholders have no content to show.
+        const bool peekable = cached != displayCache_.end()
+            && !cached->second.revealedPreviewText.empty();
+        const bool peeked = peekable && uiClippPage::IsItemPeeked(item.historyId);
 
         StackPanel content;
         content.Spacing(1);
@@ -1350,7 +1399,8 @@ private:
                 previewText = CLP_W(CLP_UI_PRIVATE_PLACEHOLDER_TITLE);
                 break;
             default:
-                previewText = display.previewText;
+                previewText = peeked ? display.revealedPreviewText
+                                     : display.previewText;
                 break;
             }
             contentRow = display.kind == ClipboardActivityPayloadKind::Text ||
@@ -1391,7 +1441,16 @@ private:
         row.Padding(ThicknessHelper::FromLengths(10, 6, 10, 6));
         row.CornerRadius(CornerRadius{ 6 });
         row.Background(ArgbBrush(0, 0, 0, 0));
-        row.Child(content);
+        const auto toggleHistoryPeek = [this, id = item.historyId, index]() {
+            uiClippPage::ToggleItemPeeked(id);
+            model_.SelectAt(PopupModel::Group::History, index);
+            RenderList();
+        };
+        if (peekable) {
+            row.Child(WrapWithPeekButton(content, peeked, toggleHistoryPeek));
+        } else {
+            row.Child(content);
+        }
 
         row.PointerPressed([this, index](auto const&, auto const&) {
             model_.SelectAt(PopupModel::Group::History, index);
@@ -1410,6 +1469,15 @@ private:
             ActivateSelected();
         });
         menu.Items().Append(pasteItem);
+        if (peekable) {
+            MenuFlyoutItem peekItem;
+            peekItem.Text(winrt::hstring{
+                peeked ? CLP_W(CLP_UI_PEEK_HIDE) : CLP_W(CLP_UI_PEEK) });
+            peekItem.Click([toggleHistoryPeek](auto const&, auto const&) {
+                toggleHistoryPeek();
+            });
+            menu.Items().Append(peekItem);
+        }
         MenuFlyoutItem deleteItem;
         deleteItem.Text(winrt::hstring{ CLP_W(CLP_UI_DELETE) });
         deleteItem.Click([this, index](auto const&, auto const&) {
@@ -1524,7 +1592,16 @@ private:
         row.Padding(ThicknessHelper::FromLengths(10, 6, 10, 6));
         row.CornerRadius(CornerRadius{ 6 });
         row.Background(ArgbBrush(0, 0, 0, 0));
-        row.Child(content);
+        const bool privateRegister =
+            cached != registerCache_.end() && cached->second.isPrivate;
+        const bool peeked =
+            privateRegister && peekedRegisterNames_.count(item.registerName) != 0;
+        if (privateRegister && !editing) {
+            row.Child(WrapWithPeekButton(content, peeked,
+                [this, name = item.registerName]() { TogglePeekedRegister(name); }));
+        } else {
+            row.Child(content);
+        }
 
         row.PointerPressed([this, index](auto const&, auto const&) {
             model_.SelectAt(PopupModel::Group::Registers, index);
@@ -1559,6 +1636,15 @@ private:
             ToggleSelectedRegisterPrivate();
         });
         menu.Items().Append(privateItem);
+        if (privateRegister) {
+            MenuFlyoutItem peekItem;
+            peekItem.Text(winrt::hstring{
+                peeked ? CLP_W(CLP_UI_PEEK_HIDE) : CLP_W(CLP_UI_PEEK) });
+            peekItem.Click([this, name = item.registerName](auto const&, auto const&) {
+                TogglePeekedRegister(name);
+            });
+            menu.Items().Append(peekItem);
+        }
         MenuFlyoutItem deleteItem;
         deleteItem.Text(winrt::hstring{ CLP_W(CLP_UI_DELETE) });
         deleteItem.Click([this, index](auto const&, auto const&) {
@@ -1572,9 +1658,19 @@ private:
         return row;
     }
 
+    // Peek is render state, not a store op: the rebuild applies (or lifts) the
+    // mask via the cache, the row stays selected, and the undo slot is
+    // untouched. Session-scoped — Dismiss clears the set.
+    void TogglePeekedRegister(const std::string& name) {
+        if (peekedRegisterNames_.erase(name) == 0) {
+            peekedRegisterNames_.insert(name);
+        }
+        RefreshAfterRegisterOp(name);
+    }
+
     void RenderHighlight() {
         const auto selection = model_.Selected();
-        const auto paint = [&selection](std::vector<Border>& borders, PopupModel::Group group) {
+        const auto paint = [this, &selection](std::vector<Border>& borders, PopupModel::Group group) {
             for (std::size_t i = 0; i < borders.size(); ++i) {
                 const bool selected = selection.has_value()
                     && selection->group == group
@@ -1582,7 +1678,16 @@ private:
                 borders[i].Background(selected ? ArgbBrush(56, 127, 127, 127)
                                                : ArgbBrush(0, 0, 0, 0));
                 if (selected) {
-                    borders[i].StartBringIntoView();
+                    // Deferred a dispatcher hop: on a rebuild (rename/save) the
+                    // fresh row has no realized geometry yet, and an immediate
+                    // BringIntoView silently no-ops — the renamed row could
+                    // re-sort out of view and stay there.
+                    if (dispatcher_) {
+                        Border target = borders[i];
+                        dispatcher_.TryEnqueue([target]() { target.StartBringIntoView(); });
+                    } else {
+                        borders[i].StartBringIntoView();
+                    }
                 }
             }
         };
@@ -1763,6 +1868,18 @@ private:
 
         if (display.kind != ClipboardActivityPayloadKind::Text &&
             display.kind != ClipboardActivityPayloadKind::Link) {
+            // A peeked private-text item graduates to a content flyout like
+            // any other text row — the peek would be half a reveal otherwise.
+            if (!display.revealedPreviewText.empty()
+                && uiClippPage::IsItemPeeked(item->historyId)) {
+                const std::wstring& revealed = display.revealedPreviewText;
+                if (TextFitsInRow(revealed)) {
+                    previewWindow_.Hide();
+                    return;
+                }
+                ShowTextFlyoutWindowed(revealed, /*preferLeft=*/false);
+                return;
+            }
             previewWindow_.Hide();
             return;
         }
@@ -2300,6 +2417,9 @@ private:
     std::vector<Border> registerRowBorders_;
     std::unordered_map<uint64_t, ClipboardActivityDisplayItem> displayCache_;
     std::map<std::string, RegisterRowInfo> registerCache_;
+    // Private registers the user peeked this popup session (name-keyed — the
+    // register world has no item IDs). Cleared on Dismiss, like item peeks.
+    std::set<std::string> peekedRegisterNames_;
     std::optional<std::string> editingRegister_;
     bool registersPresent_ = false;
     // Pending paste keystroke: armed at dismissal, fired once the target

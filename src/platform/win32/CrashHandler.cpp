@@ -3,6 +3,7 @@
 #ifdef _WIN32
 
 #include "platform.h"
+#include "platform/DataPaths.h"
 #include <dbghelp.h>
 #include <shlobj.h>
 
@@ -37,37 +38,6 @@ std::atomic<bool> g_installed{ false };
 // vectored chain. We don't currently invoke it — we'd rather just die after
 // writing the dump — but holding the pointer leaves the option open.
 LPTOP_LEVEL_EXCEPTION_FILTER g_previousFilter = nullptr;
-
-bool ResolveCrashDumpDirectory(std::wstring& outDir) {
-    PWSTR localAppData = nullptr;
-    HRESULT hr = SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &localAppData);
-    if (FAILED(hr) || localAppData == nullptr) {
-        if (localAppData != nullptr) {
-            CoTaskMemFree(localAppData);
-        }
-        return false;
-    }
-    outDir.assign(localAppData);
-    CoTaskMemFree(localAppData);
-    outDir.append(L"\\Clipp\\crashdumps");
-    return true;
-}
-
-bool EnsureDirectoryExists(const std::wstring& path) {
-    // Walk forward through the path and CreateDirectoryW each segment. Each
-    // call returns ERROR_ALREADY_EXISTS for segments that exist, which we
-    // intentionally ignore. The final check confirms the leaf is a directory.
-    for (size_t i = 1; i < path.size(); ++i) {
-        if (path[i] == L'\\') {
-            const std::wstring segment = path.substr(0, i);
-            CreateDirectoryW(segment.c_str(), nullptr);
-        }
-    }
-    CreateDirectoryW(path.c_str(), nullptr);
-
-    const DWORD attrs = GetFileAttributesW(path.c_str());
-    return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY);
-}
 
 // Writes a minidump and returns true on success. Designed to be safe to call
 // from inside a crash handler: no heap allocation (uses stack buffers and the
@@ -219,21 +189,18 @@ void InstallCrashHandler() {
         return;
     }
 
-    std::wstring dir;
-    if (!ResolveCrashDumpDirectory(dir)) {
+    // Resolve ONCE now, while the heap is healthy (platform/DataPaths.h owns
+    // the path logic and creates the directory); the crash-time code below
+    // only ever reads the pre-populated fixed buffer.
+    std::string dirUtf8;
+    if (!ResolveCrashDumpDirectory(dirUtf8)) {
         g_logger.log(__FUNCTION__, Logger::Level::Warning,
-            L"Could not resolve LocalAppData; minidumps will not be written.");
+            L"Could not resolve or create the crash-dump directory; minidumps will not be written.");
         return;
     }
+    const std::wstring dir = clipp_platform_detail::Utf8ToUtf16String(dirUtf8);
 
-    if (!EnsureDirectoryExists(dir)) {
-        g_logger.log(__FUNCTION__, Logger::Level::Warning,
-            L"Could not create crash-dump directory; minidumps will not be written: %ls",
-            dir.c_str());
-        return;
-    }
-
-    if (dir.size() >= kDumpDirCapacity) {
+    if (dir.empty() || dir.size() >= kDumpDirCapacity) {
         g_logger.log(__FUNCTION__, Logger::Level::Warning,
             L"Crash-dump directory path is too long (%zu chars); minidumps will not be written: %ls",
             dir.size(), dir.c_str());
@@ -244,7 +211,7 @@ void InstallCrashHandler() {
     // them accumulate. Sweep the same retention window the logger uses, keyed off the
     // shared clipp-YYYYMMDD- name. The heap is healthy here (install time), so the
     // filesystem work is safe; PruneAgedFiles never throws.
-    Logger::PruneAgedFiles(clipp_platform_detail::Utf16ToUtf8String(dir), "clipp-", ".dmp", Logger::kDefaultRetentionDays);
+    Logger::PruneAgedFiles(dirUtf8, "clipp-", ".dmp", Logger::kDefaultRetentionDays);
 
     std::wmemcpy(g_dumpDirectory, dir.c_str(), dir.size() + 1);
 

@@ -29,6 +29,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -245,6 +246,9 @@ struct RegisterRowInfo {
     PopupModel model_;
     std::unordered_map<uint64_t, ClipboardActivityDisplayItem> displayCache_;
     std::map<std::string, RegisterRowInfo> registerCache_;
+    // Private registers the user peeked this popup session (name-keyed — the
+    // register world has no item IDs). Cleared on dismiss, like item peeks.
+    std::set<std::string> peekedRegisters_;
     std::optional<std::string> editingRegister_;
     std::size_t watcherID_;
     bool registersPresent_;
@@ -829,6 +833,7 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
     // Session-scoped peeks: anything revealed inside the popup is forgotten
     // the moment it hides.
     uiClippPage::ForgetAllPeekedItems();
+    peekedRegisters_.clear();
     [self.panel orderOut:nil];
 }
 
@@ -870,7 +875,7 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
         // participate in find (and light up), unlike history kind-labels.
         item.searchText = Utf8ToWideString(rec.name);
 
-        if (rec.IsPrivate()) {
+        if (rec.IsPrivate() && peekedRegisters_.count(rec.name) == 0) {
             info.previewText = @"••••••••";  // fixed width: not length-revealing
         } else if (rec.IsBinary()) {
             RegisterWire::BinaryValueInfo bin{};
@@ -1103,6 +1108,14 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
 }
 
 - (void)packRow:(ClippPopupRowView*)row lines:(NSArray<NSView*>*)lines {
+    [self packRow:row lines:lines accessory:nil];
+}
+
+// `accessory` (the peek eye) rides the row's trailing edge, vertically
+// centered; the content column ends where it begins.
+- (void)packRow:(ClippPopupRowView*)row
+          lines:(NSArray<NSView*>*)lines
+      accessory:(NSView*)accessory {
     NSStackView* content = [[NSStackView alloc] initWithFrame:NSZeroRect];
     content.translatesAutoresizingMaskIntoConstraints = NO;
     content.orientation = NSUserInterfaceLayoutOrientationVertical;
@@ -1118,10 +1131,40 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
     [row addSubview:content];
     [NSLayoutConstraint activateConstraints:@[
         [content.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:10.0],
-        [content.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-10.0],
         [content.topAnchor constraintEqualToAnchor:row.topAnchor constant:5.0],
         [content.bottomAnchor constraintEqualToAnchor:row.bottomAnchor constant:-5.0],
     ]];
+    if (accessory != nil) {
+        [row addSubview:accessory];
+        [NSLayoutConstraint activateConstraints:@[
+            [content.trailingAnchor constraintEqualToAnchor:accessory.leadingAnchor constant:-6.0],
+            [accessory.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-8.0],
+            [accessory.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        ]];
+    } else {
+        [content.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-10.0].active = YES;
+    }
+}
+
+// The eye on a masked row: toggles the session-scoped peek. Never steals the
+// keyboard (the filter field owns it for the panel's life).
+- (NSButton*)makePeekButtonPeeked:(BOOL)peeked action:(SEL)action tag:(NSInteger)tag {
+    NSString* tip = peeked ? CLP_NS(CLP_UI_PEEK_HIDE) : CLP_NS(CLP_UI_PEEK);
+    NSButton* eye = [NSButton
+        buttonWithImage:MacOSMakeSymbolImage(peeked ? @"eye.slash" : @"eye", tip, 12.0,
+                                             [NSColor secondaryLabelColor])
+                 target:self
+                 action:action];
+    eye.translatesAutoresizingMaskIntoConstraints = NO;
+    eye.bezelStyle = NSBezelStyleRegularSquare;
+    eye.bordered = NO;
+    eye.imagePosition = NSImageOnly;
+    eye.refusesFirstResponder = YES;
+    eye.toolTip = tip;
+    eye.tag = tag;
+    [eye setContentHuggingPriority:NSLayoutPriorityRequired
+                    forOrientation:NSLayoutConstraintOrientationHorizontal];
+    return eye;
 }
 
 - (NSView*)buildHistoryRow:(const PopupItem&)item index:(NSInteger)index {
@@ -1132,6 +1175,11 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
     NSString* metaText = @"";
     bool contentRow = false;
     const auto cached = displayCache_.find(item.historyId);
+    // Masked-private text carries its unmasked twin; that (and only that) is
+    // what the eye can reveal. Placeholders have no content to show.
+    const bool peekable = cached != displayCache_.end()
+        && !cached->second.revealedPreviewText.empty();
+    const bool peeked = peekable && uiClippPage::IsItemPeeked(item.historyId);
     if (cached != displayCache_.end()) {
         const auto& display = cached->second;
         switch (display.kind) {
@@ -1142,7 +1190,8 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
             previewText = CLP_NS(CLP_UI_PRIVATE_PLACEHOLDER_TITLE);
             break;
         default:
-            previewText = MacOSToNSString(display.previewText);
+            previewText = MacOSToNSString(peeked ? display.revealedPreviewText
+                                                 : display.previewText);
             break;
         }
         contentRow = display.kind == ClipboardActivityPayloadKind::Text ||
@@ -1168,7 +1217,13 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
         HighlightedString(metaText, @"",
                           [NSFont systemFontOfSize:11.0], [NSColor secondaryLabelColor])];
 
-    [self packRow:row lines:@[preview, meta]];
+    NSView* accessory = nil;
+    if (peekable) {
+        accessory = [self makePeekButtonPeeked:peeked
+                                        action:@selector(peekHistoryRowClicked:)
+                                           tag:index];
+    }
+    [self packRow:row lines:@[preview, meta] accessory:accessory];
     [self.historyRowViews addObject:row];
     return row;
 }
@@ -1234,9 +1289,63 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
         [lines addObject:meta];
     }
 
-    [self packRow:row lines:lines];
+    NSView* accessory = nil;
+    const bool privateRegister =
+        cached != registerCache_.end() && cached->second.isPrivate;
+    if (privateRegister && !editing) {
+        accessory = [self makePeekButtonPeeked:(peekedRegisters_.count(item.registerName) != 0)
+                                        action:@selector(peekRegisterRowClicked:)
+                                           tag:index];
+    }
+    [self packRow:row lines:lines accessory:accessory];
     [self.registerRowViews addObject:row];
     return row;
+}
+
+// ---- peek (session-scoped reveal of masked rows) ---------------------------
+
+// Render-state only, never a store op: rebuild applies/lifts the mask via the
+// cache, the row stays selected, and the undo slot is untouched.
+- (void)togglePeekForRegister:(const std::string&)name {
+    if (peekedRegisters_.erase(name) == 0) {
+        peekedRegisters_.insert(name);
+    }
+    [self refreshAfterRegisterOpSelecting:name];
+}
+
+- (void)peekRegisterRowClicked:(id)sender {
+    const auto& regs = model_.VisibleRegisters();
+    const NSInteger index = [sender tag];
+    if (index < 0 || static_cast<std::size_t>(index) >= regs.size()) {
+        return;
+    }
+    [self togglePeekForRegister:regs[static_cast<std::size_t>(index)]->registerName];
+}
+
+- (void)peekHistoryRowClicked:(id)sender {
+    const auto& history = model_.VisibleHistory();
+    const NSInteger index = [sender tag];
+    if (index < 0 || static_cast<std::size_t>(index) >= history.size()) {
+        return;
+    }
+    uiClippPage::ToggleItemPeeked(history[static_cast<std::size_t>(index)]->historyId);
+    model_.SelectAt(PopupModel::Group::History, static_cast<std::size_t>(index));
+    [self renderList];
+}
+
+// Context-menu route: the menu builder already selected the row.
+- (void)peekSelectedClicked:(id)sender {
+    (void)sender;
+    const PopupItem* item = model_.SelectedItem();
+    if (item == nullptr) {
+        return;
+    }
+    if (item->kind == PopupItem::Kind::Register) {
+        [self togglePeekForRegister:item->registerName];
+    } else {
+        uiClippPage::ToggleItemPeeked(item->historyId);
+        [self renderList];
+    }
 }
 
 - (void)renderHighlight {
@@ -1386,6 +1495,19 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
     }
     if (display.kind != ClipboardActivityPayloadKind::Text &&
         display.kind != ClipboardActivityPayloadKind::Link) {
+        // A peeked private-text item graduates to a content flyout like any
+        // other text row — the peek would be half a reveal otherwise.
+        if (!display.revealedPreviewText.empty()
+            && uiClippPage::IsItemPeeked(item->historyId)) {
+            NSString* revealed = MacOSToNSString(display.revealedPreviewText);
+            if (TextFitsInRowNS(revealed)) {
+                [self.flyoutPanel orderOut:nil];
+                return;
+            }
+            [self showFlyoutText:WindowAroundFirstMatchNS(revealed, self.filterField.stringValue)
+                      preferLeft:NO];
+            return;
+        }
         [self.flyoutPanel orderOut:nil];
         return;
     }
@@ -2040,6 +2162,31 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
             keyEquivalent:@""];
         privateItem.target = self;
         [menu addItem:privateItem];
+
+        if (isPrivate) {
+            const bool peeked = item != nullptr
+                && peekedRegisters_.count(item->registerName) != 0;
+            NSMenuItem* peekItem = [[NSMenuItem alloc]
+                initWithTitle:(peeked ? CLP_NS(CLP_UI_PEEK_HIDE) : CLP_NS(CLP_UI_PEEK))
+                       action:@selector(peekSelectedClicked:)
+                keyEquivalent:@""];
+            peekItem.target = self;
+            [menu addItem:peekItem];
+        }
+    } else {
+        const PopupItem* item = model_.SelectedItem();
+        const auto cached = item != nullptr
+            ? displayCache_.find(item->historyId) : displayCache_.end();
+        if (cached != displayCache_.end()
+            && !cached->second.revealedPreviewText.empty()) {
+            const bool peeked = uiClippPage::IsItemPeeked(item->historyId);
+            NSMenuItem* peekItem = [[NSMenuItem alloc]
+                initWithTitle:(peeked ? CLP_NS(CLP_UI_PEEK_HIDE) : CLP_NS(CLP_UI_PEEK))
+                       action:@selector(peekSelectedClicked:)
+                keyEquivalent:@""];
+            peekItem.target = self;
+            [menu addItem:peekItem];
+        }
     }
 
     NSMenuItem* deleteItem = [[NSMenuItem alloc] initWithTitle:CLP_NS(CLP_UI_DELETE)

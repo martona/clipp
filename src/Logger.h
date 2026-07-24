@@ -33,7 +33,7 @@ public:
     void RemoveLogReflector(LogReflectorCallback callback);
 
     // Per-launch file logging. The caller passes a UTF-8 directory (resolved via
-    // platform/LogPaths.h); EnableFileLogging sweeps it for files older than
+    // platform/DataPaths.h); EnableFileLogging sweeps it for files older than
     // kDefaultRetentionDays on entry, then the log file is created lazily on the
     // first emitted line and rolls over at local midnight. Idempotent. Safe to
     // never call -- the default is in-memory + stderr only.
