@@ -14,6 +14,14 @@
   For STORE submission you do NOT sign here: upload the unsigned .msix and the Store
   re-signs it, and the manifest Identity/Publisher must be the Partner Center values.
 
+  The staged GUI exe carries uiAccess=true (build_windows.ps1 stamps the Release
+  clipp.exe in place): with the manifest's rescap:uiAccess capability, the popup's
+  synthetic Ctrl+V reaches elevated windows from the installed package (WindowsApps
+  satisfies the uiAccess secure-path policy; elsewhere the same signed exe just runs
+  without the privilege). The pairing is mandatory — a packaged uiAccess=true exe
+  without rescap:uiAccess fails activation — so the script asserts the stamp is
+  present before staging.
+
   Logo artifacts are left in the layout's Images folder (build\msix\layout-<arch>\Images)
   for visual inspection.
 
@@ -121,7 +129,7 @@ Write-Host "[*] makeappx: $makeappx"
 Write-Host "[*] makepri:  $makepri"
 
 # --- locate the built binaries -----------------------------------------------
-$guiExe = Join-Path $BuildDir 'clipp.exe'    # /SUBSYSTEM:WINDOWS (tray GUI)
+$guiExe = Join-Path $BuildDir 'clipp.exe'    # /SUBSYSTEM:WINDOWS (tray GUI, uiAccess-stamped)
 $conExe = Join-Path $BuildDir 'clipp.com'    # /SUBSYSTEM:CONSOLE (CLI twin)
 if (-not (Test-Path $guiExe)) {
     $triplet = if ($Arch -eq 'amd64') { 'x64-windows-static' } else { 'arm64-windows-static' }
@@ -165,6 +173,19 @@ New-Item -ItemType Directory -Force -Path $layoutImages | Out-Null
 
 # Binary rename: the GUI exe becomes clippmain.exe (Start tile), the console twin becomes
 # clipp.exe (CLI alias). See the manifest header for why two PEs are unavoidable.
+# The manifest declares rescap:uiAccess unconditionally, and that pairing is mandatory
+# (a packaged uiAccess=true exe without the capability — or vice versa — fails
+# activation), so assert the stamp is actually in the exe rather than discover it at
+# install time.
+$mtExe = Find-SdkTool 'mt.exe'
+New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+$manifestProbe = Join-Path $OutDir 'staged-manifest-probe.xml'
+& $mtExe -nologo "-inputresource:$guiExe;#1" "-out:$manifestProbe"
+if ($LASTEXITCODE -ne 0) { throw "mt.exe could not extract the embedded manifest from '$guiExe' ($LASTEXITCODE)." }
+if ((Get-Content -Raw $manifestProbe) -notmatch 'uiAccess=["'']true["'']') {
+    throw "clipp.exe at '$guiExe' is not uiAccess-stamped (the package declares rescap:uiAccess and would fail activation). Rebuild with the current scripts\build_windows.ps1, without -SkipUiAccessStamp."
+}
+Remove-Item $manifestProbe -Force
 Copy-Item $guiExe (Join-Path $layout 'clippmain.exe') -Force
 Copy-Item $conExe (Join-Path $layout 'clipp.exe') -Force
 
@@ -262,6 +283,13 @@ Write-Host "  Add-AppxPackage '$msix'"
 Write-Host ''
 Write-Host 'Then verify, inside the installed package:'
 Write-Host '  - Start tile + taskbar icon render (sized PNGs + resources.pri). Still blank => icon cache; clean reinstall.'
+Write-Host '  - popup paste reaches an ELEVATED window (admin terminal/Notepad): summon, Enter — the'
+Write-Host '    Ctrl+V must land (uiAccess-stamped exe + rescap:uiAccess). The same exe outside a'
+Write-Host '    secure path silently cannot.'
+Write-Host '  - UPGRADE over an existing install: verified flawless 2026-07-24, incl. over a'
+Write-Host '    pre-uiAccess package. Known rescap:uiAccess taxes: the install itself needs elevation,'
+Write-Host '    and App Installer''s post-install "Launch" button cannot start the app (its sandboxed'
+Write-Host '    activation cannot broker a uiAccess launch) — Start / hotkey / startupTask all work.'
 Write-Host '  - `clipp` in a terminal runs the CONSOLE twin (pipes/stdin/exit codes work), not the GUI'
 Write-Host '  - LAN discovery + pairing work (full-trust networking; expect a firewall prompt)'
 Write-Host '  - settings + network key persist in the package registry overlay (writes are copy-on-write; not shared with the non-MSIX build)'

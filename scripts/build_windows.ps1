@@ -17,7 +17,12 @@ param(
 
     [string]$Version = "",
 
-    [switch]$DisableCodeSigning
+    [switch]$DisableCodeSigning,
+
+    # Skip flipping uiAccess=true into the Release clipp.exe (see the stamp step
+    # below). Escape hatch for a deliberately uiAccess-free build (e.g. if a Store
+    # submission is ever refused the rescap:uiAccess capability).
+    [switch]$SkipUiAccessStamp
 )
 
 $ErrorActionPreference = "Stop"
@@ -269,6 +274,52 @@ Write-Host "Building clipp..."
 Invoke-NativeCommand -FilePath $cmakeExe -Arguments @("--build", $buildDir, "--config", $BuildType, "--parallel", "$Parallel")
 
 Write-Host "Built: $buildDir"
+
+# Stamp uiAccess=true into the Release GUI exe, in place and BEFORE signing:
+# the popup's synthetic Ctrl+V then reaches ELEVATED windows when the exe runs
+# signed from a secure path (in practice the MSIX under WindowsApps, or a
+# manual copy into Program Files). Everywhere else a SIGNED uiAccess exe
+# simply launches without the privilege (silent degrade — same binary ships in
+# the portable zip); an UNSIGNED one refuses to launch outright ("A referral
+# was returned from the server"), which is why this is Release-only and
+# skippable. The stamp EXTRACTS the linker-merged manifest, flips the one
+# attribute, and re-embeds. Never stamp a from-scratch manifest here: the
+# linker merges tray.cpp's /manifestdependency pragma (Common-Controls v6),
+# and dropping it once killed the exe at launch with "ordinal 380
+# [LoadIconMetric] could not be located in comctl32.dll".
+if ($BuildType -eq "Release" -and -not $SkipUiAccessStamp) {
+    $guiExe = Join-Path $buildDir "clipp.exe"
+    if (-not (Test-Path $guiExe)) {
+        throw "clipp.exe not found at '$guiExe'; cannot stamp uiAccess."
+    }
+    $mt = Get-Command mt.exe -ErrorAction SilentlyContinue
+    if (-not $mt) {
+        Import-VcVarsEnvironment -VcVarsAllPath $VcVarsAll -Arch $VcVarsArch
+        $mt = Get-Command mt.exe -ErrorAction SilentlyContinue
+    }
+    if (-not $mt) {
+        throw "mt.exe not found (ships with the VS C++ tools / Windows SDK); cannot stamp uiAccess."
+    }
+    $extracted = Join-Path $buildDir "clipp.exe.embedded.manifest"
+    Invoke-NativeCommand -FilePath $mt.Source -Arguments @(
+        "-nologo", "-inputresource:$guiExe;#1", "-out:$extracted")
+    $embedded = Get-Content -Raw $extracted
+    if ($embedded -match 'uiAccess=["'']true["'']') {
+        # Incremental build that didn't relink clipp.exe: last stamp still in.
+        Write-Host "clipp.exe already carries uiAccess=true; stamp skipped."
+    }
+    else {
+        $patched = $embedded -replace 'uiAccess=["'']false["'']', 'uiAccess="true"'
+        if ($patched -eq $embedded) {
+            throw "clipp.exe's embedded manifest has no uiAccess attribute to flip (linker trustInfo missing?)."
+        }
+        Set-Content -Path $extracted -Value $patched -Encoding UTF8
+        Invoke-NativeCommand -FilePath $mt.Source -Arguments @(
+            "-nologo", "-manifest", $extracted, "-outputresource:$guiExe;#1")
+        Write-Host "Stamped uiAccess=true into clipp.exe (unsigned it now refuses to launch — sign it)."
+    }
+    Remove-Item $extracted -Force
+}
 
 $signingVars = [ordered]@{
     "ARTIFACT_SIGNING_ENDPOINT"            = $env:ARTIFACT_SIGNING_ENDPOINT

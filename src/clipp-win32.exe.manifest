@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- Linker-merged into clipp.exe together with the linker's default trustInfo
+     (asInvoker / uiAccess=false) and tray.cpp's /manifestdependency pragma
+     (Common-Controls v6 — LoadIconMetric = comctl32 ordinal 380 lives there).
+     Release builds flip uiAccess to true IN PLACE (build_windows.ps1
+     extracts the merged manifest, flips the attribute, re-embeds). Never
+     stamp a from-scratch manifest: dropping the pragma's dependency fragment
+     kills the exe at launch with "ordinal 380 not found". -->
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
     <application>
