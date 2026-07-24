@@ -90,12 +90,13 @@ void PostRegistersChanged() {
     });
 }
 
-// Single change listener → UI refresh. i3 layers the persistence dirty-flag into
-// the same lambda (RegisterStore exposes exactly one listener slot).
+// UI-refresh listener. The store's listener list is append-only and every
+// listener fires: the persistence runtime arms its own dirty hook independently
+// (RegisterPersistenceRuntime.cpp), so the two never displace each other.
 void EnsureRegisterWatcher() {
     static std::once_flag once;
     std::call_once(once, [] {
-        g_registerStore.SetChangeListener([] { PostRegistersChanged(); });
+        g_registerStore.AddChangeListener([] { PostRegistersChanged(); });
     });
 }
 

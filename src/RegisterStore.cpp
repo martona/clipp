@@ -421,19 +421,21 @@ bool RegisterStore::ApplyRemoteLocked(RegisterRecord incoming) {
     return true;
 }
 
-void RegisterStore::SetChangeListener(std::function<void()> listener) {
+void RegisterStore::AddChangeListener(std::function<void()> listener) {
     std::lock_guard<std::mutex> lock(mutex_);
-    changeListener_ = std::move(listener);
+    changeListeners_.push_back(std::move(listener));
 }
 
 void RegisterStore::NotifyChanged() {
-    std::function<void()> listener;
+    std::vector<std::function<void()>> listeners;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        listener = changeListener_;
+        listeners = changeListeners_;
     }
-    if (listener) {
-        listener();
+    for (const auto& listener : listeners) {
+        if (listener) {
+            listener();
+        }
     }
 }
 

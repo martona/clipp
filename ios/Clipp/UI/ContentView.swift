@@ -88,9 +88,11 @@ struct ContentView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {
+                    // Registers on the LEFT, matching the desktop popup's column
+                    // order (registers column left of the clipboard stream).
                     Picker("View", selection: $selectedTab) {
-                        Text("Clipboard").tag(MainTab.clipboard)
                         Text("Registers").tag(MainTab.registers)
+                        Text("Clipboard").tag(MainTab.clipboard)
                     }
                     .pickerStyle(.segmented)
                     .frame(maxWidth: 240)
@@ -778,14 +780,18 @@ private struct ClipboardBubble: View {
 
                 Spacer(minLength: 12)
 
-                if item.direction == .incoming && !item.isPrivatePlaceholder {
+                // Copy is offered in BOTH directions: an older local item isn't
+                // the live clipboard anymore, and a PRIVATE local item has no
+                // other route back at all (its long-press is peek, and masked
+                // text can't be selection-copied). Placeholders carry no content.
+                if !item.isPrivatePlaceholder {
                     Button(action: onCopy) {
                         Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
                             .font(.caption.weight(.semibold))
                             .frame(width: 24, height: 24)
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(item.direction == .outgoing ? Color.white.opacity(0.62) : Color.secondary)
                     .accessibilityLabel(isCopied ? "Copied" : "Copy")
                 }
             }
@@ -1013,7 +1019,9 @@ private struct ClipboardInspectSheet: View {
                             .accessibilityLabel("Save to Register")
                         }
 
-                        if item.direction == .incoming {
+                        // Both directions, same rationale as the bubble row's
+                        // Copy button (private local items have no other route).
+                        if !item.isPrivatePlaceholder {
                             Button(action: onCopy) {
                                 Image(systemName: "doc.on.doc")
                             }

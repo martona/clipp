@@ -16,6 +16,7 @@
 #include "../../../src/PeerDisplay.h"
 #include "../../../src/PeerManager.h"
 #include "../../../src/RegisterConfig.h"
+#include "../../../src/RegisterPersistenceRuntime.h"
 #include "../../../src/RegisterStore.h"
 #include "../../../src/Settings.h"
 #include "../../../src/TerminalLogBuffer.h"
@@ -66,7 +67,9 @@ std::once_flag g_clipboardActivityWatcherOnce;
 std::once_flag g_networkPeerWatcherOnce;
 std::once_flag g_diagnosticLogReflectorOnce;
 std::once_flag g_foregroundObserverOnce;
+std::once_flag g_backgroundObserverOnce;
 id g_foregroundObserver = nil;
+id g_backgroundObserver = nil;
 std::size_t g_clipboardActivityWatcherID = 0;
 std::size_t g_networkPeerWatcherID = 0;
 ClipboardHashGuard g_clipboardHashGuard;
@@ -166,6 +169,12 @@ void EnsureForegroundObserver() {
                         return;
                     }
                     g_logger.log("iOS", Logger::Level::Info, "App entering foreground; restarting network runtime.");
+#if CLIPP_REGISTERS_DAEMON
+                    // The background handler stopped the persistence writer
+                    // (final flush); bring it back before the runtime so the
+                    // reload-merge precedes any fresh RSYN traffic.
+                    clipp::StartRegisterPersistence();
+#endif
                     if (g_networkRuntime.Restart()) {
                         g_logger.log("iOS", Logger::Level::Info, "Network runtime restarted after foreground.");
                     } else {
@@ -174,6 +183,28 @@ void EnsureForegroundObserver() {
                 });
             }];
     });
+}
+
+void EnsureBackgroundFlushObserver() {
+#if CLIPP_REGISTERS_DAEMON
+    // Flush pending register writes the moment we background: iOS may suspend
+    // the process seconds later and never deliver a termination signal, so the
+    // 1.5s debounce cannot be trusted to fire. StopRegisterPersistence joins
+    // the writer thread with a final flush (small sealed blob — comfortably
+    // inside the background grace window); the foreground observer starts it
+    // again. The store change listener stays armed across the cycle (armed
+    // once per process), so mutations while stopped still mark dirty for the
+    // next writer.
+    std::call_once(g_backgroundObserverOnce, [] {
+        g_backgroundObserver = [[NSNotificationCenter defaultCenter]
+            addObserverForName:UIApplicationDidEnterBackgroundNotification
+                        object:nil
+                         queue:nil
+                    usingBlock:^(NSNotification* _Nonnull) {
+                clipp::StopRegisterPersistence();
+            }];
+    });
+#endif
 }
 
 bool StartNetworkRuntimeIfNeeded(NSError** error) {
@@ -191,6 +222,10 @@ bool StartNetworkRuntimeIfNeeded(NSError** error) {
     LogNetworkStartupState();
 #if CLIPP_REGISTERS_DAEMON
     ConfigureRegisterStoreOnce();
+    // Load the sealed register snapshot BEFORE the runtime starts, so the first
+    // inbound RSYN merges against the on-disk state instead of re-pulling
+    // everything (same ordering as the desktop main.cpp).
+    clipp::StartRegisterPersistence();
 #endif
     if (!g_networkRuntime.Start()) {
         AssignError(error, kClippNetworkRuntimeErrorBase + 2, @"Unable to start network runtime.");
@@ -199,6 +234,7 @@ bool StartNetworkRuntimeIfNeeded(NSError** error) {
 
     g_runtimeBridgeStarted = true;
     EnsureForegroundObserver();
+    EnsureBackgroundFlushObserver();
     g_logger.log("iOS", Logger::Level::Info, "Network runtime start requested.");
     return true;
 }
@@ -209,6 +245,17 @@ bool RestartNetworkRuntime(NSError** error) {
     }
 
     std::lock_guard<std::mutex> lock(g_runtimeBridgeMutex);
+#if CLIPP_REGISTERS_DAEMON
+    // Every pairing mutation (derive/clear key, group-name change) funnels
+    // through here. Re-point persistence BEFORE the runtime restarts: flush the
+    // old group's file, swap to the new key/fingerprint file, merge its records
+    // — so the first RSYN of the new group runs against loaded state. Settings-
+    // only restarts (port change) hit this too; with an unchanged key the
+    // handler flushes and keeps the same file — cheap and harmless.
+    ConfigureRegisterStoreOnce();
+    clipp::StartRegisterPersistence();  // no-op if already running; covers pairing-before-start
+    clipp::RegisterPersistenceKeyChanged();
+#endif
     if (g_runtimeBridgeStarted) {
         if (!g_networkRuntime.Restart()) {
             AssignError(error, kClippSettingsErrorBase + 1, @"Unable to restart network runtime.");

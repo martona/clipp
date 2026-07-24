@@ -187,9 +187,11 @@ public:
     // deletes, remote merges, and Read's `touched` refresh. The "" mirror and
     // drop-on-access expiry pruning do NOT fire — the mirror is never
     // persisted/replicated, and expiry is a deterministic function every
-    // replica (and the persisted file) reaches on its own. One listener;
-    // persistence uses it as its dirty hook.
-    void SetChangeListener(std::function<void()> listener);
+    // replica (and the persisted file) reaches on its own. Listeners are
+    // append-only (no removal): every consumer is process-lifetime — the
+    // desktop arms one (the persistence dirty hook), iOS arms two
+    // (persistence + the bridge's UI-refresh notification).
+    void AddChangeListener(std::function<void()> listener);
     size_t LiveCount() const;                // live values (excludes tombstones, expired)
     size_t PhysicalCount() const;            // all resident records (drop-on-access test seam)
 
@@ -199,10 +201,10 @@ private:
     WriteResult UpsertLocked(const std::string& name, std::string value, uint8_t valueFlags, const HostId& origin);
     DeleteResult DeleteLocked(const std::string& name, const HostId& origin);
     bool ApplyRemoteLocked(RegisterRecord incoming);
-    void NotifyChanged();  // copies the listener under the lock, invokes outside
+    void NotifyChanged();  // copies the listener list under the lock, invokes outside
 
     mutable std::mutex mutex_;
-    std::function<void()> changeListener_;
+    std::vector<std::function<void()>> changeListeners_;
     HlcClock clock_;
     std::map<std::string, RegisterRecord> records_;
     HostId localHost_;

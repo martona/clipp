@@ -226,7 +226,7 @@ TEST_CASE("store change listener fires on replicated-state changes only") {
                         RegisterStore::kDefaultMaxValueBytes,
                         [] { return 1'700'000'002'000ull; });
     int fires = 0;
-    store.SetChangeListener([&fires] { ++fires; });
+    store.AddChangeListener([&fires] { ++fires; });
 
     CHECK(store.Upsert("a", "1") == RegisterStore::WriteResult::Ok);
     CHECK(fires == 1);
@@ -244,4 +244,12 @@ TEST_CASE("store change listener fires on replicated-state changes only") {
     CHECK(fires == 4);
     CHECK_FALSE(store.ApplyRemote(MakeRec("remote", "value", 0)));  // dominated: silent
     CHECK(fires == 4);
+
+    // Listeners are append-only and ALL fire — iOS arms two (persistence dirty
+    // hook + UI refresh), so a second registration must not displace the first.
+    int secondFires = 0;
+    store.AddChangeListener([&secondFires] { ++secondFires; });
+    CHECK(store.Upsert("b", "2") == RegisterStore::WriteResult::Ok);
+    CHECK(fires == 5);
+    CHECK(secondFires == 1);
 }

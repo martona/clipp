@@ -41,6 +41,10 @@ bool g_running = false;
 bool g_stop = false;
 bool g_dirty = false;
 bool g_haveKey = false;
+// The change listener is armed exactly once per process: listeners are append-
+// only on the store, and iOS cycles Stop/Start across background/foreground —
+// re-arming on every Start would stack duplicates.
+bool g_listenerArmed = false;
 std::string g_filePath;  // meaningful only while g_haveKey
 RegisterPersistence::SealKey g_sealKey{};
 
@@ -174,14 +178,18 @@ void StartRegisterPersistence() {
     // Startup is single-threaded until the network runtime starts, so nothing
     // can slip a mutation into the gap. The listener only flips a flag under
     // the runtime mutex, so it is safe from any store-mutating thread (peers,
-    // UI, CLI gateway) and stays harmlessly attached after shutdown.
-    g_registerStore.SetChangeListener([] {
-        {
-            std::lock_guard<std::mutex> lock(g_mutex);
-            g_dirty = true;
-        }
-        g_cv.notify_all();
-    });
+    // UI, CLI gateway) and stays harmlessly attached after shutdown (a dirty
+    // mark with no writer running is picked up by the next Start).
+    if (!g_listenerArmed) {
+        g_listenerArmed = true;
+        g_registerStore.AddChangeListener([] {
+            {
+                std::lock_guard<std::mutex> lock(g_mutex);
+                g_dirty = true;
+            }
+            g_cv.notify_all();
+        });
+    }
 
     g_running = true;
     g_stop = false;
