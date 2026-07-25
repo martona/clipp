@@ -1821,16 +1821,7 @@ private:
                 borders[i].BorderBrush(selected ? SelectionRingBrush()
                                                 : ArgbBrush(0, 0, 0, 0));
                 if (selected) {
-                    // Deferred a dispatcher hop: on a rebuild (rename/save) the
-                    // fresh row has no realized geometry yet, and an immediate
-                    // BringIntoView silently no-ops — the renamed row could
-                    // re-sort out of view and stay there.
-                    if (dispatcher_) {
-                        Border target = borders[i];
-                        dispatcher_.TryEnqueue([target]() { target.StartBringIntoView(); });
-                    } else {
-                        borders[i].StartBringIntoView();
-                    }
+                    RevealRow(group, borders[i]);
                 }
             }
         };
@@ -1838,6 +1829,44 @@ private:
         paint(rowBorders_, PopupModel::Group::History);
         UpdateToolbar();
         SchedulePreviewFlyoutUpdate();
+    }
+
+    // Scroll `row` into view inside its column. Replaces StartBringIntoView,
+    // which silently no-ops on a freshly rebuilt row (no realized geometry) —
+    // deferring a dispatcher hop was NOT enough, because a hop is not reliably
+    // after XAML's arrange pass. User repro that survived the hop fix: save an
+    // image register, name it "zzzitem" so it sorts last, and the new row stays
+    // off-view. So: force the arrange, then scroll deterministically by offset
+    // — and only when the row isn't already fully visible (the mac popup's
+    // proven "don't touch a row that's already contained" discipline).
+    void RevealRow(PopupModel::Group group, Border const& row) {
+        ScrollViewer scroll = group == PopupModel::Group::Registers ? registerScroll_ : listScroll_;
+        if (!scroll || !row) {
+            return;
+        }
+        scroll.UpdateLayout();  // the FLIP/RowAnchorScreenY lesson: never trust fresh geometry
+        try {
+            const auto content = scroll.Content().try_as<UIElement>();
+            if (!content) {
+                row.StartBringIntoView();
+                return;
+            }
+            const auto top = row.TransformToVisual(content)
+                .TransformPoint(winrt::Windows::Foundation::Point{ 0, 0 }).Y;
+            const double rowHeight = row.ActualHeight();
+            const double viewTop = scroll.VerticalOffset();
+            const double viewHeight = scroll.ViewportHeight();
+            if (viewHeight <= 0.0) {
+                return;  // not laid out yet; the next render reveals it
+            }
+            if (top < viewTop) {
+                scroll.ChangeView(nullptr, static_cast<double>(top), nullptr, true);
+            } else if (top + rowHeight > viewTop + viewHeight) {
+                scroll.ChangeView(nullptr, top + rowHeight - viewHeight, nullptr, true);
+            }
+        } catch (const winrt::hresult_error&) {
+            row.StartBringIntoView();  // last resort; better than nothing
+        }
     }
 
     // The flyout anchors to the selected row's on-screen position, which for
@@ -1943,7 +1972,19 @@ private:
                             .TransformPoint(winrt::Windows::Foundation::Point{ 0, 0 });
                     }
                     if (point.Y >= 1.0f) {
-                        return popupRect.top + DipsToPixels(point.Y, GetDpiForWindow(hwnd_));
+                        const UINT dpi = GetDpiForWindow(hwnd_);
+                        const int anchor = popupRect.top + DipsToPixels(point.Y, dpi);
+                        // Clamp into the popup's own vertical span (the mac
+                        // panel already did this): a row scrolled out of its
+                        // column still transforms to a real — but off-panel —
+                        // Y, and the flyout would fly off to a coordinate no
+                        // row occupies. There IS no right Y for an unseen row,
+                        // so pin it to the nearest edge of the surface it
+                        // belongs to.
+                        const int lo = static_cast<int>(popupRect.top);
+                        const int hi = (std::max)(lo,
+                            static_cast<int>(popupRect.bottom) - DipsToPixels(48, dpi));
+                        return (std::min)((std::max)(anchor, lo), hi);
                     }
                 } catch (const winrt::hresult_error&) {
                 }
