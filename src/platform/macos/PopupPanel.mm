@@ -140,6 +140,77 @@ bool TextFitsInRowNS(NSString* full) {
         && core.length <= popupfind::kRowFitChars;
 }
 
+// ---- palette ---------------------------------------------------------------
+// Mirrors the win32 popup's warm-up, in the mac idiom: the popup lives in
+// ClippPage's visual family (blue washes on outgoing bubbles, amber private
+// badges, the amber find highlighter) instead of reading as flat gray chrome.
+// Every color is a DYNAMIC NSColor, so light/dark resolves per-appearance at
+// draw time — no rebuild, no cached-theme trap (the win32 side needed an
+// explicit rebuild-on-flip; AppKit gives it to us).
+NSColor* DynamicPopupColor(NSColor* dark, NSColor* light) {
+    return [NSColor colorWithName:nil dynamicProvider:^NSColor*(NSAppearance* appearance) {
+        NSAppearanceName matched = [appearance bestMatchFromAppearancesWithNames:@[
+            NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
+            NSAppearanceNameAccessibilityHighContrastAqua,
+            NSAppearanceNameAccessibilityHighContrastDarkAqua,
+        ]];
+        const BOOL isDark = [matched isEqualToString:NSAppearanceNameDarkAqua]
+            || [matched isEqualToString:NSAppearanceNameAccessibilityHighContrastDarkAqua];
+        return isDark ? dark : light;
+    }];
+}
+
+// Warm tint laid over the popover material — the "comfy" layer. Deliberately
+// faint: the vibrancy still does the work, this only pulls it off neutral.
+NSColor* PopupWarmTintColor() {
+    return DynamicPopupColor(
+        [NSColor colorWithCalibratedRed:0.42 green:0.30 blue:0.14 alpha:0.13],
+        [NSColor colorWithCalibratedRed:0.85 green:0.72 blue:0.48 alpha:0.11]);
+}
+
+// Selected-row wash + ring, from the page's outgoing-bubble blue.
+NSColor* PopupSelectionFillColor() {
+    return DynamicPopupColor(
+        [NSColor colorWithCalibratedRed:0.16 green:0.52 blue:0.86 alpha:0.30],
+        [NSColor colorWithCalibratedRed:0.00 green:0.45 blue:0.75 alpha:0.20]);
+}
+
+NSColor* PopupSelectionRingColor() {
+    return DynamicPopupColor(
+        [NSColor colorWithCalibratedRed:0.40 green:0.68 blue:0.98 alpha:0.62],
+        [NSColor colorWithCalibratedRed:0.00 green:0.45 blue:0.75 alpha:0.55]);
+}
+
+// Register names: the app's amber, so the "saved things" column reads as its
+// own warm world against the cool selection accent.
+NSColor* PopupRegisterNameColor() {
+    return DynamicPopupColor(
+        [NSColor colorWithCalibratedRed:0.94 green:0.74 blue:0.44 alpha:1.0],
+        [NSColor colorWithCalibratedRed:0.60 green:0.38 blue:0.05 alpha:1.0]);
+}
+
+// The "· private" meta line, matching the page's badge amber.
+NSColor* PopupPrivateMetaColor() {
+    return DynamicPopupColor(
+        [NSColor colorWithCalibratedRed:0.86 green:0.64 blue:0.36 alpha:1.0],
+        [NSColor colorWithCalibratedRed:0.64 green:0.42 blue:0.08 alpha:1.0]);
+}
+
+// Flatten a dynamic color against a specific appearance. Needed wherever a
+// resolved value is stored rather than drawn — CALayer takes a CGColor, which
+// is a snapshot, not a dynamic color.
+NSColor* ResolveColorForAppearance(NSColor* color, NSAppearance* appearance) {
+    if (appearance == nil) {
+        return color;
+    }
+    __block NSColor* resolved = color;
+    [appearance performAsCurrentDrawingAppearance:^{
+        // Round-trips through a device colorspace so .CGColor is concrete.
+        resolved = [color colorUsingColorSpace:NSColorSpace.sRGBColorSpace] ?: color;
+    }];
+    return resolved;
+}
+
 // Amber find-highlight with forced dark text, same as the win32 popup.
 NSAttributedString* HighlightedString(NSString* text, NSString* filter,
                                       NSFont* font, NSColor* color) {
@@ -237,6 +308,13 @@ struct RegisterRowInfo {
 @property(nonatomic, weak) ClippPopupController* controller;
 @property(nonatomic, assign) NSInteger group;  // 0 = Registers, 1 = History
 @property(nonatomic, assign) NSInteger index;  // VISIBLE index within the group
+@end
+
+// Flat color wash (the popup's warm tint). Redraws itself on appearance
+// changes — a CALayer backgroundColor is a resolved CGColor and would NOT
+// follow a light/dark flip on its own — and never intercepts a click.
+@interface ClippPopupTintView : NSView
+@property(nonatomic, strong) NSColor* tintColor;
 @end
 
 // NSSearchFieldDelegate extends NSTextFieldDelegate, so one conformance
@@ -340,6 +418,28 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
 
 @end
 
+@implementation ClippPopupTintView
+
+- (void)drawRect:(NSRect)dirtyRect {
+    // drawRect (not layer.backgroundColor): the dynamic NSColor resolves
+    // against the CURRENT appearance on every draw, so a light/dark flip is
+    // free — no invalidation bookkeeping.
+    [self.tintColor set];
+    NSRectFillUsingOperation(dirtyRect, NSCompositingOperationSourceOver);
+}
+
+- (NSView*)hitTest:(NSPoint)point {
+    (void)point;
+    return nil;  // decoration only — clicks fall through to the panel
+}
+
+- (void)viewDidChangeEffectiveAppearance {
+    [super viewDidChangeEffectiveAppearance];
+    self.needsDisplay = YES;
+}
+
+@end
+
 // Flipped document view so rows stack from the top (same trick as ClippPage).
 @interface ClippPopupFlippedView : NSView
 @end
@@ -396,6 +496,22 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
     root.layer.cornerRadius = 12.0;
     root.layer.masksToBounds = YES;
     panel.contentView = root;
+
+    // Warm wash over the popover material: keeps AppKit's vibrancy (the mac
+    // idiom, and it earns its keep over wallpaper) while pulling the surface
+    // off neutral gray into ClippPage's comfortable world. Bottom-most subview
+    // and non-interactive — every control sits above it.
+    ClippPopupTintView* tint = [[ClippPopupTintView alloc] initWithFrame:NSZeroRect];
+    tint.translatesAutoresizingMaskIntoConstraints = NO;
+    tint.wantsLayer = YES;
+    tint.tintColor = PopupWarmTintColor();
+    [root addSubview:tint positioned:NSWindowBelow relativeTo:nil];
+    [NSLayoutConstraint activateConstraints:@[
+        [tint.leadingAnchor constraintEqualToAnchor:root.leadingAnchor],
+        [tint.trailingAnchor constraintEqualToAnchor:root.trailingAnchor],
+        [tint.topAnchor constraintEqualToAnchor:root.topAnchor],
+        [tint.bottomAnchor constraintEqualToAnchor:root.bottomAnchor],
+    ]];
 
     // Identity line: a surprise borderless panel on a stray keystroke should
     // say what it is.
@@ -521,10 +637,17 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
 }
 
 - (NSTextField*)makeColumnLabel:(NSString*)text {
-    NSTextField* label = [NSTextField labelWithString:text];
+    // Small-caps treatment (uppercase + tracking), matching win32: reads as a
+    // designed caption instead of a shrunken heading.
+    NSMutableAttributedString* caption = [[NSMutableAttributedString alloc]
+        initWithString:(text != nil ? text.localizedUppercaseString : @"")
+            attributes:@{
+                NSFontAttributeName: [NSFont systemFontOfSize:11.0 weight:NSFontWeightSemibold],
+                NSForegroundColorAttributeName: [NSColor secondaryLabelColor],
+                NSKernAttributeName: @0.8,
+            }];
+    NSTextField* label = [NSTextField labelWithAttributedString:caption];
     label.translatesAutoresizingMaskIntoConstraints = NO;
-    label.font = [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold];
-    label.textColor = [NSColor secondaryLabelColor];
     return label;
 }
 
@@ -1257,10 +1380,12 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
         self.renameField = editor;
         [lines addObject:editor];
     } else {
+        // The saved-things column wears the app's amber; the find highlighter
+        // (forced black on amber) still wins on matches.
         NSTextField* name = [self makeRowLine:
             HighlightedString(nameText, filter,
                               [NSFont systemFontOfSize:13.0 weight:NSFontWeightSemibold],
-                              [NSColor labelColor])];
+                              PopupRegisterNameColor())];
         [lines addObject:name];
     }
 
@@ -1282,12 +1407,15 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
 
     if (cached != registerCache_.end()) {
         NSString* metaText = RelativeAgeNS(cached->second.touchedWallMs);
+        // Private rows' meta line takes the page's badge amber.
+        NSColor* metaColor = [NSColor secondaryLabelColor];
         if (cached->second.isPrivate) {
             metaText = [metaText stringByAppendingFormat:@" · %@", CLP_NS(CLP_UI_PRIVATE_BADGE)];
+            metaColor = PopupPrivateMetaColor();
         }
         NSTextField* meta = [self makeRowLine:
             HighlightedString(metaText, @"",
-                              [NSFont systemFontOfSize:11.0], [NSColor secondaryLabelColor])];
+                              [NSFont systemFontOfSize:11.0], metaColor)];
         [lines addObject:meta];
     }
 
@@ -1352,14 +1480,26 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
 
 - (void)renderHighlight {
     const auto selection = model_.Selected();
-    NSColor* selectedColor = [[NSColor grayColor] colorWithAlphaComponent:0.22];
+    // Accent wash + crisp ring (was a flat gray wash — the "dour" read). The
+    // ring earns its keep over image rows, where a fill alone goes mushy.
+    // Resolved against the panel's appearance because a CGColor is a resolved
+    // value; renderHighlight re-runs on every render, and the panel is a
+    // summon-transient surface, so this stays current in practice.
+    NSAppearance* appearance = self.panel.effectiveAppearance ?: NSAppearance.currentDrawingAppearance;
+    NSColor* const fillColor = ResolveColorForAppearance(PopupSelectionFillColor(), appearance);
+    NSColor* const ringColor = ResolveColorForAppearance(PopupSelectionRingColor(), appearance);
+    CGColorRef const fill = fillColor.CGColor;
+    CGColorRef const ring = ringColor.CGColor;
     const auto paint = [&](NSArray<ClippPopupRowView*>* rows, PopupModel::Group group) {
         for (ClippPopupRowView* row in rows) {
             const bool selected = selection.has_value()
                 && selection->group == group
                 && selection->index == static_cast<std::size_t>(row.index);
-            row.layer.backgroundColor = selected
-                ? selectedColor.CGColor : [NSColor clearColor].CGColor;
+            row.layer.backgroundColor = selected ? fill : [NSColor clearColor].CGColor;
+            // Border width is CONSTANT (the layer insets nothing), so the ring
+            // appearing never nudges the row's content by a pixel.
+            row.layer.borderWidth = 1.0;
+            row.layer.borderColor = selected ? ring : [NSColor clearColor].CGColor;
             if (selected) {
                 [row scrollRectToVisible:row.bounds];
             }
