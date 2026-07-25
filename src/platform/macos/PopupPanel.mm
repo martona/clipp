@@ -2217,17 +2217,34 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
 }
 
 static void PopupActivityWatcher(const ClipboardActivityUpdate& update, void* userData) {
-    (void)update;
     ClippPopupController* controller = (__bridge ClippPopupController*)userData;
     if (controller == nil) {
         return;
     }
     // Coarse but correct: any store change re-snapshots while visible —
     // except mid-rename, where a re-render would eat the user's typing.
+    const auto type = update.type;
+    const uint64_t itemID = update.itemID;
     dispatch_async(dispatch_get_main_queue(), ^{
         if (controller.panel.visible && !controller->editingRegister_.has_value()) {
             [controller rebuildFromStores];
             [controller updateColumnLayoutAndFrame:YES];
+            // Pragmatic rule (user-ratified, same as win32): a new or relocated
+            // item IS the new current clipboard — select it, and renderList's
+            // ensure-visible pass scrolls its column to it (it sits at the
+            // top). Only in an unfiltered browse: mid-search the item may not
+            // even be visible, and yanking the selection would fight the user.
+            if ((type == ClipboardActivityUpdate::Type::Added
+                 || type == ClipboardActivityUpdate::Type::Moved)
+                && controller->model_.Filter().empty()) {
+                const auto& history = controller->model_.VisibleHistory();
+                for (std::size_t i = 0; i < history.size(); ++i) {
+                    if (history[i]->historyId == itemID) {
+                        controller->model_.SelectAt(PopupModel::Group::History, i);
+                        break;
+                    }
+                }
+            }
             [controller renderList];
         }
     });

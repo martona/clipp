@@ -81,6 +81,21 @@ ClipboardPayload ReadClipboardData(PlatformWindowHandle hwnd) {
     @autoreleasepool {
         NSPasteboard* pb = [NSPasteboard generalPasteboard];
 
+        // Universal Clipboard: when a nearby iOS/macOS device on the same Apple
+        // ID writes ITS pasteboard, Apple republishes it here and bumps our
+        // changeCount — content this Mac never copied. Ingesting it would stamp
+        // THIS Mac as the event's origin and broadcast it to the mesh: an iOS
+        // Clipp "Copy" (which writes the phone's pasteboard) would boomerang
+        // back as a Mac-originated duplicate. The pasteboard carries a marker
+        // type for exactly this case — bail BEFORE reading content, which also
+        // avoids triggering the lazy cross-device transfer. (Clipp's own mesh
+        // delivery is unaffected: peers set the pasteboard locally, no marker.)
+        if ([[pb types] containsObject:@"com.apple.is-remote-clipboard"]) {
+            g_logger.log(__FUNCTION__, Logger::Level::Debug,
+                         "Ignoring Universal Clipboard content from another device (com.apple.is-remote-clipboard present).");
+            return payload;
+        }
+
         sourceMarkedPrivate = [[pb types] containsObject:kNspasteboardConcealedType];
         if (sourceMarkedPrivate) {
             g_logger.log(__FUNCTION__, Logger::Level::Debug, "Source app marked clipboard content as private (org.nspasteboard.ConcealedType present).");

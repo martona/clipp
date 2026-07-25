@@ -32,33 +32,45 @@ struct ContentView: View {
         NavigationStack {
             ZStack(alignment: .bottom) {
                 if selectedTab == .clipboard {
-                    ScrollView {
-                        LazyVStack(spacing: 18) {
-                            if !clipboardStream.items.isEmpty {
-                                Text(clipboardStream.items.first?.dayTitle ?? "Recent")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.secondary)
-                                    .padding(.top, 10)
+                    ScrollViewReader { scrollProxy in
+                        ScrollView {
+                            LazyVStack(spacing: 18) {
+                                if !clipboardStream.items.isEmpty {
+                                    Text(clipboardStream.items.first?.dayTitle ?? "Recent")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                        .padding(.top, 10)
 
-                                ForEach(clipboardStream.items) { item in
-                                    ClipboardGroupView(
-                                        item: item,
-                                        isCopied: clipboardStream.copiedItemID == item.id,
-                                        onInspect: {
-                                            inspectedItem = item
-                                        },
-                                        onCopy: {
-                                            clipboardStream.copy(item)
-                                        }
-                                    )
+                                    ForEach(clipboardStream.items) { item in
+                                        ClipboardGroupView(
+                                            item: item,
+                                            isCopied: clipboardStream.copiedItemID == item.id,
+                                            onInspect: {
+                                                inspectedItem = item
+                                            },
+                                            onCopy: {
+                                                clipboardStream.copy(item)
+                                            }
+                                        )
+                                    }
+                                } else {
+                                    EmptyClipboardActivityView()
+                                        .padding(.top, 64)
                                 }
-                            } else {
-                                EmptyClipboardActivityView()
-                                    .padding(.top, 64)
                             }
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 96)
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 96)
+                        // Copy re-shares relocate the item to the top; follow it
+                        // with a quick animated scroll instead of letting it
+                        // vanish from under the user's finger.
+                        .onChange(of: clipboardStream.revealItemID) { target in
+                            guard let target else { return }
+                            withAnimation(.easeOut(duration: 0.3)) {
+                                scrollProxy.scrollTo(target, anchor: .top)
+                            }
+                            clipboardStream.revealItemID = nil
+                        }
                     }
 
                     Button {
@@ -301,6 +313,10 @@ private enum OutgoingSendState: Sendable {
 private final class ClipboardStreamViewModel: ObservableObject {
     @Published var items: [ClipboardStreamItem] = []
     @Published var copiedItemID: String?
+    // Set after a Copy re-share relocates the item to the top: the view scrolls
+    // to it with a quick animation instead of letting it vanish from under the
+    // user's finger. Cleared by the scroll handler.
+    @Published var revealItemID: String?
     @Published var copyErrorMessage: String?
     @Published var sendState: OutgoingSendState = .idle
     @Published var sendErrorMessage: String?
@@ -343,6 +359,12 @@ private final class ClipboardStreamViewModel: ObservableObject {
         do {
             try ClipboardActivityBridge.copy(sourceItem)
             copiedItemID = item.id
+            // The re-share relocated the item in the store synchronously —
+            // refresh now so the reorder and the follow-scroll happen in the
+            // same render pass (the notification-driven refresh that follows
+            // is a no-op).
+            refreshActivity()
+            revealItemID = item.id
 
             Task {
                 try? await Task.sleep(nanoseconds: 1_400_000_000)

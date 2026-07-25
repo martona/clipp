@@ -2208,7 +2208,7 @@ private:
         watcherID_ = 0;
     }
 
-    static void ActivityWatcher(const ClipboardActivityUpdate&, void* userData) {
+    static void ActivityWatcher(const ClipboardActivityUpdate& update, void* userData) {
         auto* self = static_cast<PopupWindow*>(userData);
         if (self == nullptr || !self->dispatcher_) {
             return;
@@ -2216,11 +2216,30 @@ private:
         // Coarse but correct: any store change re-snapshots while visible.
         // Except mid-rename — a re-render would rebuild the editor row and
         // eat the user's typing; the commit/cancel path refreshes instead.
-        self->dispatcher_.TryEnqueue([self]() {
+        const auto type = update.type;
+        const uint64_t itemID = update.itemID;
+        self->dispatcher_.TryEnqueue([self, type, itemID]() {
             if (self->hwnd_ != nullptr && IsWindowVisible(self->hwnd_)
                 && !self->editingRegister_.has_value()) {
                 self->RebuildFromStores();
                 self->UpdateColumnLayout();
+                // Pragmatic rule (user-ratified, same as ClippPage): a new or
+                // relocated item IS the new current clipboard — select it, and
+                // RenderList's highlight pass brings it into view (it sits at
+                // the top). Only in an unfiltered browse: mid-search the item
+                // may not even be visible, and yanking the selection would
+                // fight what the user is doing.
+                if ((type == ClipboardActivityUpdate::Type::Added
+                     || type == ClipboardActivityUpdate::Type::Moved)
+                    && self->model_.Filter().empty()) {
+                    const auto& history = self->model_.VisibleHistory();
+                    for (std::size_t i = 0; i < history.size(); ++i) {
+                        if (history[i]->historyId == itemID) {
+                            self->model_.SelectAt(PopupModel::Group::History, i);
+                            break;
+                        }
+                    }
+                }
                 self->RenderList();
             }
         });

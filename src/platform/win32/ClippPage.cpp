@@ -53,7 +53,6 @@ extern KeyManager g_keyManager;
 
 namespace {
 namespace Automation = winrt::Windows::UI::Xaml::Automation;
-constexpr double kActivityFollowTopTolerance = 48.0;
 constexpr double kActivityBubbleMaxWidth = 460.0;
 
 winrt::Windows::UI::Xaml::Media::SolidColorBrush MakeBrush(uint8_t alpha, uint8_t red, uint8_t green, uint8_t blue) {
@@ -759,7 +758,6 @@ void ClippPage::AddActivityItem(uint64_t itemID) {
         return;
     }
 
-    const bool shouldFollow = IsActivityNearTop();
     auto row = BuildActivityRow(itemID);
     if (!row) {
         return;
@@ -772,9 +770,15 @@ void ClippPage::AddActivityItem(uint64_t itemID) {
     AnimateRowsFromPositions(oldPositions);  // existing rows glide down
     AnimateRowEntrance(row);
 
-    if (shouldFollow) {
-        ScrollActivityToTop();
+    // Pragmatic rule (user-ratified): a new clipboard event IS the new current
+    // item — regardless of where the user had scrolled or what was focused,
+    // make it the selection and snap the view to the top. Anything cleverer
+    // (scroll preservation, offset compensation) just shuffles the contents
+    // underfoot and leaves the selection pointing one row off.
+    if (const auto control = row.Children().GetAt(0).try_as<winrt::Windows::UI::Xaml::Controls::Control>()) {
+        control.Focus(winrt::Windows::UI::Xaml::FocusState::Programmatic);
     }
+    ScrollActivityToTop();
 }
 
 void ClippPage::RemoveActivityItem(uint64_t itemID) {
@@ -833,7 +837,6 @@ void ClippPage::MoveActivityItem(uint64_t itemID) {
         activityItemIDs_.erase(found);
     }
 
-    const bool shouldFollow = IsActivityNearTop();
     auto row = BuildActivityRow(itemID);
     if (!row) {
         SetActivityEmptyMessageVisible(activityItemIDs_.empty());
@@ -858,18 +861,14 @@ void ClippPage::MoveActivityItem(uint64_t itemID) {
     AnimateRowsFromPositions(oldPositions);  // displaced rows glide; the mover
     AnimateRowEntrance(row);                 // fades in at its destination
 
-    // Removing the (typically just-clicked, focused) old row drops XAML focus
-    // to null, which kills mouse-wheel routing in the island until something
-    // takes focus again. Re-anchor on the row's replacement.
-    if (winrt::Windows::UI::Xaml::Input::FocusManager::GetFocusedElement() == nullptr) {
-        if (const auto control = row.Children().GetAt(0).try_as<winrt::Windows::UI::Xaml::Controls::Control>()) {
-            control.Focus(winrt::Windows::UI::Xaml::FocusState::Programmatic);
-        }
+    // Same pragmatic rule as AddActivityItem: the moved item is the new current
+    // clipboard — make it the selection and snap to the top. Unconditional focus
+    // also subsumes the old null-focus re-anchor (removing a focused row dropped
+    // island focus and killed wheel routing until something took it back).
+    if (const auto control = row.Children().GetAt(0).try_as<winrt::Windows::UI::Xaml::Controls::Control>()) {
+        control.Focus(winrt::Windows::UI::Xaml::FocusState::Programmatic);
     }
-
-    if (shouldFollow) {
-        ScrollActivityToTop();
-    }
+    ScrollActivityToTop();
 }
 
 void ClippPage::ClearActivityItems() {
@@ -906,14 +905,6 @@ void ClippPage::UpdateActivityEmptyState() {
     activityEmptyNetworkButton_.Visibility(haveNetworkKey
         ? winrt::Windows::UI::Xaml::Visibility::Collapsed
         : winrt::Windows::UI::Xaml::Visibility::Visible);
-}
-
-bool ClippPage::IsActivityNearTop() const {
-    if (!activityScroll_) {
-        return true;
-    }
-
-    return activityScroll_.VerticalOffset() <= kActivityFollowTopTolerance;
 }
 
 void ClippPage::ScrollActivityToTop() const {

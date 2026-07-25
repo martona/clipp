@@ -137,6 +137,16 @@ void DisarmUndo() {
 
 }  // namespace
 
+// Called from the clipboard bridge when a clipboard-side mutation (a re-share)
+// lands: the desktop honesty rule — ANY successful user-initiated mutation
+// disarms the one-deep undo slot, or a lit Undo would advertise more than it
+// does. Posts the change notification so the Registers tab's undo bar drops
+// immediately (a clipboard event fires no register notification on its own).
+void CLPIOSDisarmRegisterUndo() {
+    DisarmUndo();
+    PostRegistersChanged();
+}
+
 @interface CLPRegisterItem ()
 - (instancetype)initInternalWithName:(NSString*)name
                          previewText:(NSString*)previewText

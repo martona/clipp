@@ -397,7 +397,6 @@ static __weak MacOSActivityRowView* g_hoveredActivityRow = nil;
 
 namespace {
 constexpr CGFloat kPageInset = 28.0;
-constexpr CGFloat kActivityFollowTopTolerance = 48.0;
 constexpr CGFloat kActivityBubbleMaxWidth = 460.0;
 constexpr size_t kActivityThumbnailMaxPixelSize = 768;
 
@@ -1007,7 +1006,6 @@ void MacOSClippPage::AddActivityItem(uint64_t itemID) {
         return;
     }
 
-    const bool shouldFollow = IsActivityNearTop();
     const auto oldPositions = CaptureRowPositions(activityItemsPanel_, activityItemIDs_);
     NSView* row = BuildActivityRow(itemID);
     if (row == nil) {
@@ -1031,9 +1029,10 @@ void MacOSClippPage::AddActivityItem(uint64_t itemID) {
     AnimateRowsFromPositions(activityItemsPanel_, activityItemIDs_, oldPositions);
     AnimateRowEntrance(row);
 
-    if (shouldFollow) {
-        ScrollActivityToTop();
-    }
+    // Pragmatic rule (user-ratified, same as win32): a new clipboard event IS
+    // the new current item — snap to the top no matter where the user had
+    // scrolled, instead of letting the contents shuffle underfoot.
+    ScrollActivityToTop();
 }
 
 void MacOSClippPage::RemoveActivityItem(uint64_t itemID) {
@@ -1096,7 +1095,6 @@ void MacOSClippPage::MoveActivityItem(uint64_t itemID) {
         activityItemIDs_.erase(found);
     }
 
-    const bool shouldFollow = IsActivityNearTop();
     NSView* row = BuildActivityRow(itemID);  // appends the fresh action target
     if (row == nil) {
         SetActivityEmptyMessageVisible(activityItemIDs_.empty());
@@ -1129,9 +1127,9 @@ void MacOSClippPage::MoveActivityItem(uint64_t itemID) {
     AnimateRowsFromPositions(activityItemsPanel_, activityItemIDs_, oldPositions);
     AnimateRowEntrance(row);
 
-    if (shouldFollow) {
-        ScrollActivityToTop();
-    }
+    // Same pragmatic rule as AddActivityItem: the moved item is the new current
+    // clipboard — snap to the top.
+    ScrollActivityToTop();
 }
 
 void MacOSClippPage::ClearActivityItems() {
@@ -1168,23 +1166,6 @@ void MacOSClippPage::UpdateActivityEmptyState() {
         ? CLP_NS(CLP_UI_CLIPBOARD_EMPTY)
         : CLP_NS(CLP_UI_NO_NETWORK_KEY_CONFIGURED));
     activityEmptyNetworkButton_.hidden = haveNetworkKey;
-}
-
-bool MacOSClippPage::IsActivityNearTop() const {
-    if (activityScroll_ == nil || activityScroll_.documentView == nil) {
-        return true;
-    }
-
-    [activityScroll_ layoutSubtreeIfNeeded];
-    [activityScroll_.documentView layoutSubtreeIfNeeded];
-
-    const NSRect visibleRect = activityScroll_.contentView.documentVisibleRect;
-    const CGFloat documentHeight = activityScroll_.documentView.bounds.size.height;
-    if (documentHeight <= visibleRect.size.height) {
-        return true;
-    }
-
-    return visibleRect.origin.y <= kActivityFollowTopTolerance;
 }
 
 void MacOSClippPage::ScrollActivityToTop() const {

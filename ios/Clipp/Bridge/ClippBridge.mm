@@ -49,6 +49,10 @@ extern NetworkRuntime g_networkRuntime;
 extern RegisterStore g_registerStore;
 #endif
 
+// Defined in ClippRegisterBridge.mm: drops the one-deep register undo slot (and
+// refreshes the Registers tab) when a clipboard-side mutation lands.
+void CLPIOSDisarmRegisterUndo();
+
 namespace {
 constexpr NSInteger kClippNetworkKeyErrorBase = 4100;
 constexpr NSInteger kClippNetworkRuntimeErrorBase = 4200;
@@ -673,21 +677,21 @@ uint64_t CLPIOSPublishAndBroadcast(std::shared_ptr<const ClipboardPayload> paylo
         return 0;
     }
     @autoreleasepool {
-        const bool sourceMarkedPrivate =
-            (payload->meta.flags & NetworkDefs::CLPM_FLAG_SOURCE_MARKED_PRIVATE) != 0;
-        NSDictionary* pasteboardOptions = sourceMarkedPrivate
-            ? @{ UIPasteboardOptionLocalOnly: @YES }
-            : @{};
+        // EVERY Clipp-originated pasteboard write is localOnly — the mirror of
+        // the mac write path's NSPasteboardContentsCurrentHostOnly. Clipp is the
+        // sync fabric for this content; letting Universal Clipboard re-publish
+        // the phone's pasteboard invites the boomerang the mesh just fixed (a
+        // nearby Mac ingesting the UC copy as ITS OWN fresh clipboard event and
+        // rebroadcasting it with itself as origin). localOnly kills that at the
+        // source, independent of the Mac-side UC-marker skip. Organic copies
+        // made in other apps are untouched — only Clipp's writes are scoped.
+        NSDictionary* pasteboardOptions = @{ UIPasteboardOptionLocalOnly: @YES };
 
         if (payload->meta.formatId == CLIPP_FORMAT_UTF8) {
             NSString* text = ClipboardTextFromPayload(*payload);
             if (text.length > 0) {
-                if (sourceMarkedPrivate) {
-                    [UIPasteboard.generalPasteboard setItems:@[ @{ @"public.utf8-plain-text": text } ]
-                                                     options:pasteboardOptions];
-                } else {
-                    UIPasteboard.generalPasteboard.string = text;
-                }
+                [UIPasteboard.generalPasteboard setItems:@[ @{ @"public.utf8-plain-text": text } ]
+                                                 options:pasteboardOptions];
             }
         } else if (IsClippImageFormat(payload->meta.formatId)) {
             NSString* pasteboardType = PasteboardTypeForClippImageFormat(payload->meta.formatId);
@@ -695,13 +699,8 @@ uint64_t CLPIOSPublishAndBroadcast(std::shared_ptr<const ClipboardPayload> paylo
             NSData* imageData = DataFromImageBytes(std::shared_ptr<const std::vector<unsigned char>>(
                 payload, &payload->EncodedBytes()));
             if (pasteboardType != nil && imageData.length > 0) {
-                if (sourceMarkedPrivate) {
-                    [UIPasteboard.generalPasteboard setItems:@[ @{ pasteboardType: imageData } ]
-                                                     options:pasteboardOptions];
-                } else {
-                    [UIPasteboard.generalPasteboard setData:imageData
-                                          forPasteboardType:pasteboardType];
-                }
+                [UIPasteboard.generalPasteboard setItems:@[ @{ pasteboardType: imageData } ]
+                                                 options:pasteboardOptions];
             }
         }
 
@@ -808,56 +807,29 @@ uint64_t CLPIOSPublishAndBroadcast(std::shared_ptr<const ClipboardPayload> paylo
         return NO;
     }
 
-    const bool sourceMarkedPrivate =
-        (payload->meta.flags & NetworkDefs::CLPM_FLAG_SOURCE_MARKED_PRIVATE) != 0;
-    // When propagating a source-marked-private payload to the iOS pasteboard,
-    // use the options-aware setItems: API so localOnly is honored. localOnly
-    // keeps the value off Universal Clipboard syncing to the user's other Apple
-    // devices and signals downstream consumers that this isn't general history.
-    NSDictionary* pasteboardOptions = sourceMarkedPrivate
-        ? @{ UIPasteboardOptionLocalOnly: @YES }
-        : @{};
+    // "Copy" is a RE-SHARE, not a local pasteboard write — mirrors the desktop
+    // ReshareActivityItem exactly: clone the stored payload with the SAME
+    // eventGuid and origin (the item is never re-attributed), bump the
+    // timestamp strictly past the stored stamp so every store — ours included —
+    // relocates it to the top (guid dedup + newer-ts rule), clear the transport
+    // flags (this is a live event), keep the privacy marker. Broadcasting
+    // immediately also arms every peer's hash guard with this content, closing
+    // the race where macOS Universal Clipboard re-publishes the phone's
+    // pasteboard write and a Mac would otherwise ingest it as a fresh
+    // Mac-originated copy (the Mac watcher now also skips UC pasteboards
+    // outright — see platform/macos/Clipboard.mm).
+    auto clone = std::make_shared<ClipboardPayload>();
+    clone->meta = payload->meta;
+    clone->meta.flags &= ~(NetworkDefs::CLPM_FLAG_SYNC_REPLAY | NetworkDefs::CLPM_FLAG_RELAY);
+    const uint64_t nowMs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+    clone->meta.timestamp = (std::max)(nowMs, payload->meta.timestamp + 1);
+    clone->SetEncodedBytes(std::vector<unsigned char>(payload->EncodedBytes()));
 
-    if (item.hasTextPayload) {
-        NSString* text = ClipboardTextFromPayload(*payload);
-        if (text == nil) {
-            AssignError(error, kClippClipboardActivityErrorBase + 3, @"Unable to decode clipboard text.");
-            return NO;
-        }
-
-        if (sourceMarkedPrivate) {
-            [UIPasteboard.generalPasteboard setItems:@[ @{ @"public.utf8-plain-text" : text } ]
-                                              options:pasteboardOptions];
-        } else {
-            UIPasteboard.generalPasteboard.string = text;
-        }
-        g_clipboardHashGuard.RememberCurrent(*payload);
-        return YES;
-    }
-
-    if (item.hasImagePayload) {
-        NSString* pasteboardType = PasteboardTypeForClippImageFormat(payload->meta.formatId);
-        // Images are uncompressed in storage; share the bytes without a copy.
-        NSData* imageData = DataFromImageBytes(std::shared_ptr<const std::vector<unsigned char>>(
-            payload, &payload->EncodedBytes()));
-        if (pasteboardType == nil || imageData.length == 0) {
-            AssignError(error, kClippClipboardActivityErrorBase + 4, @"Unable to copy clipboard image.");
-            return NO;
-        }
-
-        if (sourceMarkedPrivate) {
-            [UIPasteboard.generalPasteboard setItems:@[ @{ pasteboardType : imageData } ]
-                                              options:pasteboardOptions];
-        } else {
-            [UIPasteboard.generalPasteboard setData:imageData
-                                  forPasteboardType:pasteboardType];
-        }
-        g_clipboardHashGuard.RememberCurrent(*payload);
-        return YES;
-    }
-
-    AssignError(error, kClippClipboardActivityErrorBase + 5, @"Unsupported clipboard item.");
-    return NO;
+    CLPIOSPublishAndBroadcast(std::shared_ptr<const ClipboardPayload>(std::move(clone)));
+    CLPIOSDisarmRegisterUndo();  // a re-share is a mutation: a lit Undo would mislead
+    return YES;
 }
 
 @end
