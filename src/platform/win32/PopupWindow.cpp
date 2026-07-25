@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cwctype>
 #include <cstdint>
 #include <limits>
 #include <map>
@@ -93,14 +94,80 @@ ElementTheme CurrentTheme() {
     return DarkMode::isEnabled() ? ElementTheme::Dark : ElementTheme::Light;
 }
 
+// "hwnd=0x0012ABCD class='CASCADIA_HOSTING_WINDOW_CLASS' title='pwsh' pid=1234"
+// — enough to tell OUR windows from the real paste target in a log.
+std::wstring DescribeWindow(HWND hwnd) {
+    if (hwnd == nullptr) {
+        return L"hwnd=null";
+    }
+    wchar_t className[128] = {};
+    GetClassNameW(hwnd, className, static_cast<int>(std::size(className)));
+    wchar_t title[128] = {};
+    GetWindowTextW(hwnd, title, static_cast<int>(std::size(title)));
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    wchar_t buffer[512];
+    _snwprintf_s(buffer, _TRUNCATE,
+        L"hwnd=0x%p class='%s' title='%s' pid=%lu visible=%d",
+        static_cast<void*>(hwnd), className, title, static_cast<unsigned long>(pid),
+        IsWindowVisible(hwnd) ? 1 : 0);
+    return buffer;
+}
+
+// The raw OS preference, read independently of darkmode32's cached state so a
+// log line can show BOTH (they disagreeing is itself the diagnosis).
+int AppsUseLightThemeRegValue() {
+    DWORD data = 0;
+    DWORD size = sizeof(data);
+    if (RegGetValueW(HKEY_CURRENT_USER,
+                     L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                     L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &data, &size) != ERROR_SUCCESS) {
+        return -1;  // absent — Windows treats that as light
+    }
+    return static_cast<int>(data);
+}
+
 SolidColorBrush ArgbBrush(uint8_t a, uint8_t r, uint8_t g, uint8_t b) {
     return SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(a, r, g, b));
 }
 
+// ---- palette ---------------------------------------------------------------
+// The popup lives in ClippPage's visual family, warmed up: the page's world is
+// accent-blue washes (outgoing bubbles), amber accents (private badges, the
+// find highlighter), and soft translucency — the popup's original flat grays
+// read utilitarian next to it. Every color forks on theme; dark is home base,
+// light must hold up equally. Alphas are deliberate: washes, not paint.
+
 Brush PopupBackgroundBrush() {
     // Solid (not theme-resource) so the borderless window reads as one crisp
-    // surface; tones match the settings window's chrome.
-    return DarkMode::isEnabled() ? ArgbBrush(255, 32, 32, 32) : ArgbBrush(255, 243, 243, 243);
+    // surface. A few units of warmth over the settings chrome's flat gray —
+    // felt more than seen.
+    return DarkMode::isEnabled() ? ArgbBrush(255, 38, 35, 32) : ArgbBrush(255, 247, 244, 240);
+}
+
+Brush ChromeHairlineBrush() {
+    // Warm hairline for satellite-surface edges (the preview flyout).
+    return DarkMode::isEnabled() ? ArgbBrush(84, 190, 165, 135) : ArgbBrush(64, 130, 110, 85);
+}
+
+Brush SelectionFillBrush() {
+    // The page's outgoing-bubble accent, at popup-selection strength.
+    return DarkMode::isEnabled() ? ArgbBrush(62, 70, 150, 235) : ArgbBrush(44, 0, 110, 200);
+}
+
+Brush SelectionRingBrush() {
+    // Crisp ring around the selected row; the fill alone went mushy on images.
+    return DarkMode::isEnabled() ? ArgbBrush(130, 95, 165, 245) : ArgbBrush(110, 0, 110, 200);
+}
+
+Brush RegisterNameBrush() {
+    // Registers are the app's "saved" world — the page's amber, as a name tint.
+    return DarkMode::isEnabled() ? ArgbBrush(255, 235, 185, 110) : ArgbBrush(255, 146, 98, 22);
+}
+
+Brush PrivateMetaBrush() {
+    // The "· private" meta line on private registers, matching the page's badge.
+    return DarkMode::isEnabled() ? ArgbBrush(255, 214, 158, 88) : ArgbBrush(255, 158, 104, 26);
 }
 
 Brush LookupThemeBrush(const wchar_t* resourceName) {
@@ -277,6 +344,10 @@ public:
         }
     }
 
+    // For the popup's own-window check (never mistake a satellite for the
+    // user's paste target).
+    HWND Hwnd() const { return hwnd_; }
+
     void Destroy() {
         if (hwnd_ != nullptr) {
             DestroyWindow(hwnd_);
@@ -421,6 +492,9 @@ public:
         }
     }
 
+    // See ToastWindow::Hwnd.
+    HWND Hwnd() const { return hwnd_; }
+
     void Destroy() {
         if (xamlSource_) {
             xamlSource_.Close();
@@ -503,7 +577,7 @@ private:
         root_ = Border();
         root_.RequestedTheme(CurrentTheme());
         root_.Background(PopupBackgroundBrush());
-        root_.BorderBrush(ArgbBrush(64, 127, 127, 127));
+        root_.BorderBrush(ChromeHairlineBrush());
         root_.BorderThickness(ThicknessHelper::FromLengths(1, 1, 1, 1));
         root_.Padding(ThicknessHelper::FromLengths(10, 8, 10, 8));
         root_.Child(stack);
@@ -686,6 +760,24 @@ private:
     // ---- lifecycle ----
 
     void Summon() {
+        // FIRST, before anything of ours can exist or take focus: whoever the
+        // user was typing in is the paste target. Creating the window (and, on
+        // a cold summon, the XAML island) perturbs focus, so capturing after
+        // Create() recorded the WRONG target on the first summon of a session —
+        // the paste then "restored" to that and the poll never matched. Classic
+        // symptom, user-reported: paste fails on the first try, works forever
+        // after (every later summon skips Create()).
+        const HWND foregroundAtSummon = GetForegroundWindow();
+
+        // Every brush was baked for the OS theme current at build time (the
+        // window is lazy-created-then-kept). If the theme flipped since, tear
+        // the whole thing down and let the lazy-create below rebuild it fresh
+        // — satellites included, same cost as a first summon, zero re-theming
+        // invariants to maintain. (A flip while the popup is VISIBLE keeps the
+        // old clothes until the next summon — it is a summon-transient surface.)
+        if (hwnd_ != nullptr && builtForDark_ != DarkMode::isEnabled()) {
+            Destroy();
+        }
         if (hwnd_ == nullptr) {
             Create();
             if (hwnd_ == nullptr) {
@@ -694,7 +786,13 @@ private:
         }
 
         CancelPasteInjection();  // a re-summon supersedes any pending paste
-        previousForeground_ = GetForegroundWindow();
+        // Never target ourselves: a stale/own-window capture would make the
+        // restore a no-op and send the chord into the void.
+        previousForeground_ = IsOwnWindow(foregroundAtSummon) ? nullptr : foregroundAtSummon;
+        g_logger.log(__FUNCTION__, Logger::Level::Debug,
+            L"Popup summon: paste target %ls%ls",
+            DescribeWindow(previousForeground_).c_str(),
+            IsOwnWindow(foregroundAtSummon) ? L" (ignored: own window)" : L"");
 
         RebuildFromStores();
         UpdateColumnLayout();
@@ -773,7 +871,27 @@ private:
         previousForeground_ = nullptr;
     }
 
+    // True for the popup itself, its island host, and its satellites — anything
+    // whose focus must never be mistaken for the user's paste target.
+    bool IsOwnWindow(HWND hwnd) const {
+        if (hwnd == nullptr) {
+            return false;
+        }
+        const HWND root = GetAncestor(hwnd, GA_ROOTOWNER);
+        for (const HWND own : { hwnd_, xamlHost_, previewWindow_.Hwnd(), toastWindow_.Hwnd() }) {
+            if (own != nullptr && (hwnd == own || root == own)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     void Create() {
+        builtForDark_ = DarkMode::isEnabled();  // Summon compares on re-entry
+        g_logger.log(__FUNCTION__, Logger::Level::Debug,
+            L"Popup building for %ls theme (DarkMode::isEnabled=%d, registry AppsUseLightTheme=%d).",
+            builtForDark_ ? L"DARK" : L"LIGHT", builtForDark_ ? 1 : 0,
+            AppsUseLightThemeRegValue());
         RegisterPopupClass();
         const HINSTANCE hInstance = GetModuleHandleW(nullptr);
         CreateWindowExW(
@@ -988,11 +1106,18 @@ private:
         columnsGrid.ColumnDefinitions().Append(histColumnDef);
 
         const auto makeColumnLabel = [](const wchar_t* text) {
+            // Small-caps treatment: uppercase + letter tracking reads as a
+            // designed caption instead of a shrunken heading.
+            std::wstring upper{ text };
+            for (auto& ch : upper) {
+                ch = static_cast<wchar_t>(towupper(ch));
+            }
             TextBlock label;
-            label.Text(winrt::hstring{ text });
-            label.FontSize(12);
+            label.Text(winrt::hstring{ upper });
+            label.FontSize(11);
             label.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
-            label.Opacity(0.6);
+            label.CharacterSpacing(70);  // 1/1000 em units
+            label.Opacity(0.55);
             label.Margin(ThicknessHelper::FromLengths(18, 0, 10, 4));
             return label;
         };
@@ -1440,7 +1565,11 @@ private:
         }
 
         Border row;
-        row.Padding(ThicknessHelper::FromLengths(10, 6, 10, 6));
+        // 1px border lives on EVERY row (transparent until selected) with the
+        // padding compensated, so selection never shifts content by a pixel.
+        row.Padding(ThicknessHelper::FromLengths(9, 5, 9, 5));
+        row.BorderThickness(ThicknessHelper::FromLengths(1, 1, 1, 1));
+        row.BorderBrush(ArgbBrush(0, 0, 0, 0));
         row.CornerRadius(CornerRadius{ 6 });
         row.Background(ArgbBrush(0, 0, 0, 0));
         const auto toggleHistoryPeek = [this, id = item.historyId, index]() {
@@ -1550,6 +1679,9 @@ private:
             name.Text(winrt::hstring{ nameText });
             name.FontSize(13);
             name.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+            // The saved-things column wears the app's amber; the find
+            // highlighter (forced black on amber) still wins on matches.
+            name.Foreground(RegisterNameBrush());
             name.TextTrimming(TextTrimming::CharacterEllipsis);
             name.TextWrapping(TextWrapping::NoWrap);
             name.MaxLines(1);
@@ -1583,6 +1715,8 @@ private:
             std::wstring metaText = RelativeAgeText(cached->second.touchedWallMs);
             if (cached->second.isPrivate) {
                 metaText += L" · " CLP_W(CLP_UI_PRIVATE_BADGE);
+                // Private rows' meta line takes the page's badge amber.
+                meta.Foreground(PrivateMetaBrush());
             }
             meta.Text(winrt::hstring{ metaText });
             meta.FontSize(11);
@@ -1591,7 +1725,10 @@ private:
         }
 
         Border row;
-        row.Padding(ThicknessHelper::FromLengths(10, 6, 10, 6));
+        // Same constant-border discipline as the history rows.
+        row.Padding(ThicknessHelper::FromLengths(9, 5, 9, 5));
+        row.BorderThickness(ThicknessHelper::FromLengths(1, 1, 1, 1));
+        row.BorderBrush(ArgbBrush(0, 0, 0, 0));
         row.CornerRadius(CornerRadius{ 6 });
         row.Background(ArgbBrush(0, 0, 0, 0));
         const bool privateRegister =
@@ -1677,8 +1814,12 @@ private:
                 const bool selected = selection.has_value()
                     && selection->group == group
                     && selection->index == i;
-                borders[i].Background(selected ? ArgbBrush(56, 127, 127, 127)
+                // Accent wash + crisp ring (was a gray-on-gray wash — the
+                // "dour" read). The border is always 1px, so no pixel shift.
+                borders[i].Background(selected ? SelectionFillBrush()
                                                : ArgbBrush(0, 0, 0, 0));
+                borders[i].BorderBrush(selected ? SelectionRingBrush()
+                                                : ArgbBrush(0, 0, 0, 0));
                 if (selected) {
                     // Deferred a dispatcher hop: on a rebuild (rename/save) the
                     // fresh row has no realized geometry yet, and an immediate
@@ -1945,8 +2086,18 @@ private:
     // instant after SetForegroundWindow, so poll briefly and give up
     // gracefully (the clipboard is set either way; a manual Ctrl+V works).
     void BeginPasteInjection(HWND target) {
+        g_logger.log(__FUNCTION__, Logger::Level::Debug,
+            L"Paste injection armed for %ls; foreground now %ls",
+            DescribeWindow(target).c_str(),
+            DescribeWindow(GetForegroundWindow()).c_str());
         pasteTargetWindow_ = target;
-        pasteRetriesLeft_ = 8;  // 8 x 25ms of activation grace
+        // 24 x 25ms of activation grace. The original 200ms budget expired on
+        // the popup's FIRST dismissal of a session — the XAML island's
+        // first-build work is still churning the thread right then, focus
+        // restore lags, and the paste silently skipped (user repro: terminal
+        // paste fails on try one, works every time after).
+        pasteRetriesLeft_ = 24;
+        pasteFocusStreak_ = 0;
         SetTimer(hwnd_, kPasteTimerId, 25, nullptr);
     }
 
@@ -1968,13 +2119,26 @@ private:
             && (foreground == target
                 || GetAncestor(foreground, GA_ROOTOWNER) == GetAncestor(target, GA_ROOTOWNER));
         if (targetFocused) {
-            CancelPasteInjection();
-            InjectPasteChord();
-            return;
+            // One settle tick: "holds the foreground" is not "ready for input"
+            // — terminals in particular re-establish their internal keyboard
+            // focus a beat after activation, and a chord fired on the very
+            // first foreground sighting can vanish into that gap. Inject only
+            // after two consecutive foreground confirmations (+25ms).
+            if (++pasteFocusStreak_ >= 2) {
+                g_logger.log(__FUNCTION__, Logger::Level::Debug,
+                    L"Paste chord -> %ls", DescribeWindow(foreground).c_str());
+                CancelPasteInjection();
+                InjectPasteChord();
+                return;
+            }
+        } else {
+            pasteFocusStreak_ = 0;
         }
         if (--pasteRetriesLeft_ <= 0) {
             g_logger.log(__FUNCTION__, Logger::Level::Debug,
-                L"Paste keystroke skipped: the target window never regained focus.");
+                L"Paste keystroke SKIPPED: target %ls never regained focus; foreground is %ls",
+                DescribeWindow(target).c_str(),
+                DescribeWindow(foreground).c_str());
             CancelPasteInjection();
         }
     }
@@ -2448,6 +2612,10 @@ private:
     static constexpr UINT_PTR kPasteTimerId = 1;
     HWND pasteTargetWindow_ = nullptr;
     int pasteRetriesLeft_ = 0;
+    int pasteFocusStreak_ = 0;
+    // Which OS theme the window (and every baked brush) was built for; a
+    // mismatch at Summon rebuilds the whole window.
+    bool builtForDark_ = false;
     PopupModel model_;
     std::size_t watcherID_ = 0;
 };
