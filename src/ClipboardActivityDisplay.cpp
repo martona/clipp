@@ -131,6 +131,8 @@ std::optional<ClipboardActivityDisplayItem> ClipboardActivityStore::BuildDisplay
 
     ClipboardActivityDisplayItem display;
     display.header = item.header;
+    display.eventTimestamp = std::chrono::system_clock::time_point(
+        std::chrono::milliseconds(item.payload->meta.timestamp));
 
     HostId localHostId;
     g_settings.getHostID(localHostId);

@@ -848,9 +848,11 @@ NSView* MacOSClippPage::BuildActivityRow(uint64_t itemID) {
         [row addGestureRecognizer:copyGesture];
     }
 
+    // eventTimestamp (origin time), not header.timestamp (learn time): a
+    // restart re-seed would otherwise label every row "now".
     NSString* metaText = [NSString stringWithFormat:@"%@ - %@",
         MacOSToNSString(deviceName),
-        FormatActivityTime(display->header.timestamp)];
+        FormatActivityTime(display->eventTimestamp)];
     NSTextField* meta = MakeActivityLabel(metaText, 12.0, [NSColor secondaryLabelColor]);
     [content addArrangedSubview:meta];
 

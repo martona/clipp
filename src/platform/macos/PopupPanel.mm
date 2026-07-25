@@ -1196,11 +1196,13 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
         }
         contentRow = display.kind == ClipboardActivityPayloadKind::Text ||
                      display.kind == ClipboardActivityPayloadKind::Link;
+        // eventTimestamp (origin time), not header.timestamp (learn time): a
+        // restart re-seed would otherwise label every row "now".
         metaText = display.deviceName.empty()
-            ? RelativeAgeFromTimePointNS(display.header.timestamp)
+            ? RelativeAgeFromTimePointNS(display.eventTimestamp)
             : [NSString stringWithFormat:@"%@ %@",
                   MacOSToNSString(display.deviceName),
-                  RelativeAgeFromTimePointNS(display.header.timestamp)];
+                  RelativeAgeFromTimePointNS(display.eventTimestamp)];
     }
     if (previewText.length == 0) {
         previewText = @" ";

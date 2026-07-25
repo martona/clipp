@@ -140,7 +140,7 @@ final class ShareViewController: UIViewController {
 
             if stashed > 0 {
                 let itemText = plural(stashed, singular: "item", plural: "items")
-                let savedDetail = "No device was reachable, so Clipp saved \(stashed) \(itemText). They'll be delivered when you next open Clipp."
+                let savedDetail = "No device was reachable, so Clipp saved \(stashed) \(itemText). They'll appear in your clipboard history the next time you open Clipp."
                 let ignored = ignoredText(extraction.unsupportedCount, fallback: nil)
                 let detail = ([ savedDetail, ignored ]
                     .compactMap { $0 })

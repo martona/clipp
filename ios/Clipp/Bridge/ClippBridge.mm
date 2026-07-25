@@ -495,23 +495,17 @@ CLPClipboardActivityItem* MakeClipboardActivityItem(const ClipboardActivityItemH
         return nil;
     }
 
-    // Display and sort by the ORIGIN event time (payload meta), NOT
-    // header.timestamp — that one is when THIS store learned of the item, and
-    // after a foreground re-seed all 30 replayed items are "learned" within the
-    // same second: every row read "now", in arbitrary order. meta.timestamp
-    // survives replays, snapshot reloads, and relocations (a re-share bumps it,
-    // which is exactly when a row SHOULD move up).
-    NSDate* timestamp = ToNSDate(display->header.timestamp);
-    if (const auto payload = g_clipboardActivityStore.PayloadReference(header.id)) {
-        timestamp = [NSDate dateWithTimeIntervalSince1970:
-            static_cast<double>(payload->meta.timestamp) / 1000.0];
-    }
-
+    // Display and sort by the ORIGIN event time, NOT header.timestamp (= when
+    // THIS store learned of the item) — after a foreground re-seed all 30
+    // replayed items are "learned" within the same second: every row read
+    // "now", in arbitrary order. eventTimestamp survives replays, snapshot
+    // reloads, and relocations (a re-share bumps it, which is exactly when a
+    // row SHOULD move up). Same field the desktop surfaces render.
     NSString* detailText = ToNSString(display->detailText);
     return [[CLPClipboardActivityItem alloc] initWithActivityItemID:header.id
                                                         identifier:ActivityIdentifier(header.id)
                                                         deviceName:ToNSString(display->deviceName)
-                                                         timestamp:timestamp
+                                                         timestamp:ToNSDate(display->eventTimestamp)
                                                          direction:ToBridgeDirection(display->direction)
                                                               kind:ToBridgePayloadKind(display->kind)
                                                       previewText:ToNSString(display->previewText)

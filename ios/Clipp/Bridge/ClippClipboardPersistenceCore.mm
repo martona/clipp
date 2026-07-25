@@ -12,9 +12,8 @@
 //    still holds — process-local storage ≈ RAM there; this fixes
 //    share-while-off-mesh history vanishing on the most-offline device.
 //  * the SHARE INBOX: ingest the extension's one-file-per-item deferred-share
-//    drops from the app group, apply them HISTORY-ONLY (local add + SYNC_REPLAY
-//    rebroadcast — a six-hours-late share must not clobber anyone's live
-//    clipboard), and delete the files.
+//    drops from the app group into THIS DEVICE'S history (phone-local by
+//    decree — see the comment at the ingest), and delete the files.
 #import <Foundation/Foundation.h>
 
 #include "../../../src/ClipboardActivityStore.h"
@@ -22,8 +21,6 @@
 #include "../../../src/KeyManager.h"
 #include "../../../src/Logger.h"
 #include "../../../src/NetworkDefs.h"
-#include "../../../src/PeerDisplay.h"
-#include "../../../src/PeerManager.h"
 #include "../../../src/platform/DataPaths.h"
 
 #include <algorithm>
@@ -40,8 +37,6 @@
 extern ClipboardActivityStore g_clipboardActivityStore;
 extern KeyManager g_keyManager;
 extern Logger g_logger;
-extern PeerDisplay g_peerDisplay;
-extern PeerManager g_peerManager;
 
 namespace {
 
@@ -230,80 +225,6 @@ bool InboxDirectoryPath(std::string& outDir, bool create) {
     }
 }
 
-// Deferred shares awaiting MESH delivery. Ingest runs right after the runtime
-// (re)starts — seconds before any connection exists — so the SYNC_REPLAY
-// broadcast at ingest time usually queues to ZERO peers. And the zero-anchor
-// SYNC pull only fires on a peer's total 0→1 incoming transition, so in a
-// multi-device mesh nobody ever pulls the phone's history either. The contract
-// therefore is: an inbox FILE is deleted only once its broadcast queued to at
-// least one peer; until then the item waits here (and on disk — a force-quit
-// re-ingests it, where the store's guid dedup and the receivers' dedup make
-// every retry harmless). A PeerDisplay watcher retries on connection changes.
-struct PendingReplay {
-    std::shared_ptr<const ClipboardPayload> wire;
-    std::string filePath;
-};
-std::mutex g_pendingMutex;
-std::vector<PendingReplay> g_pendingReplays;
-bool g_peerWatcherArmed = false;
-
-void RemoveInboxFile(const std::string& path) {
-    @autoreleasepool {
-        [NSFileManager.defaultManager removeItemAtPath:[NSString stringWithUTF8String:path.c_str()]
-                                                 error:nil];
-    }
-}
-
-// True when the wire payload was queued to at least one connected peer.
-bool TryDeliverReplay(const PendingReplay& pending) {
-    if (g_peerManager.BroadcastClipboard(pending.wire) == 0) {
-        return false;
-    }
-    RemoveInboxFile(pending.filePath);
-    return true;
-}
-
-void FlushPendingReplays() {
-    std::vector<PendingReplay> toSend;
-    {
-        std::lock_guard<std::mutex> lock(g_pendingMutex);
-        toSend.swap(g_pendingReplays);
-    }
-    if (toSend.empty()) {
-        return;
-    }
-    std::vector<PendingReplay> unsent;
-    for (auto& pending : toSend) {
-        if (!TryDeliverReplay(pending)) {
-            unsent.push_back(std::move(pending));
-        }
-    }
-    const size_t delivered = toSend.size() - unsent.size();
-    if (!unsent.empty()) {
-        std::lock_guard<std::mutex> lock(g_pendingMutex);
-        for (auto& pending : unsent) {
-            g_pendingReplays.push_back(std::move(pending));
-        }
-    }
-    if (delivered > 0) {
-        g_logger.log("ClipboardPersistence", Logger::Level::Info,
-                     "Delivered %zu deferred share(s) to the mesh.", delivered);
-    }
-}
-
-void PeerConnWatcher(const PeerDisplayUpdate&, void*) {
-    FlushPendingReplays();  // early-outs when nothing is pending
-}
-
-void EnsurePeerWatcherArmed() {
-    std::lock_guard<std::mutex> lock(g_pendingMutex);
-    if (g_peerWatcherArmed) {
-        return;
-    }
-    g_peerWatcherArmed = true;
-    g_peerDisplay.QueryAndRegister(&PeerConnWatcher, nullptr);
-}
-
 }  // namespace
 
 void CLPIOSStartClipboardPersistence() {
@@ -430,61 +351,26 @@ void CLPIOSIngestShareInbox() {
             if (![entry hasSuffix:@".bin"]) {
                 continue;
             }
-            const std::string pathStd = fullPath.UTF8String;
-            {
-                // A foreground re-ingest can re-see a file that is already
-                // waiting on delivery; don't double-track it.
-                std::lock_guard<std::mutex> lock(g_pendingMutex);
-                bool alreadyPending = false;
-                for (const auto& pending : g_pendingReplays) {
-                    if (pending.filePath == pathStd) {
-                        alreadyPending = true;
-                        break;
-                    }
-                }
-                if (alreadyPending) {
-                    continue;
-                }
-            }
             ClipboardPayload payload;
             const auto result =
-                ClipboardPersistence::LoadInboxItemFile(pathStd, key, payload);
-            if (result != ClipboardPersistence::LoadResult::Loaded) {
-                // Corrupt was renamed .corrupt (swept next pass); NoFile means
-                // another ingest raced us. Nothing more to do with this entry.
-                continue;
+                ClipboardPersistence::LoadInboxItemFile(fullPath.UTF8String, key, payload);
+            if (result == ClipboardPersistence::LoadResult::Loaded) {
+                // PHONE-LOCAL by decree (user call): the deferred share joins
+                // this device's history — persisted by the snapshot above — and
+                // is NOT actively pushed to the mesh. Active delivery needed a
+                // pend-and-retry mechanism living inside the network stack's
+                // notification path (it deadlocked the runtime on its first
+                // outing), all for an edge case; peers still receive the item
+                // if a natural history sync ever pulls it, and the user can
+                // always re-share from history. Transport flags are cleared —
+                // this is authored history, not replay.
+                payload.meta.flags &= ~(NetworkDefs::CLPM_FLAG_SYNC_REPLAY | NetworkDefs::CLPM_FLAG_RELAY);
+                g_clipboardActivityStore.Add(std::make_shared<const ClipboardPayload>(std::move(payload)));
+                ++ingested;
             }
-
-            // History-only, both halves: the local add carries clean transport
-            // flags (it IS this phone's history), the wire copy rides the
-            // SYNC_REPLAY lane so no receiver touches its live clipboard —
-            // the undo-restore pattern. The store's guid dedup makes a
-            // re-ingest of a not-yet-delivered file a no-op locally.
-            payload.meta.flags &= ~(NetworkDefs::CLPM_FLAG_SYNC_REPLAY | NetworkDefs::CLPM_FLAG_RELAY);
-            auto local = std::make_shared<const ClipboardPayload>(std::move(payload));
-            g_clipboardActivityStore.Add(local);
-            ++ingested;
-
-            ClipboardPayload wire;
-            wire.meta = local->meta;
-            wire.meta.flags |= NetworkDefs::CLPM_FLAG_SYNC_REPLAY;
-            wire.SetEncodedBytes(std::vector<unsigned char>(local->EncodedBytes()));
-
-            // The file is deleted only once the broadcast actually queued to a
-            // peer. Ingest typically runs seconds BEFORE the first connection
-            // comes up, so the usual path is: pend now, deliver from the
-            // PeerDisplay watcher on the first connection event. A force-quit
-            // while pending re-ingests the file next launch — every side
-            // dedups, so retries are free.
-            PendingReplay pending{ std::make_shared<const ClipboardPayload>(std::move(wire)),
-                                   pathStd };
-            if (!TryDeliverReplay(pending)) {
-                {
-                    std::lock_guard<std::mutex> lock(g_pendingMutex);
-                    g_pendingReplays.push_back(std::move(pending));
-                }
-                EnsurePeerWatcherArmed();
-            }
+            // Loaded, Corrupt (already renamed .corrupt — swept next pass), or
+            // NoFile (raced another ingest): the .bin itself is done either way.
+            [NSFileManager.defaultManager removeItemAtPath:fullPath error:nil];
         }
         if (ingested > 0) {
             g_logger.log("ClipboardPersistence", Logger::Level::Info,

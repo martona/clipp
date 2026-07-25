@@ -38,6 +38,13 @@ struct ClipboardActivityItemHeader {
 
 struct ClipboardActivityDisplayItem {
     ClipboardActivityItemHeader header;
+    // The ORIGIN event time (payload meta.timestamp) — what every UI displays
+    // and sorts by. header.timestamp is merely when THIS store learned of the
+    // item (it drives age-based eviction and stays untouched): after a restart
+    // re-seed or a snapshot load, every item is "learned" within the same
+    // second, so learn-time labels would all read "now". A re-share bumps the
+    // event time — exactly when the displayed age SHOULD reset.
+    std::chrono::system_clock::time_point eventTimestamp{};
     // Resolved from the payload at build time: Outgoing iff originHostId matches
     // the local host, Incoming otherwise. deviceName is the localized "This
     // device" string when outgoing, the wire-carried origin hostname otherwise.

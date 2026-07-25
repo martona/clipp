@@ -377,7 +377,9 @@ winrt::Windows::UI::Xaml::Controls::Grid ClippPage::BuildActivityRow(uint64_t it
     Grid::SetColumn(content, 0);
 
     TextBlock meta;
-    const std::wstring metaText = display->deviceName + L" - " + FormatActivityTime(display->header.timestamp);
+    // eventTimestamp (origin time), not header.timestamp (learn time): a
+    // restart re-seed would otherwise label every row "now".
+    const std::wstring metaText = display->deviceName + L" - " + FormatActivityTime(display->eventTimestamp);
     meta.Text(metaText);
     meta.FontSize(12);
     meta.Opacity(0.68);

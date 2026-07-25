@@ -1406,9 +1406,11 @@ private:
             contentRow = display.kind == ClipboardActivityPayloadKind::Text ||
                          display.kind == ClipboardActivityPayloadKind::Link;
             // "Mars11 14 seconds ago" — who it came from, and how fresh.
+            // eventTimestamp (origin time), not header.timestamp (learn time):
+            // a restart re-seed would otherwise label every row "now".
             metaText = display.deviceName.empty()
-                ? RelativeAgeText(display.header.timestamp)
-                : display.deviceName + L" " + RelativeAgeText(display.header.timestamp);
+                ? RelativeAgeText(display.eventTimestamp)
+                : display.deviceName + L" " + RelativeAgeText(display.eventTimestamp);
         }
         if (previewText.empty()) {
             previewText = L" ";
