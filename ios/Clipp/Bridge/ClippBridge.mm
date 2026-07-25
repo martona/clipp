@@ -53,6 +53,14 @@ extern RegisterStore g_registerStore;
 // refreshes the Registers tab) when a clipboard-side mutation lands.
 void CLPIOSDisarmRegisterUndo();
 
+// Defined in ClippClipboardPersistenceCore.mm: the iOS-only clipboard history
+// snapshot (same lifecycle contract as the register persistence runtime) and
+// the share-extension inbox drain.
+void CLPIOSStartClipboardPersistence();
+void CLPIOSClipboardPersistenceKeyChanged();
+void CLPIOSStopClipboardPersistence();
+void CLPIOSIngestShareInbox();
+
 namespace {
 constexpr NSInteger kClippNetworkKeyErrorBase = 4100;
 constexpr NSInteger kClippNetworkRuntimeErrorBase = 4200;
@@ -174,41 +182,45 @@ void EnsureForegroundObserver() {
                     }
                     g_logger.log("iOS", Logger::Level::Info, "App entering foreground; restarting network runtime.");
 #if CLIPP_REGISTERS_DAEMON
-                    // The background handler stopped the persistence writer
-                    // (final flush); bring it back before the runtime so the
-                    // reload-merge precedes any fresh RSYN traffic.
+                    // The background handler stopped the persistence writers
+                    // (final flush); bring them back before the runtime so the
+                    // reload-merge precedes any fresh RSYN/SYNC traffic.
                     clipp::StartRegisterPersistence();
 #endif
+                    CLPIOSStartClipboardPersistence();
                     if (g_networkRuntime.Restart()) {
                         g_logger.log("iOS", Logger::Level::Info, "Network runtime restarted after foreground.");
                     } else {
                         g_logger.log("iOS", Logger::Level::Warning, "Failed to restart network runtime on foreground.");
                     }
+                    // Shares stashed by the extension while we were away.
+                    CLPIOSIngestShareInbox();
                 });
             }];
     });
 }
 
 void EnsureBackgroundFlushObserver() {
-#if CLIPP_REGISTERS_DAEMON
-    // Flush pending register writes the moment we background: iOS may suspend
-    // the process seconds later and never deliver a termination signal, so the
-    // 1.5s debounce cannot be trusted to fire. StopRegisterPersistence joins
-    // the writer thread with a final flush (small sealed blob — comfortably
-    // inside the background grace window); the foreground observer starts it
-    // again. The store change listener stays armed across the cycle (armed
-    // once per process), so mutations while stopped still mark dirty for the
-    // next writer.
+    // Flush pending persistence writes the moment we background: iOS may
+    // suspend the process seconds later and never deliver a termination
+    // signal, so the 1.5s debounces cannot be trusted to fire. The Stop calls
+    // join their writer threads with a final flush (sealed blobs — comfortably
+    // inside the background grace window); the foreground observer starts them
+    // again. The dirty hooks stay armed across the cycle (armed once per
+    // process), so mutations while stopped still mark dirty for the next
+    // writer.
     std::call_once(g_backgroundObserverOnce, [] {
         g_backgroundObserver = [[NSNotificationCenter defaultCenter]
             addObserverForName:UIApplicationDidEnterBackgroundNotification
                         object:nil
                          queue:nil
                     usingBlock:^(NSNotification* _Nonnull) {
+#if CLIPP_REGISTERS_DAEMON
                 clipp::StopRegisterPersistence();
+#endif
+                CLPIOSStopClipboardPersistence();
             }];
     });
-#endif
 }
 
 bool StartNetworkRuntimeIfNeeded(NSError** error) {
@@ -231,6 +243,9 @@ bool StartNetworkRuntimeIfNeeded(NSError** error) {
     // everything (same ordering as the desktop main.cpp).
     clipp::StartRegisterPersistence();
 #endif
+    // Clipboard history the same way (guid dedup makes the ordering soft here,
+    // but loaded-before-network keeps the SYNC replay window meaningful).
+    CLPIOSStartClipboardPersistence();
     if (!g_networkRuntime.Start()) {
         AssignError(error, kClippNetworkRuntimeErrorBase + 2, @"Unable to start network runtime.");
         return false;
@@ -239,6 +254,8 @@ bool StartNetworkRuntimeIfNeeded(NSError** error) {
     g_runtimeBridgeStarted = true;
     EnsureForegroundObserver();
     EnsureBackgroundFlushObserver();
+    // Deferred shares stashed by the extension while we weren't running.
+    CLPIOSIngestShareInbox();
     g_logger.log("iOS", Logger::Level::Info, "Network runtime start requested.");
     return true;
 }
@@ -260,6 +277,8 @@ bool RestartNetworkRuntime(NSError** error) {
     clipp::StartRegisterPersistence();  // no-op if already running; covers pairing-before-start
     clipp::RegisterPersistenceKeyChanged();
 #endif
+    CLPIOSStartClipboardPersistence();
+    CLPIOSClipboardPersistenceKeyChanged();
     if (g_runtimeBridgeStarted) {
         if (!g_networkRuntime.Restart()) {
             AssignError(error, kClippSettingsErrorBase + 1, @"Unable to restart network runtime.");
@@ -272,6 +291,10 @@ bool RestartNetworkRuntime(NSError** error) {
         }
         g_runtimeBridgeStarted = true;
     }
+
+    // A pairing change re-scoped the inbox directory too — drain the (possibly
+    // different) group's deferred shares under the new key.
+    CLPIOSIngestShareInbox();
 
     g_logger.log("iOS", Logger::Level::Info, "Network runtime restarted after settings change.");
     return true;
@@ -472,11 +495,23 @@ CLPClipboardActivityItem* MakeClipboardActivityItem(const ClipboardActivityItemH
         return nil;
     }
 
+    // Display and sort by the ORIGIN event time (payload meta), NOT
+    // header.timestamp — that one is when THIS store learned of the item, and
+    // after a foreground re-seed all 30 replayed items are "learned" within the
+    // same second: every row read "now", in arbitrary order. meta.timestamp
+    // survives replays, snapshot reloads, and relocations (a re-share bumps it,
+    // which is exactly when a row SHOULD move up).
+    NSDate* timestamp = ToNSDate(display->header.timestamp);
+    if (const auto payload = g_clipboardActivityStore.PayloadReference(header.id)) {
+        timestamp = [NSDate dateWithTimeIntervalSince1970:
+            static_cast<double>(payload->meta.timestamp) / 1000.0];
+    }
+
     NSString* detailText = ToNSString(display->detailText);
     return [[CLPClipboardActivityItem alloc] initWithActivityItemID:header.id
                                                         identifier:ActivityIdentifier(header.id)
                                                         deviceName:ToNSString(display->deviceName)
-                                                         timestamp:ToNSDate(display->header.timestamp)
+                                                         timestamp:timestamp
                                                          direction:ToBridgeDirection(display->direction)
                                                               kind:ToBridgePayloadKind(display->kind)
                                                       previewText:ToNSString(display->previewText)

@@ -11,7 +11,7 @@
 class KeyManager {
 public:
     static constexpr size_t NetworkKeySize = 32;
-    static constexpr size_t KeyRoleCount = 5;
+    static constexpr size_t KeyRoleCount = 7;
 
     using NetworkKey = std::array<unsigned char, NetworkKeySize>;
 
@@ -23,6 +23,14 @@ public:
         // Seals the at-rest register snapshot (RegisterPersistence). Purpose-
         // bound and local-only — never leaves the device or touches the wire.
         RegisterStorage = 5,
+        // Seals the iOS at-rest clipboard/activity snapshot (Clipboard-
+        // Persistence). A separate role from RegisterStorage so the two blob
+        // kinds can never cross-decode even before the magic check.
+        ClipboardStorage = 6,
+        // Seals the share extension's one-file-per-item inbox drops in the app
+        // group (deferred shares the main app ingests later). Its own role:
+        // the inbox crosses the ext/app boundary, unlike the storage blobs.
+        ShareInbox = 7,
     };
 
     explicit KeyManager(Settings& settings);

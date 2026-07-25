@@ -17,12 +17,19 @@ add_executable(clipp-tests
     test_register_wire.cpp
     test_binary_registers.cpp
     test_register_persistence.cpp
+    test_clipboard_persistence.cpp
     test_clipboard_activity_store.cpp
     test_popup_model.cpp
+    # Logger.cpp satisfies g_logger for ClipboardPayload.h's inline over-cap
+    # logging, instantiated by the clipboard-persistence tests. Nothing
+    # configures a log file here, so lines go nowhere — that's fine.
+    "${CMAKE_SOURCE_DIR}/src/Logger.cpp"
     "${CMAKE_SOURCE_DIR}/src/Hlc.cpp"
     "${CMAKE_SOURCE_DIR}/src/RegisterStore.cpp"
     "${CMAKE_SOURCE_DIR}/src/RegisterWire.cpp"
     "${CMAKE_SOURCE_DIR}/src/RegisterPersistence.cpp"
+    "${CMAKE_SOURCE_DIR}/src/SealedSnapshot.cpp"
+    "${CMAKE_SOURCE_DIR}/src/ClipboardPersistence.cpp"
     "${CMAKE_SOURCE_DIR}/src/ClipboardActivityStore.cpp"
     "${CMAKE_SOURCE_DIR}/src/PopupModel.cpp"
 )
@@ -33,6 +40,11 @@ target_link_libraries(clipp-tests PRIVATE
     xxHash::xxhash
     zstd::libzstd
 )
+if (WIN32)
+    # ClipboardPersistence.cpp round-trips the wire CLIP-frame byte order via
+    # NetworkDefs' hton/ntoh helpers — winsock imports on Windows.
+    target_link_libraries(clipp-tests PRIVATE ws2_32)
+endif()
 if (MSVC)
     target_compile_options(clipp-tests PRIVATE /utf-8)
 endif()

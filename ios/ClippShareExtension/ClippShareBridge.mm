@@ -1,5 +1,6 @@
 #import "ClippShareBridge.h"
 
+#include "../../src/ClipboardPersistence.h"
 #include "../../src/ClipboardWire.h"
 #include "../../src/ClipboardPayload.h"
 #include "../../src/CryptoChannel.h"
@@ -112,6 +113,56 @@ bool PayloadFromSharePayload(CLPSharePayload* sharePayload, ClipboardPayload& pa
     }
 
     return false;
+}
+
+NSString* const kAppGroupIdentifier = @"group.net.clipp.ios";
+
+// <app group>/ShareInbox/<fp8>/ — the extension's ONLY shared write. It never
+// touches the main app's snapshot blobs (the desktop concurrency lesson): one
+// guid-named sealed file per item, atomically renamed into place by the seal
+// layer, ingested and deleted by the main app. Layout must stay in lockstep
+// with ClippClipboardPersistenceCore.mm's InboxDirectoryPath.
+bool InboxDirectoryPath(std::string& outDir) {
+    @autoreleasepool {
+        NSURL* container = [NSFileManager.defaultManager
+            containerURLForSecurityApplicationGroupIdentifier:kAppGroupIdentifier];
+        if (container == nil) {
+            return false;
+        }
+        const std::wstring fingerprint = g_keyManager.GetNetworkFingerprintHash();
+        std::string tag;
+        for (size_t i = 0; i < fingerprint.size() && i < 8; ++i) {
+            tag.push_back(static_cast<char>(fingerprint[i]));
+        }
+        if (tag.empty()) {
+            return false;
+        }
+        NSString* dir = [[container.path stringByAppendingPathComponent:@"ShareInbox"]
+            stringByAppendingPathComponent:[NSString stringWithUTF8String:tag.c_str()]];
+        if (![NSFileManager.defaultManager createDirectoryAtPath:dir
+                                     withIntermediateDirectories:YES
+                                                      attributes:nil
+                                                           error:nil]) {
+            return false;
+        }
+        const char* utf8 = dir.UTF8String;
+        if (utf8 == nullptr) {
+            return false;
+        }
+        outDir = utf8;
+        return true;
+    }
+}
+
+std::string GuidHex(const uint8_t (&guid)[16]) {
+    static const char* kHex = "0123456789abcdef";
+    std::string hex;
+    hex.reserve(32);
+    for (size_t i = 0; i < 16; ++i) {
+        hex.push_back(kHex[guid[i] >> 4]);
+        hex.push_back(kHex[guid[i] & 0x0F]);
+    }
+    return hex;
 }
 
 }
@@ -235,6 +286,66 @@ bool PayloadFromSharePayload(CLPSharePayload* sharePayload, ClipboardPayload& pa
     NSString* viaName = [NSString stringWithUTF8String:via->deviceName.c_str()];
     return [[CLPShareSendResult alloc] initWithSentItemCount:itemCount
                                        relayedViaDeviceName:(viaName ?: @"a nearby device")];
+}
+
++ (NSNumber*)stashPayloadsForLaterDelivery:(NSArray<CLPSharePayload*>*)payloads
+                                     error:(NSError**)error {
+    if (payloads.count == 0) {
+        AssignError(error, kClippShareErrorBase + 1, @"No supported shared items were found.");
+        return nil;
+    }
+    if (!EnsureSodium(error) || !EnsureHostID(error)) {
+        return nil;
+    }
+    if (!g_keyManager.HaveNetworkKey()) {
+        AssignError(error, kClippShareErrorBase + 3, @"Not paired yet. Open Clipp to finish setup.");
+        return nil;
+    }
+
+    std::string inboxDir;
+    if (!InboxDirectoryPath(inboxDir)) {
+        AssignError(error, kClippShareErrorBase + 9, @"Couldn't reach Clipp's shared storage.");
+        return nil;
+    }
+
+    KeyManager::NetworkKey subkey{};
+    if (!g_keyManager.GetKey(KeyManager::KeyRole::ShareInbox, subkey)) {
+        AssignError(error, kClippShareErrorBase + 10, @"Couldn't prepare the saved share.");
+        return nil;
+    }
+    ClipboardPersistence::SealKey key{};
+    std::copy(subkey.begin(), subkey.end(), key.begin());
+    sodium_memzero(subkey.data(), subkey.size());
+
+    HostId localHostId;
+    g_settings.getHostID(localHostId);
+    const std::string localHostName = clipp::GetLocalPeerDisplayName("iPhone", CryptoChannel::HOSTNAME_MAX_BYTES);
+
+    // Origin-stamped at STASH time — the share was authored NOW, on this phone;
+    // when the main app ingests the file hours later it keeps this identity and
+    // timestamp (a deferred share lands in history at the moment it was made).
+    NSInteger stashed = 0;
+    for (CLPSharePayload* sharePayload in payloads) {
+        ClipboardPayload payload{};
+        if (!PayloadFromSharePayload(sharePayload, payload)) {
+            continue;
+        }
+        payload.StampOrigin(localHostId, localHostName.c_str(), g_settings.nextOriginSequenceNumber());
+        const std::string path = inboxDir + "/" + GuidHex(payload.meta.eventGuid) + ".bin";
+        if (ClipboardPersistence::SaveInboxItemFile(path, payload, key)) {
+            ++stashed;
+        }
+    }
+    sodium_memzero(key.data(), key.size());
+
+    if (stashed == 0) {
+        AssignError(error, kClippShareErrorBase + 11, @"The shared items couldn't be saved.");
+        return nil;
+    }
+    g_logger.log(__FUNCTION__, Logger::Level::Info,
+                 L"Share extension stashed %ld item(s) for deferred delivery.",
+                 static_cast<long>(stashed));
+    return @(stashed);
 }
 
 @end

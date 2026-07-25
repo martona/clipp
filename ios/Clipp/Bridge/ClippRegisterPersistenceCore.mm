@@ -67,6 +67,10 @@ bool ResolveStateDirectory(std::string& outUtf8Dir) {
 
 }  // namespace clipp
 
+// SealedSnapshot is the generic layer under BOTH persistence kinds (registers
+// here, the clipboard snapshot + share inbox in ClippClipboardPersistenceCore).
+// Compiled exactly once, in this TU; the clipboard core links against it.
+#include "../../../src/SealedSnapshot.cpp"
 #include "../../../src/RegisterPersistence.cpp"
 #include "../../../src/RegisterPersistenceRuntime.cpp"
 

@@ -43,6 +43,15 @@ NS_SWIFT_NAME(ShareSenderBridge)
 + (nullable CLPShareSendResult*)sendPayloads:(NSArray<CLPSharePayload*>*)payloads
                                        error:(NSError**)error NS_SWIFT_NAME(send(_:));
 
+// Fallback when no peer was reachable: seal each payload into the app-group
+// inbox (one file per item); the main app ingests them into history — its own
+// and, via the replay lane, the mesh's — the next time it runs. Returns the
+// number of items stashed (an object so the error: convention bridges to a
+// Swift throws); nil with an error when nothing could be saved (e.g. not
+// paired yet).
++ (nullable NSNumber*)stashPayloadsForLaterDelivery:(NSArray<CLPSharePayload*>*)payloads
+                                              error:(NSError**)error NS_SWIFT_NAME(stashForLaterDelivery(_:));
+
 @end
 
 NS_ASSUME_NONNULL_END

@@ -14,8 +14,9 @@
 
 - **Network credentials.** The group name and the cryptographic key derived from your shared passphrase are stored in your operating system's secure credential store — Keychain on iOS and macOS, Credential Manager / DPAPI on Windows. Credentials never leave your device unless you intentionally copy them to another of your own devices to pair it.
 - **Preferences.** Your settings are stored in your operating system's preferences storage (`UserDefaults` on Apple platforms, the Windows registry on Windows). These contain feature toggles and your chosen group name.
-- **Activity history.** Recent clipboard items received from peers are kept in memory only and discarded when Clipp quits. On desktop, Clipp does not write clipboard content to disk.
-- **Named registers.** Registers — the named slots you deliberately save — are persisted on desktop so they survive restarts: one file per group, encrypted with XChaCha20-Poly1305 under a key derived from your group secret. Without your group credentials the file is unreadable. The live clipboard and the activity history are never part of this file.
+- **Activity history.** On desktop, recent clipboard items are kept in memory only and discarded when Clipp quits — desktop Clipp does not write clipboard content to disk. On iOS, where the app is suspended and relaunched constantly, the recent history is persisted inside the app's own sandboxed container as an encrypted blob (XChaCha20-Poly1305, keyed from your group secret), excluded from device backups. Without your group credentials the file is unreadable; deleting the app deletes it.
+- **Named registers.** Registers — the named slots you deliberately save — are persisted on desktop and iOS so they survive restarts: one file per group, encrypted the same way. Without your group credentials the file is unreadable. The live clipboard is never part of this file.
+- **Deferred shares (iOS).** If you share to Clipp while none of your devices are reachable, the shared items are briefly stored — encrypted the same way — in the app's group container until the next time Clipp runs, delivers them, and deletes them.
 
 ## What goes over the network
 

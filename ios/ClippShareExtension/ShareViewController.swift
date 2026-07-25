@@ -130,6 +130,32 @@ final class ShareViewController: UIViewController {
                 feedback: UINotificationFeedbackGenerator.FeedbackType.success
             )
         } catch {
+            // No peer reachable (or the relay failed): stash the items into the
+            // app-group inbox — Clipp delivers them to history everywhere the
+            // next time it runs. Only if the stash ALSO fails (e.g. not paired)
+            // does the share report an error.
+            let stashed = (try? await Task.detached(priority: .userInitiated) {
+                try ShareSenderBridge.stashForLaterDelivery(extraction.payloads)
+            }.value)?.intValue ?? 0
+
+            if stashed > 0 {
+                let itemText = plural(stashed, singular: "item", plural: "items")
+                let savedDetail = "No device was reachable, so Clipp saved \(stashed) \(itemText). They'll be delivered when you next open Clipp."
+                let ignored = ignoredText(extraction.unsupportedCount, fallback: nil)
+                let detail = ([ savedDetail, ignored ]
+                    .compactMap { $0 })
+                    .joined(separator: " ")
+
+                showResult(
+                    symbolName: "clock.badge.checkmark.fill",
+                    tintColor: .systemBlue,
+                    title: "Saved for later",
+                    detail: detail,
+                    feedback: UINotificationFeedbackGenerator.FeedbackType.success
+                )
+                return
+            }
+
             let ignored = ignoredText(extraction.unsupportedCount, fallback: nil)
             let detail = ([ error.localizedDescription, ignored ]
                 .compactMap { $0 })

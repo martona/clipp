@@ -243,6 +243,8 @@ namespace {
         KeyManager::KeyRole::MDNS,
         KeyManager::KeyRole::Fingerprint,
         KeyManager::KeyRole::RegisterStorage,
+        KeyManager::KeyRole::ClipboardStorage,
+        KeyManager::KeyRole::ShareInbox,
     };
 
     constexpr std::array<std::array<char, crypto_kdf_CONTEXTBYTES>, KeyManager::KeyRoleCount> kKeyRoleContexts = {{
@@ -251,6 +253,8 @@ namespace {
         {'C', 'L', 'P', 'M', 'D', 'N', 'S', '1'},
         {'C', 'L', 'P', 'F', 'N', 'G', 'R', '1'},
         {'C', 'L', 'P', 'R', 'E', 'G', 'S', '1'},
+        {'C', 'L', 'P', 'C', 'L', 'I', 'P', '1'},
+        {'C', 'L', 'P', 'I', 'N', 'B', 'X', '1'},
     }};
 
     size_t KeyRoleIndex(KeyManager::KeyRole role) {
@@ -265,6 +269,10 @@ namespace {
             return 3;
         case KeyManager::KeyRole::RegisterStorage:
             return 4;
+        case KeyManager::KeyRole::ClipboardStorage:
+            return 5;
+        case KeyManager::KeyRole::ShareInbox:
+            return 6;
         default:
             return KeyManager::KeyRoleCount;
         }
