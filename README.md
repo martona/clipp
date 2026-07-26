@@ -7,7 +7,7 @@
 
 Clipp is a free, open source, peer-to-peer clipboard sync utility for Windows, macOS, and iOS, with a terminal-only client for Linux. It is built for devices you trust, on a network you control, sharing clipboard text and images without routing your clipboard through the cloud. Having said that, security (mutual authentication and encryption) is [not an afterthought](docs/SECURITY-MODEL.md). The terminal is a first-class citizen and in addition to a GUI, Clipp also supports `clipp copy` and `clipp paste` - think `pbcopy` but network-enabled.
 
-I wrote Clipp because I needed this exact thing, and the usual options kept failing one or more basic tests: not open source, cloud-dependent, not free, or folded into a larger kitchen-sink app whose job was no longer just clipboard sync. Clipp tries to stay lean: discover nearby peers, verify device trust, move clipboard data directly, and otherwise stay out of the way.
+I wrote Clipp because I needed this exact thing, and the usual options kept failing: not open source, cloud-dependent, not free, or folded into a larger kitchen-sink app whose job was not just clipboard sync. Clipp tries to stay lean: discover nearby peers, verify device trust, move clipboard data directly, and otherwise stay out of the way.
 
 Clipp is LAN-only by design. If you want the same workflow across networks, use an overlay network such as Tailscale or ZeroTier and let Clipp keep doing the simple peer-to-peer part.
 
@@ -91,7 +91,11 @@ Direct download links below always point at the **latest published release** —
 
 ### Windows
 
-Download the portable zip ([amd64][win-amd64-zip] / [arm64][win-arm64-zip]), extract it anywhere, and run `clipp.exe`. Alternatively, there's an MSIX installer ([amd64][win-amd64-msix] / [arm64][win-arm64-msix]) if you prefer. The app writes to HKCU\Software\Clipp under the registry, and registers itself to auto-start with Windows, but otherwise leaves your system alone. To undo the latter (and stop Clipp from automatically starting), just use the Exit option in either the tray menu or the main app window. `clipp copy` and `clipp paste` work from the terminal as long as you have Clipp on the path. The app uses a .com shim to enable console operation.
+```sh
+winget install martona.clipp
+```
+
+Or download the portable zip ([amd64][win-amd64-zip] / [arm64][win-arm64-zip]), extract it anywhere, and run `clipp.exe`. Alternatively, there's an MSIX installer ([amd64][win-amd64-msix] / [arm64][win-arm64-msix]) if you prefer. The app writes to HKCU\Software\Clipp under the registry, and registers itself to auto-start with Windows, but otherwise leaves your system alone. To undo the latter (and stop Clipp from automatically starting), just use the Exit option in either the tray menu or the main app window. `clipp copy` and `clipp paste` work from the terminal as long as you have Clipp on the path.
 
 ### macOS
 
