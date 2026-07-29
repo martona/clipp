@@ -1,14 +1,11 @@
-# clipp unit tests (doctest). Compiles the pure engine translation units directly
-# and links only doctest -- no platform code. ClipboardActivityStore.cpp (the
-# container half; the display half lives in ClipboardActivityDisplay.cpp and is
-# NOT built here) reaches the sodium/xxhash/zstd headers via ClipboardPayload.h,
-# so those packages are linked for their include paths and any stray inline
-# references -- no crypto/compression actually runs in these tests.
+# clipp unit tests (doctest). Compiles the engine translation units directly,
+# plus loopback coverage for the shared socket I/O helpers.
 # Added from the root CMakeLists only when CLIPP_BUILD_TESTS is ON.
 find_package(doctest CONFIG REQUIRED)
 find_package(unofficial-sodium CONFIG REQUIRED)
 find_package(xxHash CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
+find_package(Threads REQUIRED)
 
 add_executable(clipp-tests
     test_main.cpp
@@ -20,6 +17,8 @@ add_executable(clipp-tests
     test_clipboard_persistence.cpp
     test_clipboard_activity_store.cpp
     test_popup_model.cpp
+    test_peer_limits.cpp
+    test_socket_io.cpp
     # Logger.cpp satisfies g_logger for ClipboardPayload.h's inline over-cap
     # logging, instantiated by the clipboard-persistence tests. Nothing
     # configures a log file here, so lines go nowhere — that's fine.
@@ -39,6 +38,7 @@ target_link_libraries(clipp-tests PRIVATE
     unofficial-sodium::sodium
     xxHash::xxhash
     zstd::libzstd
+    Threads::Threads
 )
 if (WIN32)
     # ClipboardPersistence.cpp round-trips the wire CLIP-frame byte order via

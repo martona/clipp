@@ -2,6 +2,7 @@
 #include "PeerManager.h"
 #include "PeerDisplay.h"
 #include "HostId.h"
+#include "PeerLimits.h"
 #include "utils.h"
 
 #include <algorithm>
@@ -11,15 +12,6 @@
 #include <iostream>
 
 extern PeerDisplay g_peerDisplay;
-
-namespace {
-
-constexpr std::size_t kMaxPendingIncomingAuthentications = 32;
-constexpr std::size_t kMaxPendingIncomingAuthenticationsPerIp = 8;
-constexpr std::size_t kMaxAuthenticatedIncomingPeers = 127;
-constexpr std::size_t kMaxOutgoingPeers = 127;
-
-}
 
 PeerManager::PeerManager() {
 }
@@ -48,7 +40,7 @@ PeerManager::OutgoingPeerAdmission PeerManager::AddPeer(
 		peers_.begin(), peers_.end(), [](const std::unique_ptr<Peer>& peer) {
 			return peer->connType_ == Peer::ConnType::Outgoing;
 		}));
-	if (outgoingCount >= kMaxOutgoingPeers) {
+	if (!PeerLimits::CanAddOutgoing(outgoingCount)) {
 		return OutgoingPeerAdmission::RejectedPeerLimit;
 	}
 
@@ -87,11 +79,13 @@ PeerManager::IncomingPeerAdmission PeerManager::AddIncomingPeer(
 		}
 	}
 
-	if (pendingGlobal >= kMaxPendingIncomingAuthentications) {
+	const auto pendingAdmission =
+		PeerLimits::EvaluatePendingAuthentication(pendingGlobal, pendingForIp);
+	if (pendingAdmission == PeerLimits::PendingAuthenticationAdmission::RejectedGlobalLimit) {
 		closesocket(socket);
 		return IncomingPeerAdmission::RejectedGlobalAuthLimit;
 	}
-	if (pendingForIp >= kMaxPendingIncomingAuthenticationsPerIp) {
+	if (pendingAdmission == PeerLimits::PendingAuthenticationAdmission::RejectedPerIpLimit) {
 		closesocket(socket);
 		return IncomingPeerAdmission::RejectedPerIpAuthLimit;
 	}
@@ -203,7 +197,7 @@ void PeerManager::BroadcastFrame(const std::array<char, 4>& tag, const std::vect
 
 PeerManager::IncomingPeerEstablishment PeerManager::TryEstablishIncomingPeer() {
 	std::lock_guard<std::mutex> lock(incomingCountMutex_);
-	if (establishedIncomingCount_ >= kMaxAuthenticatedIncomingPeers) {
+	if (!PeerLimits::CanEstablishIncoming(establishedIncomingCount_)) {
 		return IncomingPeerEstablishment::RejectedPeerLimit;
 	}
 	const bool isFirst = (establishedIncomingCount_ == 0);
