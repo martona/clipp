@@ -6,6 +6,7 @@
 #include <mutex>
 #include <vector>
 
+#include "DefensiveLogThrottle.h"
 #include "Peer.h"
 
 class PeerManager {
@@ -60,4 +61,8 @@ private:
 	std::vector<std::unique_ptr<Peer>> peers_;
 	std::mutex incomingCountMutex_;
 	std::size_t establishedIncomingCount_{ 0 };
+	DefensiveLogThrottle globalPendingAuthLog_;
+	DefensiveLogThrottle perIpPendingAuthLog_;
+	DefensiveLogThrottle establishedIncomingLog_;
+	DefensiveLogThrottle outgoingPeerLog_;
 };

@@ -854,8 +854,6 @@ void Peer::ThreadProcRecv() {
 		incomingAuthenticationPending_.store(false);
 		const auto establishment = g_peerManager.TryEstablishIncomingPeer();
 		if (establishment == PeerManager::IncomingPeerEstablishment::RejectedPeerLimit) {
-			log(__FUNCTION__, Logger::Level::DDebug,
-				L"Authenticated incoming peer rejected: incoming peer limit reached.");
 			CloseSocket();
 			running_.store(false);
 			log(__FUNCTION__, Logger::Level::Info, L"Thread exiting");

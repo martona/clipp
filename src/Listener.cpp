@@ -168,12 +168,8 @@ void Listener::ThreadProc() {
 				g_logger.log(__FUNCTION__, Logger::Level::Info, L"Accepted incoming TCP client.");
 				break;
 			case PeerManager::IncomingPeerAdmission::RejectedGlobalAuthLimit:
-				g_logger.log(__FUNCTION__, Logger::Level::DDebug,
-					L"Rejected incoming TCP client: global pending-authentication limit reached.");
-				break;
 			case PeerManager::IncomingPeerAdmission::RejectedPerIpAuthLimit:
-				g_logger.log(__FUNCTION__, Logger::Level::DDebug,
-					L"Rejected incoming TCP client: per-IP pending-authentication limit reached.");
+				// PeerManager emits a rate-limited summary with the live counts.
 				break;
 			case PeerManager::IncomingPeerAdmission::RejectedMissingAddress:
 				g_logger.log(__FUNCTION__, Logger::Level::DDebug,

@@ -102,11 +102,6 @@ public:
                     const auto admission = ForwardAddPeer(peer);
                     inserted.first->second.admitted =
                         admission != PeerManager::OutgoingPeerAdmission::RejectedPeerLimit;
-                    if (!inserted.first->second.admitted) {
-                        g_logger.log("Reconciler", Logger::Level::DDebug,
-                            "Peer '%s' deferred: outgoing peer limit reached.",
-                            peer.deviceName.c_str());
-                    }
                 } else if (it->second.peer.ip != peer.ip || it->second.peer.port != peer.port) {
                     // Endpoint moved: drop the stale connection and reconnect to the new
                     // address (AddPeer alone dedups outgoing peers by hostId, can't update).

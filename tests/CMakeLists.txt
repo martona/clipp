@@ -17,6 +17,7 @@ add_executable(clipp-tests
     test_clipboard_persistence.cpp
     test_clipboard_activity_store.cpp
     test_popup_model.cpp
+    test_defensive_log_throttle.cpp
     test_peer_limits.cpp
     test_socket_io.cpp
     # Logger.cpp satisfies g_logger for ClipboardPayload.h's inline over-cap

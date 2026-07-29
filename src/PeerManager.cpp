@@ -41,6 +41,19 @@ PeerManager::OutgoingPeerAdmission PeerManager::AddPeer(
 			return peer->connType_ == Peer::ConnType::Outgoing;
 		}));
 	if (!PeerLimits::CanAddOutgoing(outgoingCount)) {
+		if (const auto report = outgoingPeerLog_.RecordRejection()) {
+			if (report->firstReport) {
+				g_logger.log(__FUNCTION__, Logger::Level::Warning,
+					L"Defensive limit tripped: outgoing peers; rejected=1, outgoing=%zu/%zu.",
+					outgoingCount, PeerLimits::MaxOutgoingPeers);
+			}
+			else {
+				g_logger.log(__FUNCTION__, Logger::Level::Warning,
+					L"Defensive limit still active: outgoing peers; rejected_since_last_report=%llu, outgoing=%zu/%zu.",
+					static_cast<unsigned long long>(report->rejectedSinceLastReport),
+					outgoingCount, PeerLimits::MaxOutgoingPeers);
+			}
+		}
 		return OutgoingPeerAdmission::RejectedPeerLimit;
 	}
 
@@ -83,10 +96,40 @@ PeerManager::IncomingPeerAdmission PeerManager::AddIncomingPeer(
 		PeerLimits::EvaluatePendingAuthentication(pendingGlobal, pendingForIp);
 	if (pendingAdmission == PeerLimits::PendingAuthenticationAdmission::RejectedGlobalLimit) {
 		closesocket(socket);
+		if (const auto report = globalPendingAuthLog_.RecordRejection()) {
+			if (report->firstReport) {
+				g_logger.log(__FUNCTION__, Logger::Level::Warning,
+					L"Defensive limit tripped: pending authentication (global); rejected=1, pending=%zu/%zu.",
+					pendingGlobal, PeerLimits::MaxPendingIncomingAuthentications);
+			}
+			else {
+				g_logger.log(__FUNCTION__, Logger::Level::Warning,
+					L"Defensive limit still active: pending authentication (global); rejected_since_last_report=%llu, pending=%zu/%zu.",
+					static_cast<unsigned long long>(report->rejectedSinceLastReport),
+					pendingGlobal, PeerLimits::MaxPendingIncomingAuthentications);
+			}
+		}
 		return IncomingPeerAdmission::RejectedGlobalAuthLimit;
 	}
 	if (pendingAdmission == PeerLimits::PendingAuthenticationAdmission::RejectedPerIpLimit) {
 		closesocket(socket);
+		if (const auto report = perIpPendingAuthLog_.RecordRejection()) {
+			if (report->firstReport) {
+				g_logger.log(__FUNCTION__, Logger::Level::Warning,
+					L"Defensive limit tripped: pending authentication (per IP); rejected=1, latest_source=%ls, pending_for_source=%zu/%zu, pending_global=%zu/%zu.",
+					peerIp.c_str(),
+					pendingForIp, PeerLimits::MaxPendingIncomingAuthenticationsPerIp,
+					pendingGlobal, PeerLimits::MaxPendingIncomingAuthentications);
+			}
+			else {
+				g_logger.log(__FUNCTION__, Logger::Level::Warning,
+					L"Defensive limit still active: pending authentication (per IP); rejected_since_last_report=%llu, latest_source=%ls, pending_for_source=%zu/%zu, pending_global=%zu/%zu.",
+					static_cast<unsigned long long>(report->rejectedSinceLastReport),
+					peerIp.c_str(),
+					pendingForIp, PeerLimits::MaxPendingIncomingAuthenticationsPerIp,
+					pendingGlobal, PeerLimits::MaxPendingIncomingAuthentications);
+			}
+		}
 		return IncomingPeerAdmission::RejectedPerIpAuthLimit;
 	}
 
@@ -198,6 +241,19 @@ void PeerManager::BroadcastFrame(const std::array<char, 4>& tag, const std::vect
 PeerManager::IncomingPeerEstablishment PeerManager::TryEstablishIncomingPeer() {
 	std::lock_guard<std::mutex> lock(incomingCountMutex_);
 	if (!PeerLimits::CanEstablishIncoming(establishedIncomingCount_)) {
+		if (const auto report = establishedIncomingLog_.RecordRejection()) {
+			if (report->firstReport) {
+				g_logger.log(__FUNCTION__, Logger::Level::Warning,
+					L"Defensive limit tripped: authenticated incoming peers; rejected=1, incoming=%zu/%zu.",
+					establishedIncomingCount_, PeerLimits::MaxAuthenticatedIncomingPeers);
+			}
+			else {
+				g_logger.log(__FUNCTION__, Logger::Level::Warning,
+					L"Defensive limit still active: authenticated incoming peers; rejected_since_last_report=%llu, incoming=%zu/%zu.",
+					static_cast<unsigned long long>(report->rejectedSinceLastReport),
+					establishedIncomingCount_, PeerLimits::MaxAuthenticatedIncomingPeers);
+			}
+		}
 		return IncomingPeerEstablishment::RejectedPeerLimit;
 	}
 	const bool isFirst = (establishedIncomingCount_ == 0);
