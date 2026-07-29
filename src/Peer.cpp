@@ -852,6 +852,16 @@ void Peer::ThreadProcRecv() {
 		log(__FUNCTION__, Logger::Level::Error, L"Client secure handshake failed.");
 	} else {
 		incomingAuthenticationPending_.store(false);
+		const auto establishment = g_peerManager.TryEstablishIncomingPeer();
+		if (establishment == PeerManager::IncomingPeerEstablishment::RejectedPeerLimit) {
+			log(__FUNCTION__, Logger::Level::DDebug,
+				L"Authenticated incoming peer rejected: incoming peer limit reached.");
+			CloseSocket();
+			running_.store(false);
+			log(__FUNCTION__, Logger::Level::Info, L"Thread exiting");
+			CullStoppedPeersAsync();
+			return;
+		}
 		const SocketIoContext io{ socket, wakeEvent_, stopRequested_, kPeerIoIdleTimeout };
 		{
 			std::lock_guard<std::mutex> lock(dataMutex_);
@@ -869,7 +879,8 @@ void Peer::ThreadProcRecv() {
 		// Activity-stream sync trigger. If this is the first established incoming
 		// peer, ask them for everything we don't have. Tail GUID anchors the
 		// query; all-zero GUID (empty store) means "send me everything you have."
-		const bool firstIncoming = g_peerManager.OnIncomingPeerEstablished();
+		const bool firstIncoming =
+			establishment == PeerManager::IncomingPeerEstablishment::AcceptedFirst;
 		const bool incomingEstablished = true;
 		if (firstIncoming) {
 			// Zero anchor on purpose ("send me your most recent N"): the old

@@ -52,6 +52,8 @@ namespace {
 //    dedups outgoing peers by hostId).
 //  * A genuine departure (no replacement within grace) fires the real removal when the
 //    runtime thread sweeps expired entries.
+//  * If PeerManager's outgoing limit is full, the discovered peer remains tracked but
+//    unadmitted; a genuine departure promotes deferred peers into newly-free slots.
 //
 // The favorable race (the new instance resolves before the old goodbye) never reaches
 // here: discovery's liveByHostId collapse already swallows both events.
@@ -62,12 +64,18 @@ constexpr auto kRemovalGrace = std::chrono::seconds(4);
 constexpr auto kMinRepublishInterval = std::chrono::seconds(10);
 
 class OutgoingReconciler {
+    struct TrackedPeer {
+        MDNSDiscovery::DiscoveredPeer peer;
+        bool admitted = false;
+    };
+
 public:
     void OnEvent(MDNSDiscovery::Event event, const MDNSDiscovery::DiscoveredPeer& peer) {
-        // PeerManager mutations run under our lock so `active_` can't disagree with
-        // PeerManager when two resolves for the same hostId race (Win32 delivers resolve
-        // callbacks on concurrent threads). AddPeer/RemoveOutgoingPeer never reach back
-        // into the reconciler, so the lock order is strictly one-way.
+        // PeerManager mutations run under our lock so each tracked peer's admitted flag
+        // can't disagree with PeerManager when two resolves for the same hostId race
+        // (Win32 delivers resolve callbacks on concurrent threads).
+        // AddPeer/RemoveOutgoingPeer never reach back into the reconciler, so the lock
+        // order is strictly one-way.
         std::function<void()> wakeRuntime;
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -87,27 +95,46 @@ public:
                 pendingRemoval_.erase(peer.hostId);
                 auto it = active_.find(peer.hostId);
                 if (it == active_.end()) {
-                    active_.emplace(peer.hostId, peer);
+                    auto inserted = active_.emplace(peer.hostId, TrackedPeer{ peer, false });
                     g_logger.log("Reconciler", Logger::Level::Debug,
                         "Peer '%s' discovered at %s:%hu; connecting.",
                         peer.deviceName.c_str(), peer.ip.c_str(), peer.port);
-                    ForwardAddPeer(peer);
-                } else if (it->second.ip != peer.ip || it->second.port != peer.port) {
+                    const auto admission = ForwardAddPeer(peer);
+                    inserted.first->second.admitted =
+                        admission != PeerManager::OutgoingPeerAdmission::RejectedPeerLimit;
+                    if (!inserted.first->second.admitted) {
+                        g_logger.log("Reconciler", Logger::Level::DDebug,
+                            "Peer '%s' deferred: outgoing peer limit reached.",
+                            peer.deviceName.c_str());
+                    }
+                } else if (it->second.peer.ip != peer.ip || it->second.peer.port != peer.port) {
                     // Endpoint moved: drop the stale connection and reconnect to the new
                     // address (AddPeer alone dedups outgoing peers by hostId, can't update).
                     g_logger.log("Reconciler", Logger::Level::Debug,
                         "Peer '%s' endpoint changed %s:%hu -> %s:%hu; reconnecting.",
-                        peer.deviceName.c_str(), it->second.ip.c_str(), it->second.port,
+                        peer.deviceName.c_str(), it->second.peer.ip.c_str(), it->second.peer.port,
                         peer.ip.c_str(), peer.port);
-                    it->second = peer;
-                    g_peerManager.RemoveOutgoingPeer(peer.hostId);
-                    ForwardAddPeer(peer);
+                    if (it->second.admitted) {
+                        g_peerManager.RemoveOutgoingPeer(peer.hostId);
+                    }
+                    it->second.peer = peer;
+                    const auto admission = ForwardAddPeer(peer);
+                    it->second.admitted =
+                        admission != PeerManager::OutgoingPeerAdmission::RejectedPeerLimit;
                 } else {
-                    // Pure republish (same hostId + endpoint): the whole point of the
-                    // reconciler is to NOT churn a healthy connection here.
-                    g_logger.log("Reconciler", Logger::Level::Debug,
-                        "Peer '%s' re-announced at unchanged endpoint %s:%hu; keeping live connection.",
-                        peer.deviceName.c_str(), peer.ip.c_str(), peer.port);
+                    if (it->second.admitted) {
+                        // Pure republish (same hostId + endpoint): the whole point of the
+                        // reconciler is to NOT churn a healthy connection here.
+                        g_logger.log("Reconciler", Logger::Level::Debug,
+                            "Peer '%s' re-announced at unchanged endpoint %s:%hu; keeping live connection.",
+                            peer.deviceName.c_str(), peer.ip.c_str(), peer.port);
+                    } else {
+                        // A previously cap-deferred peer may now fit if another outgoing
+                        // worker was removed since its first discovery event.
+                        const auto admission = ForwardAddPeer(peer);
+                        it->second.admitted =
+                            admission != PeerManager::OutgoingPeerAdmission::RejectedPeerLimit;
+                    }
                 }
             }
         }
@@ -116,21 +143,30 @@ public:
 
     void Sweep(std::chrono::steady_clock::time_point now) {
         std::lock_guard<std::mutex> lock(mutex_);
+        bool outgoingSlotFreed = false;
         for (auto it = pendingRemoval_.begin(); it != pendingRemoval_.end();) {
             if (now >= it->second) {
                 const HostId hostId = it->first;
                 std::string deviceName;
                 auto activeIt = active_.find(hostId);
-                if (activeIt != active_.end()) deviceName = activeIt->second.deviceName;
+                if (activeIt != active_.end()) {
+                    deviceName = activeIt->second.peer.deviceName;
+                    if (activeIt->second.admitted) {
+                        g_peerManager.RemoveOutgoingPeer(hostId);
+                        outgoingSlotFreed = true;
+                    }
+                }
                 active_.erase(hostId);
                 it = pendingRemoval_.erase(it);
                 g_logger.log("Reconciler", Logger::Level::Debug,
                     "Peer '%s' removal grace expired with no re-announce; dropping.",
                     deviceName.c_str());
-                g_peerManager.RemoveOutgoingPeer(hostId);
             } else {
                 ++it;
             }
+        }
+        if (outgoingSlotFreed) {
+            AdmitPendingPeers();
         }
     }
 
@@ -159,15 +195,34 @@ public:
     }
 
 private:
-    static void ForwardAddPeer(const MDNSDiscovery::DiscoveredPeer& peer) {
+    static PeerManager::OutgoingPeerAdmission ForwardAddPeer(const MDNSDiscovery::DiscoveredPeer& peer) {
         const std::wstring hostNameW = Utf8ToWideString(peer.deviceName);
         const std::wstring ipW = Utf8ToWideString(peer.ip);
-        g_peerManager.AddPeer(hostNameW.c_str(), peer.hostId, ipW.c_str(), peer.port);
+        return g_peerManager.AddPeer(hostNameW.c_str(), peer.hostId, ipW.c_str(), peer.port);
+    }
+
+    // Called with mutex_ held after one or more admitted peers depart. Fill free
+    // outgoing slots from still-discovered, cap-deferred peers in hostId order.
+    void AdmitPendingPeers() {
+        for (auto& entry : active_) {
+            if (entry.second.admitted || pendingRemoval_.count(entry.first) != 0) {
+                continue;
+            }
+            const auto admission = ForwardAddPeer(entry.second.peer);
+            if (admission == PeerManager::OutgoingPeerAdmission::RejectedPeerLimit) {
+                return;
+            }
+            entry.second.admitted = true;
+            g_logger.log("Reconciler", Logger::Level::Debug,
+                "Peer '%s' admitted after an outgoing slot became available.",
+                entry.second.peer.deviceName.c_str());
+        }
     }
 
     std::mutex mutex_;
-    // Logical peers handed to PeerManager (one per hostId), with their last endpoint.
-    std::map<HostId, MDNSDiscovery::DiscoveredPeer> active_;
+    // Currently discovered peers (one per hostId), including peers deferred when the
+    // 127-outgoing-worker limit is full.
+    std::map<HostId, TrackedPeer> active_;
     // hostId -> deadline after which a deferred Removed becomes real.
     std::map<HostId, std::chrono::steady_clock::time_point> pendingRemoval_;
     // Wakes the runtime thread when a removal is deferred (set by NetworkRuntime).

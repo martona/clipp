@@ -16,6 +16,8 @@ namespace {
 
 constexpr std::size_t kMaxPendingIncomingAuthentications = 32;
 constexpr std::size_t kMaxPendingIncomingAuthenticationsPerIp = 8;
+constexpr std::size_t kMaxAuthenticatedIncomingPeers = 127;
+constexpr std::size_t kMaxOutgoingPeers = 127;
 
 }
 
@@ -26,7 +28,11 @@ PeerManager::~PeerManager() {
 	ClearPeers();
 }
 
-void PeerManager::AddPeer(const wchar_t* hostName, const HostId& hostID, const wchar_t* ip, unsigned short port) {
+PeerManager::OutgoingPeerAdmission PeerManager::AddPeer(
+	const wchar_t* hostName,
+	const HostId& hostID,
+	const wchar_t* ip,
+	unsigned short port) {
 	HostId incomingHostId = hostID;
 
 	std::lock_guard<std::mutex> lock(peersMutex_);
@@ -35,7 +41,15 @@ void PeerManager::AddPeer(const wchar_t* hostName, const HostId& hostID, const w
 	});
 	if (found != peers_.end()) {
 		g_logger.log(__FUNCTION__, Logger::Level::DDebug, L"PeerManager: peer already known; skipping duplicate.");
-		return;
+		return OutgoingPeerAdmission::AlreadyPresent;
+	}
+
+	const std::size_t outgoingCount = static_cast<std::size_t>(std::count_if(
+		peers_.begin(), peers_.end(), [](const std::unique_ptr<Peer>& peer) {
+			return peer->connType_ == Peer::ConnType::Outgoing;
+		}));
+	if (outgoingCount >= kMaxOutgoingPeers) {
+		return OutgoingPeerAdmission::RejectedPeerLimit;
 	}
 
 	auto peer = std::make_unique<Peer>(hostName, &hostID, ip, port, nullptr,
@@ -47,6 +61,7 @@ void PeerManager::AddPeer(const wchar_t* hostName, const HostId& hostID, const w
 	peers_.emplace_back(std::move(peer));
 	peerPtr->Start();
 	g_logger.log(__FUNCTION__, Logger::Level::Debug, L"PeerManager: added new peer (outgoing).");
+	return OutgoingPeerAdmission::Accepted;
 }
 
 PeerManager::IncomingPeerAdmission PeerManager::AddIncomingPeer(
@@ -186,11 +201,16 @@ void PeerManager::BroadcastFrame(const std::array<char, 4>& tag, const std::vect
 	}
 }
 
-bool PeerManager::OnIncomingPeerEstablished() {
+PeerManager::IncomingPeerEstablishment PeerManager::TryEstablishIncomingPeer() {
 	std::lock_guard<std::mutex> lock(incomingCountMutex_);
+	if (establishedIncomingCount_ >= kMaxAuthenticatedIncomingPeers) {
+		return IncomingPeerEstablishment::RejectedPeerLimit;
+	}
 	const bool isFirst = (establishedIncomingCount_ == 0);
 	++establishedIncomingCount_;
-	return isFirst;
+	return isFirst
+		? IncomingPeerEstablishment::AcceptedFirst
+		: IncomingPeerEstablishment::Accepted;
 }
 
 void PeerManager::OnIncomingPeerLeft() {

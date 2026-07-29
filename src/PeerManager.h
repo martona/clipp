@@ -16,10 +16,20 @@ public:
 		RejectedGlobalAuthLimit,
 		RejectedPerIpAuthLimit,
 	};
+	enum class IncomingPeerEstablishment {
+		Accepted,
+		AcceptedFirst,
+		RejectedPeerLimit,
+	};
+	enum class OutgoingPeerAdmission {
+		Accepted,
+		AlreadyPresent,
+		RejectedPeerLimit,
+	};
 
 	PeerManager();
 	~PeerManager();
-	void AddPeer(const wchar_t* hostName, const HostId& hostID, const wchar_t* ip, unsigned short port);
+	OutgoingPeerAdmission AddPeer(const wchar_t* hostName, const HostId& hostID, const wchar_t* ip, unsigned short port);
 	// Takes ownership of socket in every case. Rejected sockets are closed without
 	// constructing a Peer or starting its worker thread.
 	IncomingPeerAdmission AddIncomingPeer(SOCKET socket, Peer::ClipboardReceivedCallback clipboardReceivedCallback);
@@ -40,11 +50,10 @@ public:
 	// CDEL activity-delete broadcast.
 	void BroadcastFrame(const std::array<char, 4>& tag, const std::vector<unsigned char>& body);
 
-	// Tracks how many incoming peers have completed their handshake.
-	// OnIncomingPeerEstablished returns true exactly on the 0→1 transition —
-	// the activity-stream sync trigger. Every call to OnIncomingPeerEstablished
-	// must be paired with one to OnIncomingPeerLeft when the peer goes away.
-	bool OnIncomingPeerEstablished();
+	// Admits at most 127 simultaneously authenticated incoming peers. AcceptedFirst
+	// marks the 0→1 transition used by the activity-stream sync trigger. Every
+	// accepted result must be paired with one OnIncomingPeerLeft call.
+	IncomingPeerEstablishment TryEstablishIncomingPeer();
 	void OnIncomingPeerLeft();
 private:
 	mutable std::mutex peersMutex_;
