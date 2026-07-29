@@ -52,6 +52,7 @@ public:
 	void Start();
 	void Stop();
 	bool isRunning() const;
+	bool isIncomingAuthenticationPending() const;
 
 	std::wstring hostName() const;
 	HostId hostID() const;
@@ -107,6 +108,7 @@ private:
 	std::thread thread_;
 	std::atomic<bool> stopRequested_{ false };
 	std::atomic<bool> running_{ false };
+	std::atomic<bool> incomingAuthenticationPending_{ false };
 	std::atomic<bool> remoteServesRegisters_{ false };
 	std::mutex stopMutex_;
 	std::condition_variable stopCV_;

@@ -162,8 +162,24 @@ void Listener::ThreadProc() {
                 continue;
             }
 
-			g_peerManager.AddPeer(clientSock, clipboardReceivedCallback_);
-            g_logger.log(__FUNCTION__, Logger::Level::Info, L"Accepted incoming TCP client.");
+			const auto admission = g_peerManager.AddIncomingPeer(clientSock, clipboardReceivedCallback_);
+			switch (admission) {
+			case PeerManager::IncomingPeerAdmission::Accepted:
+				g_logger.log(__FUNCTION__, Logger::Level::Info, L"Accepted incoming TCP client.");
+				break;
+			case PeerManager::IncomingPeerAdmission::RejectedGlobalAuthLimit:
+				g_logger.log(__FUNCTION__, Logger::Level::DDebug,
+					L"Rejected incoming TCP client: global pending-authentication limit reached.");
+				break;
+			case PeerManager::IncomingPeerAdmission::RejectedPerIpAuthLimit:
+				g_logger.log(__FUNCTION__, Logger::Level::DDebug,
+					L"Rejected incoming TCP client: per-IP pending-authentication limit reached.");
+				break;
+			case PeerManager::IncomingPeerAdmission::RejectedMissingAddress:
+				g_logger.log(__FUNCTION__, Logger::Level::DDebug,
+					L"Rejected incoming TCP client: source address unavailable.");
+				break;
+			}
         }
 
         CloseListenSocket(listenSock);

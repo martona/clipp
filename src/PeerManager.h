@@ -10,10 +10,19 @@
 
 class PeerManager {
 public:
+	enum class IncomingPeerAdmission {
+		Accepted,
+		RejectedMissingAddress,
+		RejectedGlobalAuthLimit,
+		RejectedPerIpAuthLimit,
+	};
+
 	PeerManager();
 	~PeerManager();
 	void AddPeer(const wchar_t* hostName, const HostId& hostID, const wchar_t* ip, unsigned short port);
-	void AddPeer(SOCKET socket, Peer::ClipboardReceivedCallback clipboardReceivedCallback);
+	// Takes ownership of socket in every case. Rejected sockets are closed without
+	// constructing a Peer or starting its worker thread.
+	IncomingPeerAdmission AddIncomingPeer(SOCKET socket, Peer::ClipboardReceivedCallback clipboardReceivedCallback);
 	void RemovePeer(const HostId& hostID);
 	// Tears down only the outgoing connection for this hostId, leaving any inbound connection
 	// (e.g., from an iOS share extension running alongside the same hostId) intact.

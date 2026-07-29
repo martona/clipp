@@ -2,6 +2,7 @@
 #include "PeerManager.h"
 #include "PeerDisplay.h"
 #include "HostId.h"
+#include "utils.h"
 
 #include <algorithm>
 #include <array>
@@ -10,6 +11,13 @@
 #include <iostream>
 
 extern PeerDisplay g_peerDisplay;
+
+namespace {
+
+constexpr std::size_t kMaxPendingIncomingAuthentications = 32;
+constexpr std::size_t kMaxPendingIncomingAuthenticationsPerIp = 8;
+
+}
 
 PeerManager::PeerManager() {
 }
@@ -41,7 +49,38 @@ void PeerManager::AddPeer(const wchar_t* hostName, const HostId& hostID, const w
 	g_logger.log(__FUNCTION__, Logger::Level::Debug, L"PeerManager: added new peer (outgoing).");
 }
 
-void PeerManager::AddPeer(SOCKET socket, Peer::ClipboardReceivedCallback clipboardReceivedCallback) {
+PeerManager::IncomingPeerAdmission PeerManager::AddIncomingPeer(
+	SOCKET socket,
+	Peer::ClipboardReceivedCallback clipboardReceivedCallback) {
+	const std::string peerIpUtf8 = SocketPeerIp(socket);
+	if (peerIpUtf8.empty()) {
+		closesocket(socket);
+		return IncomingPeerAdmission::RejectedMissingAddress;
+	}
+	const std::wstring peerIp = Utf8ToWideString(peerIpUtf8);
+
+	std::lock_guard<std::mutex> lock(peersMutex_);
+	std::size_t pendingGlobal = 0;
+	std::size_t pendingForIp = 0;
+	for (const auto& existingPeer : peers_) {
+		if (!existingPeer->isIncomingAuthenticationPending()) {
+			continue;
+		}
+		++pendingGlobal;
+		if (existingPeer->ip() == peerIp) {
+			++pendingForIp;
+		}
+	}
+
+	if (pendingGlobal >= kMaxPendingIncomingAuthentications) {
+		closesocket(socket);
+		return IncomingPeerAdmission::RejectedGlobalAuthLimit;
+	}
+	if (pendingForIp >= kMaxPendingIncomingAuthenticationsPerIp) {
+		closesocket(socket);
+		return IncomingPeerAdmission::RejectedPerIpAuthLimit;
+	}
+
 	auto peer = std::make_unique<Peer>(socket, std::move(clipboardReceivedCallback),
 		[](const std::wstring& hostName, const HostId& hostID, OsType osType, Peer::ConnType connType, std::chrono::steady_clock::time_point connectedSince) {
 			g_peerDisplay.NotifyPeer(hostName, hostID, osType, connType, connectedSince);
@@ -50,12 +89,13 @@ void PeerManager::AddPeer(SOCKET socket, Peer::ClipboardReceivedCallback clipboa
 			g_peerDisplay.NotifyPeerBytes(hostID, bytesSent, bytesReceived);
 		});
 	Peer* peerPtr = peer.get();
-	{
-		std::lock_guard<std::mutex> lock(peersMutex_);
-		peers_.emplace_back(std::move(peer));
-	}
+	peers_.emplace_back(std::move(peer));
+	// Start while peersMutex_ is still held so the pending-authentication reservation
+	// becomes visible atomically with admission. The worker may finish immediately, but
+	// asynchronous culling simply waits for this short critical section to end.
 	peerPtr->Start();
 	g_logger.log(__FUNCTION__, Logger::Level::Debug, L"PeerManager: added new peer (incoming).");
+	return IncomingPeerAdmission::Accepted;
 }
 
 void PeerManager::RemovePeer(const HostId& hostID) {

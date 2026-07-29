@@ -115,9 +115,10 @@ Peer::Peer(SOCKET socket, ClipboardReceivedCallback clipboardReceivedCallback, V
 	lastPingReceivedAt_(createdAt_),
 	clipboardReceivedCallback_(std::move(clipboardReceivedCallback)),
 	verifiedCallback_(std::move(verifiedCallback)),
-	trafficCallback_(std::move(trafficCallback)),
-	socket_(socket) {
+	  trafficCallback_(std::move(trafficCallback)),
+	  socket_(socket) {
 	connType_ = ConnType::Incoming;
+	incomingAuthenticationPending_.store(true);
 }
 
 void Peer::log(const char* function, Logger::Level level, const wchar_t* message, ...) const {
@@ -161,6 +162,7 @@ Peer::~Peer() {
 void Peer::Start() {
 	if (!wakeEvent_.Initialize()) {
 		log(__FUNCTION__, Logger::Level::Error, L"Peer: failed to create wake socket.");
+		incomingAuthenticationPending_.store(false);
 		CloseSocket();
 		running_.store(false);
 		CullStoppedPeersAsync();
@@ -191,6 +193,11 @@ void Peer::InterruptibleSleep(std::chrono::milliseconds duration) {
 
 bool Peer::isRunning() const {
 	return running_.load();
+}
+
+bool Peer::isIncomingAuthenticationPending() const {
+	return connType_ == ConnType::Incoming
+		&& incomingAuthenticationPending_.load();
 }
 
 std::wstring Peer::hostName() const {
@@ -844,6 +851,7 @@ void Peer::ThreadProcRecv() {
 	if (socket == INVALID_SOCKET || !SetSocketBlockingMode(socket, false) || !channel.ServerHandshake(handshakeIo, remoteHostId, remoteHostNameUtf8)) {
 		log(__FUNCTION__, Logger::Level::Error, L"Client secure handshake failed.");
 	} else {
+		incomingAuthenticationPending_.store(false);
 		const SocketIoContext io{ socket, wakeEvent_, stopRequested_, kPeerIoIdleTimeout };
 		{
 			std::lock_guard<std::mutex> lock(dataMutex_);
@@ -1106,6 +1114,7 @@ void Peer::ThreadProcRecv() {
 	}
 
 	CloseSocket();
+	incomingAuthenticationPending_.store(false);
 	running_.store(false);
 	CullStoppedPeersAsync();
 	log(__FUNCTION__, Logger::Level::Info, L"Thread exiting");
