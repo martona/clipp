@@ -80,6 +80,11 @@ static const std::array<std::chrono::seconds, 6> g_outgoingBackoff = {
 	std::chrono::seconds(60),
 };
 
+// I/O-idle limits are deliberately progress-based, not absolute operation
+// budgets. Every successfully sent or received byte starts a fresh interval.
+static constexpr auto kHandshakeIoIdleTimeout = std::chrono::seconds(10);
+static constexpr auto kPeerIoIdleTimeout = std::chrono::seconds(90);
+
 static void CullStoppedPeersAsync() {
 	std::thread([]() {
 			g_peerManager.CullPeers();
@@ -636,8 +641,8 @@ void Peer::ThreadProcSend() {
 		}
 		const std::string localHostName = clipp::GetLocalPeerDisplayName("unknown", CryptoChannel::HOSTNAME_MAX_BYTES);
 		SOCKET socket = CurrentSocket();
-		const SocketIoContext io{ socket, wakeEvent_, stopRequested_ };
-		if (socket == INVALID_SOCKET || !channel.ClientHandshake(io, localHostId, localHostName, remoteHostId, remoteHostNameUtf8)) {
+		const SocketIoContext handshakeIo{ socket, wakeEvent_, stopRequested_, kHandshakeIoIdleTimeout };
+		if (socket == INVALID_SOCKET || !channel.ClientHandshake(handshakeIo, localHostId, localHostName, remoteHostId, remoteHostNameUtf8)) {
 			log(__FUNCTION__, Logger::Level::Debug, L"Peer: secure handshake failed.");
 			CloseSocket();
 			if (stopRequested_.load()) break;
@@ -645,6 +650,7 @@ void Peer::ThreadProcSend() {
 			continue;
 		}
 
+		const SocketIoContext io{ socket, wakeEvent_, stopRequested_, kPeerIoIdleTimeout };
 		const std::wstring remoteHostName = Utf8ToWideString(remoteHostNameUtf8);
 		bool hostIDMismatch = false;
 		bool hostNameMismatch = false;
@@ -831,13 +837,14 @@ void Peer::ThreadProcRecv() {
 	HostId remoteHostId;
 	std::string remoteHostNameUtf8;
 	SOCKET socket = CurrentSocket();
-	const SocketIoContext io{ socket, wakeEvent_, stopRequested_ };
+	const SocketIoContext handshakeIo{ socket, wakeEvent_, stopRequested_, kHandshakeIoIdleTimeout };
 	if (socket != INVALID_SOCKET) {
 		ConfigureTcpSocket(socket);
 	}
-	if (socket == INVALID_SOCKET || !SetSocketBlockingMode(socket, false) || !channel.ServerHandshake(io, remoteHostId, remoteHostNameUtf8)) {
+	if (socket == INVALID_SOCKET || !SetSocketBlockingMode(socket, false) || !channel.ServerHandshake(handshakeIo, remoteHostId, remoteHostNameUtf8)) {
 		log(__FUNCTION__, Logger::Level::Error, L"Client secure handshake failed.");
 	} else {
+		const SocketIoContext io{ socket, wakeEvent_, stopRequested_, kPeerIoIdleTimeout };
 		{
 			std::lock_guard<std::mutex> lock(dataMutex_);
 			hostID_ = remoteHostId;
@@ -878,18 +885,11 @@ void Peer::ThreadProcRecv() {
 		// firstIncoming): offer our digest so it pushes back anything we lack.
 		SendRegisterSyncOnConnect(channel, io);
 
-		// Idle deadline: if no traffic arrives for this long, assume the peer is gone (e.g.,
-		// iOS backgrounded the app — the kernel keeps the TCP state alive but the process
-		// can't respond, so the inner RecvFrame would otherwise block indefinitely).
-		// Send-side picks up dead peers within one ping interval (~35s); recv-side mirrors
-		// that with some headroom for jitter and slow networks.
-		constexpr auto kRecvIdleTimeout = std::chrono::seconds(90);
-
 		std::vector<unsigned char> frame;
 		while (!stopRequested_.load()) {
 			// Wrap the recv with a select() that wakes periodically so we can enforce the idle
-			// deadline. RecvFrame's internal RecvAll uses an untimed select(), so
-			// without this wrapper a stale-but-not-closed socket parks the thread forever.
+			// deadline before a frame starts. Once any part of a frame is readable,
+			// RecvFrame enforces the same progress-based timeout between received bytes.
 			fd_set readSet;
 			FD_ZERO(&readSet);
 			FD_SET(io.socket, &readSet);
@@ -913,7 +913,7 @@ void Peer::ThreadProcRecv() {
 			}
 			if (ready == 0 || !FD_ISSET(io.socket, &readSet)) {
 				const auto silence = std::chrono::steady_clock::now() - lastPingReceivedAt();
-				if (silence >= kRecvIdleTimeout) {
+				if (silence >= kPeerIoIdleTimeout) {
 					log(__FUNCTION__, Logger::Level::Info,
 						L"Incoming peer idle for %lld s; closing connection.",
 						static_cast<long long>(std::chrono::duration_cast<std::chrono::seconds>(silence).count()));

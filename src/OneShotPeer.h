@@ -8,12 +8,9 @@
 
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
-#include <mutex>
 #include <optional>
 #include <string>
-#include <thread>
 #include <vector>
 
 // A single-shot outbound peer connection: connect to one discovered peer, run the
@@ -22,9 +19,8 @@
 // no background receive loop, no reconnect, no ping. One connection, one job, torn
 // down on destruction. Shared by the desktop CLI and the iOS share extension.
 //
-// A watchdog thread enforces an overall session deadline: if the exchange stalls,
-// it trips stopRequested_ and wakes the socket so the blocking send/recv helpers
-// (utils_socket.h) bail out instead of parking forever.
+// Every post-connect socket operation uses a sliding I/O-idle timeout: successfully
+// sending or receiving bytes resets the interval, while a stalled operation fails.
 class OneShotPeer {
 public:
     OneShotPeer() = default;
@@ -34,14 +30,14 @@ public:
     OneShotPeer& operator=(const OneShotPeer&) = delete;
 
     // Connect, handshake, and verify the remote identity against expectedHostId.
-    // connectTimeout bounds the TCP connect; sessionDeadline bounds everything after
-    // it (handshake + all subsequent Send/Recv). Returns false on any failure; the
-    // object is then unusable (destroy it). One-shot: call Connect at most once.
+    // connectTimeout bounds the TCP connect; ioIdleTimeout bounds inactivity during
+    // each subsequent send/receive operation. Returns false on any failure; the object
+    // is then unusable (destroy it). One-shot: call Connect at most once.
     bool Connect(const std::string& ip, uint16_t port,
                  const HostId& localHostId, const std::string& localHostNameUtf8,
                  const HostId& expectedHostId,
                  std::chrono::milliseconds connectTimeout,
-                 std::chrono::milliseconds sessionDeadline);
+                 std::chrono::milliseconds ioIdleTimeout);
 
     const HostId& RemoteHostId() const { return remoteHostId_; }
     const CryptoChannel::Caps& RemoteCaps() const { return channel_.RemoteCaps(); }
@@ -63,21 +59,15 @@ private:
     HostId remoteHostId_{};
     std::atomic<bool> stopRequested_{ false };
     bool connected_{ false };
-
-    // Watchdog (session deadline). finished_ signals a clean teardown so the thread
-    // exits its wait without tripping stopRequested_.
-    std::thread deadlineThread_;
-    std::mutex deadlineMutex_;
-    std::condition_variable deadlineCV_;
-    bool finished_{ false };
+    std::chrono::milliseconds ioIdleTimeout_{};
 };
 
 namespace OneShot {
 
-// Shared one-shot timeouts: TCP connect, the whole post-connect session, and the
+// Shared one-shot timeouts: TCP connect, post-connect I/O inactivity, and the
 // give-up ceiling for discovery (hit only when no peer answers).
 constexpr auto kConnectTimeout = std::chrono::seconds(3);
-constexpr auto kSessionTimeout = std::chrono::seconds(30);
+constexpr auto kIoIdleTimeout  = std::chrono::seconds(30);
 constexpr auto kBrowseCeiling  = std::chrono::milliseconds(1200);
 
 // True if `peer` satisfies a --host filter: device name matches case-insensitively

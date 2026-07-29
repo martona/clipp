@@ -13,7 +13,7 @@ bool OneShotPeer::Connect(const std::string& ip, uint16_t port,
                           const HostId& localHostId, const std::string& localHostNameUtf8,
                           const HostId& expectedHostId,
                           std::chrono::milliseconds connectTimeout,
-                          std::chrono::milliseconds sessionDeadline) {
+                          std::chrono::milliseconds ioIdleTimeout) {
     socket_ = ConnectTcpSocket(ip, port, connectTimeout);
     if (socket_ == INVALID_SOCKET) {
         g_logger.log(__FUNCTION__, Logger::Level::Debug, L"OneShotPeer: connect to %hs:%hu failed.", ip.c_str(), port);
@@ -25,16 +25,8 @@ bool OneShotPeer::Connect(const std::string& ip, uint16_t port,
         return false;  // destructor closes socket_
     }
 
-    // Watchdog covers handshake + the caller's whole exchange.
-    deadlineThread_ = std::thread([this, sessionDeadline]() {
-        std::unique_lock<std::mutex> lock(deadlineMutex_);
-        if (!deadlineCV_.wait_for(lock, sessionDeadline, [this]() { return finished_; })) {
-            stopRequested_.store(true);
-            wakeEvent_.Signal();
-        }
-    });
-
-    SocketIoContext io{ socket_, wakeEvent_, stopRequested_ };
+    ioIdleTimeout_ = ioIdleTimeout;
+    SocketIoContext io{ socket_, wakeEvent_, stopRequested_, ioIdleTimeout_ };
     std::string remoteHostNameUtf8;
     if (!channel_.ClientHandshake(io, localHostId, localHostNameUtf8, remoteHostId_, remoteHostNameUtf8)) {
         g_logger.log(__FUNCTION__, Logger::Level::Debug, L"OneShotPeer: handshake with %hs:%hu failed.", ip.c_str(), port);
@@ -52,31 +44,23 @@ bool OneShotPeer::Connect(const std::string& ip, uint16_t port,
 
 bool OneShotPeer::SendClipboardPayload(const ClipboardPayload& payload) {
     if (!connected_) return false;
-    SocketIoContext io{ socket_, wakeEvent_, stopRequested_ };
+    SocketIoContext io{ socket_, wakeEvent_, stopRequested_, ioIdleTimeout_ };
     return ClipboardWire::SendClipboardPayload(channel_, io, payload);
 }
 
 bool OneShotPeer::SendFrame(const char* tag4, const unsigned char* body, uint32_t bodySize) {
     if (!connected_) return false;
-    SocketIoContext io{ socket_, wakeEvent_, stopRequested_ };
+    SocketIoContext io{ socket_, wakeEvent_, stopRequested_, ioIdleTimeout_ };
     return channel_.SendFrame(io, tag4, body, bodySize);
 }
 
 bool OneShotPeer::RecvFrame(std::vector<unsigned char>& out) {
     if (!connected_) return false;
-    SocketIoContext io{ socket_, wakeEvent_, stopRequested_ };
+    SocketIoContext io{ socket_, wakeEvent_, stopRequested_, ioIdleTimeout_ };
     return channel_.RecvFrame(io, out);
 }
 
 void OneShotPeer::Teardown() {
-    {
-        std::lock_guard<std::mutex> lock(deadlineMutex_);
-        finished_ = true;
-    }
-    deadlineCV_.notify_one();
-    if (deadlineThread_.joinable()) {
-        deadlineThread_.join();
-    }
     if (socket_ != INVALID_SOCKET) {
         shutdown(socket_, SD_BOTH);
         closesocket(socket_);
@@ -122,7 +106,7 @@ std::optional<MDNSDiscovery::DiscoveredPeer> RelayPayloads(
             }
             OneShotPeer connection;
             if (!connection.Connect(peer.ip, peer.port, localHostId, localHostName, peer.hostId,
-                                    kConnectTimeout, kSessionTimeout)) {
+                                    kConnectTimeout, kIoIdleTimeout)) {
                 return true;  // unreachable; try the next peer
             }
             // Gate on CAP0_SERVES_RECENT even though that cap names the paste/RCNT path,

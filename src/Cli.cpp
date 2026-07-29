@@ -624,7 +624,7 @@ int RunPaste() {
             VerboseLine(L"Trying " + PeerLabel(peer, localHostId) + L"...");
             OneShotPeer connection;
             if (!connection.Connect(peer.ip, peer.port, localHostId, localHostName, peer.hostId,
-                                    OneShot::kConnectTimeout, OneShot::kSessionTimeout)) {
+                                    OneShot::kConnectTimeout, OneShot::kIoIdleTimeout)) {
                 VerboseLine(L"  unreachable.");
                 return true;  // try the next peer
             }
@@ -797,7 +797,7 @@ bool WithRegisterGateway(const HostId& localHostId, const std::string& localHost
             VerboseLine(L"Trying " + PeerLabel(peer, localHostId) + L"...");
             OneShotPeer connection;
             if (!connection.Connect(peer.ip, peer.port, localHostId, localHostName, peer.hostId,
-                                    OneShot::kConnectTimeout, OneShot::kSessionTimeout)) {
+                                    OneShot::kConnectTimeout, OneShot::kIoIdleTimeout)) {
                 VerboseLine(L"  unreachable.");
                 return true;  // browse: try the next peer
             }
@@ -1564,7 +1564,7 @@ int RunProbe() {
         OneShotPeer connection;
         const bool reachable = connection.Connect(peer.ip, peer.port, localHostId, localHostName,
                                                   peer.hostId, OneShot::kConnectTimeout,
-                                                  OneShot::kSessionTimeout);
+                                                  OneShot::kIoIdleTimeout);
         std::wstring paste = L"-", registers = L"-", put = L"-";
         if (reachable) {
             const auto& caps = connection.RemoteCaps();
@@ -1686,7 +1686,7 @@ int RunMap(int verbosity) {
         VerboseLine(L"Querying " + PeerLabel(peer, localHostId) + L"...");
         OneShotPeer connection;
         if (!connection.Connect(peer.ip, peer.port, localHostId, localHostName, peer.hostId,
-                                OneShot::kConnectTimeout, OneShot::kSessionTimeout)) {
+                                OneShot::kConnectTimeout, OneShot::kIoIdleTimeout)) {
             VerboseLine(L"  unreachable.");
             continue;  // a later address for the same host may still answer
         }

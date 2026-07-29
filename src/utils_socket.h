@@ -110,17 +110,29 @@ private:
 };
 
 struct SocketIoContext {
-	SocketIoContext(SOCKET socketIn, const SocketWakeEvent& wakeEventIn, const std::atomic<bool>& stopRequestedIn)
-		: socket(socketIn), wakeEvent(wakeEventIn), stopRequested(stopRequestedIn) {}
+	SocketIoContext(
+		SOCKET socketIn,
+		const SocketWakeEvent& wakeEventIn,
+		const std::atomic<bool>& stopRequestedIn,
+		std::chrono::milliseconds ioIdleTimeoutIn)
+		: socket(socketIn),
+		  wakeEvent(wakeEventIn),
+		  stopRequested(stopRequestedIn),
+		  ioIdleTimeout(ioIdleTimeoutIn) {}
 
 	SOCKET socket;
 	const SocketWakeEvent& wakeEvent;
 	const std::atomic<bool>& stopRequested;
+	// Maximum time a send or receive operation may go without making byte-level
+	// progress. Zero preserves an untimed wait. Wake events, interrupted calls, and
+	// spurious readiness do not reset the interval.
+	std::chrono::milliseconds ioIdleTimeout;
 };
 
 enum class SocketWaitResult {
 	Ready,
 	Woken,
+	TimedOut,
 	Failed,
 };
 
@@ -257,7 +269,12 @@ static inline SOCKET ConnectTcpSocket(const std::string& ip, unsigned short port
 	return socket;
 }
 
-static inline SocketWaitResult WaitForSocket(SOCKET sock, const SocketWakeEvent* wakeEvent, bool readable, bool writable) {
+static inline SocketWaitResult WaitForSocket(
+	SOCKET sock,
+	const SocketWakeEvent* wakeEvent,
+	bool readable,
+	bool writable,
+	std::chrono::milliseconds timeout) {
 	fd_set readSet;
 	fd_set writeSet;
 	FD_ZERO(&readSet);
@@ -274,13 +291,23 @@ static inline SocketWaitResult WaitForSocket(SOCKET sock, const SocketWakeEvent*
 		maxSock = (std::max)(maxSock, wakeEvent->Socket());
 	}
 
+	timeval wait{};
+	timeval* waitPtr = nullptr;
+	if (timeout > std::chrono::milliseconds::zero()) {
+		wait.tv_sec = static_cast<long>(timeout.count() / 1000);
+		wait.tv_usec = static_cast<decltype(wait.tv_usec)>((timeout.count() % 1000) * 1000);
+		waitPtr = &wait;
+	}
+
 	const int ready = select(static_cast<int>(maxSock) + 1,
 		readable || (wakeEvent != nullptr && wakeEvent->IsValid()) ? &readSet : nullptr,
 		writable ? &writeSet : nullptr,
 		nullptr,
-		nullptr);
+		waitPtr);
 	if (ready == SOCKET_ERROR)
 		return SocketWaitResult::Failed;
+	if (ready == 0)
+		return SocketWaitResult::TimedOut;
 
 	if (wakeEvent != nullptr && wakeEvent->IsValid() && FD_ISSET(wakeEvent->Socket(), &readSet)) {
 		wakeEvent->Drain();
@@ -291,6 +318,29 @@ static inline SocketWaitResult WaitForSocket(SOCKET sock, const SocketWakeEvent*
 		return SocketWaitResult::Ready;
 
 	return SocketWaitResult::Failed;
+}
+
+static inline bool GetSocketIdleWaitTimeout(
+	std::chrono::milliseconds ioIdleTimeout,
+	std::chrono::steady_clock::time_point idleDeadline,
+	std::chrono::milliseconds& waitTimeout) {
+	waitTimeout = std::chrono::milliseconds::zero();
+	if (ioIdleTimeout <= std::chrono::milliseconds::zero()) {
+		return true;
+	}
+
+	const auto now = std::chrono::steady_clock::now();
+	if (now >= idleDeadline) {
+		return false;
+	}
+
+	waitTimeout = std::chrono::duration_cast<std::chrono::milliseconds>(idleDeadline - now);
+	if (waitTimeout <= std::chrono::milliseconds::zero()) {
+		// Preserve the remaining sub-millisecond window instead of turning a
+		// rounded-down zero into WaitForSocket's "no timeout" sentinel.
+		waitTimeout = std::chrono::milliseconds(1);
+	}
+	return true;
 }
 
 static inline unsigned short SocketPeerPort(SOCKET socket) {
@@ -342,11 +392,18 @@ static inline std::string SocketPeerIp(SOCKET socket) {
 
 static inline bool RecvAll(const SocketIoContext& io, char* buffer, int length) {
 	int total = 0;
+	const bool hasIdleTimeout = io.ioIdleTimeout > std::chrono::milliseconds::zero();
+	auto idleDeadline = std::chrono::steady_clock::now() + io.ioIdleTimeout;
 	while (total < length) {
 		if (io.stopRequested.load())
 			return false;
-		const SocketWaitResult waitResult = WaitForSocket(io.socket, &io.wakeEvent, true, false);
-		if (waitResult == SocketWaitResult::Failed)
+
+		std::chrono::milliseconds waitTimeout;
+		if (!GetSocketIdleWaitTimeout(io.ioIdleTimeout, idleDeadline, waitTimeout))
+			return false;
+
+		const SocketWaitResult waitResult = WaitForSocket(io.socket, &io.wakeEvent, true, false, waitTimeout);
+		if (waitResult == SocketWaitResult::Failed || waitResult == SocketWaitResult::TimedOut)
 			return false;
 		if (waitResult == SocketWaitResult::Woken)
 			continue;
@@ -354,6 +411,9 @@ static inline bool RecvAll(const SocketIoContext& io, char* buffer, int length) 
 		const auto received = recv(io.socket, buffer + total, length - total, 0);
 		if (received > 0) {
 			total += static_cast<int>(received);
+			if (hasIdleTimeout) {
+				idleDeadline = std::chrono::steady_clock::now() + io.ioIdleTimeout;
+			}
 			continue;
 		}
 		if (received == 0)
@@ -371,11 +431,18 @@ static inline bool RecvAll(const SocketIoContext& io, char* buffer, int length) 
 
 static inline bool SendAll(const SocketIoContext& io, const char* buffer, int length) {
 	int total = 0;
+	const bool hasIdleTimeout = io.ioIdleTimeout > std::chrono::milliseconds::zero();
+	auto idleDeadline = std::chrono::steady_clock::now() + io.ioIdleTimeout;
 	while (total < length) {
 		if (io.stopRequested.load())
 			return false;
-		const SocketWaitResult waitResult = WaitForSocket(io.socket, &io.wakeEvent, false, true);
-		if (waitResult == SocketWaitResult::Failed)
+
+		std::chrono::milliseconds waitTimeout;
+		if (!GetSocketIdleWaitTimeout(io.ioIdleTimeout, idleDeadline, waitTimeout))
+			return false;
+
+		const SocketWaitResult waitResult = WaitForSocket(io.socket, &io.wakeEvent, false, true, waitTimeout);
+		if (waitResult == SocketWaitResult::Failed || waitResult == SocketWaitResult::TimedOut)
 			return false;
 		if (waitResult == SocketWaitResult::Woken)
 			continue;
@@ -384,6 +451,9 @@ static inline bool SendAll(const SocketIoContext& io, const char* buffer, int le
 		const auto sent = send(io.socket, buffer + total, chunkLength, SocketSendFlags());
 		if (sent > 0) {
 			total += static_cast<int>(sent);
+			if (hasIdleTimeout) {
+				idleDeadline = std::chrono::steady_clock::now() + io.ioIdleTimeout;
+			}
 			continue;
 		}
 		if (sent == 0)
