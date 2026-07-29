@@ -1,6 +1,7 @@
 #include "CryptoChannel.h"
 #include "RegisterConfig.h"
 
+#include <chrono>
 #include <cstring>
 #include <vector>
 
@@ -14,6 +15,7 @@
 namespace {
     constexpr uint32_t kMaxCiphertextMessageBytes = 64u * 1024u * 1024u; // 64 MiB
     constexpr char kHandshakeDoneTag[] = "DONE";
+    constexpr auto kAuthenticationTimeout = std::chrono::seconds(10);
 
     using NetworkKey = std::array<unsigned char, crypto_secretbox_KEYBYTES>;
     using PublicKey = std::array<unsigned char, crypto_kx_PUBLICKEYBYTES>;
@@ -238,6 +240,14 @@ bool CryptoChannel::ClientHandshake(
     HostId& remoteHostId,
     std::string& remoteHostNameUtf8)
 {
+    const SocketIoContext authenticationIo{
+        io.socket,
+        io.wakeEvent,
+        io.stopRequested,
+        io.ioIdleTimeout,
+        std::chrono::steady_clock::now() + kAuthenticationTimeout
+    };
+
     NetworkKey clientToServerKey{};
     NetworkKey serverToClientKey{};
     std::string keyErrorMessage;
@@ -251,12 +261,12 @@ bool CryptoChannel::ClientHandshake(
 
     HandshakePlaintext localPlaintext{};
     FillHandshakePlaintext(localPlaintext, clientKeys.publicKey, localHostId, LocalCaps(), localHostNameUtf8.c_str());
-    if (!SendHandshakeFrame(io, localPlaintext, clientToServerKey)) {
+    if (!SendHandshakeFrame(authenticationIo, localPlaintext, clientToServerKey)) {
         return false;
     }
 
     HandshakePlaintext remotePlaintext{};
-    if (!ReceiveHandshakeFrame(io, serverToClientKey, remotePlaintext)) {
+    if (!ReceiveHandshakeFrame(authenticationIo, serverToClientKey, remotePlaintext)) {
         return false;
     }
 
@@ -268,9 +278,10 @@ bool CryptoChannel::ClientHandshake(
         return false;
     }
 
-    return SendStreamHeader(io, txState_, sessionKeys.tx)
-        && ReceiveStreamHeader(io, rxState_, sessionKeys.rx)
-        && SendHandshakeDone(io);
+    const bool completed = SendStreamHeader(authenticationIo, txState_, sessionKeys.tx)
+        && ReceiveStreamHeader(authenticationIo, rxState_, sessionKeys.rx)
+        && SendHandshakeDone(authenticationIo);
+    return completed && !authenticationIo.AbsoluteDeadlineExpired();
 }
 
 bool CryptoChannel::ServerHandshake(
@@ -278,6 +289,14 @@ bool CryptoChannel::ServerHandshake(
     HostId& remoteHostId,
     std::string& remoteHostNameUtf8)
 {
+    const SocketIoContext authenticationIo{
+        io.socket,
+        io.wakeEvent,
+        io.stopRequested,
+        io.ioIdleTimeout,
+        std::chrono::steady_clock::now() + kAuthenticationTimeout
+    };
+
     NetworkKey clientToServerKey{};
     NetworkKey serverToClientKey{};
     std::string keyErrorMessage;
@@ -287,7 +306,7 @@ bool CryptoChannel::ServerHandshake(
     }
 
     HandshakePlaintext remotePlaintext{};
-    if (!ReceiveHandshakeFrame(io, clientToServerKey, remotePlaintext)) {
+    if (!ReceiveHandshakeFrame(authenticationIo, clientToServerKey, remotePlaintext)) {
         return false;
     }
 
@@ -305,7 +324,7 @@ bool CryptoChannel::ServerHandshake(
 
     HandshakePlaintext localPlaintext{};
     FillHandshakePlaintext(localPlaintext, serverKeys.publicKey, localHostId, LocalCaps(), localHostNameUtf8.data());
-    if (!SendHandshakeFrame(io, localPlaintext, serverToClientKey)) {
+    if (!SendHandshakeFrame(authenticationIo, localPlaintext, serverToClientKey)) {
         return false;
     }
 
@@ -314,9 +333,10 @@ bool CryptoChannel::ServerHandshake(
         return false;
     }
 
-    return ReceiveStreamHeader(io, rxState_, sessionKeys.rx)
-        && SendStreamHeader(io, txState_, sessionKeys.tx)
-        && ReceiveHandshakeDone(io);
+    const bool completed = ReceiveStreamHeader(authenticationIo, rxState_, sessionKeys.rx)
+        && SendStreamHeader(authenticationIo, txState_, sessionKeys.tx)
+        && ReceiveHandshakeDone(authenticationIo);
+    return completed && !authenticationIo.AbsoluteDeadlineExpired();
 }
 
 bool CryptoChannel::SendHandshakeDone(const SocketIoContext& io) {

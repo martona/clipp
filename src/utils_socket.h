@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <optional>
 #include <string>
 
 #include "platform.h"
@@ -114,11 +115,13 @@ struct SocketIoContext {
 		SOCKET socketIn,
 		const SocketWakeEvent& wakeEventIn,
 		const std::atomic<bool>& stopRequestedIn,
-		std::chrono::milliseconds ioIdleTimeoutIn)
+		std::chrono::milliseconds ioIdleTimeoutIn,
+		std::optional<std::chrono::steady_clock::time_point> absoluteDeadlineIn = std::nullopt)
 		: socket(socketIn),
 		  wakeEvent(wakeEventIn),
 		  stopRequested(stopRequestedIn),
-		  ioIdleTimeout(ioIdleTimeoutIn) {}
+		  ioIdleTimeout(ioIdleTimeoutIn),
+		  absoluteDeadline(absoluteDeadlineIn) {}
 
 	SOCKET socket;
 	const SocketWakeEvent& wakeEvent;
@@ -127,6 +130,15 @@ struct SocketIoContext {
 	// progress. Zero preserves an untimed wait. Wake events, interrupted calls, and
 	// spurious readiness do not reset the interval.
 	std::chrono::milliseconds ioIdleTimeout;
+	// Optional non-resetting bound shared by every operation using this context.
+	// Authentication creates a derived context with this set; normal peer and
+	// one-shot session I/O leave it unset.
+	std::optional<std::chrono::steady_clock::time_point> absoluteDeadline;
+
+	bool AbsoluteDeadlineExpired() const {
+		return absoluteDeadline.has_value()
+			&& std::chrono::steady_clock::now() >= *absoluteDeadline;
+	}
 };
 
 enum class SocketWaitResult {
@@ -320,21 +332,30 @@ static inline SocketWaitResult WaitForSocket(
 	return SocketWaitResult::Failed;
 }
 
-static inline bool GetSocketIdleWaitTimeout(
+static inline bool GetSocketWaitTimeout(
 	std::chrono::milliseconds ioIdleTimeout,
 	std::chrono::steady_clock::time_point idleDeadline,
+	const std::optional<std::chrono::steady_clock::time_point>& absoluteDeadline,
 	std::chrono::milliseconds& waitTimeout) {
 	waitTimeout = std::chrono::milliseconds::zero();
-	if (ioIdleTimeout <= std::chrono::milliseconds::zero()) {
+	std::optional<std::chrono::steady_clock::time_point> effectiveDeadline;
+	if (ioIdleTimeout > std::chrono::milliseconds::zero()) {
+		effectiveDeadline = idleDeadline;
+	}
+	if (absoluteDeadline.has_value()
+		&& (!effectiveDeadline.has_value() || *absoluteDeadline < *effectiveDeadline)) {
+		effectiveDeadline = absoluteDeadline;
+	}
+	if (!effectiveDeadline.has_value()) {
 		return true;
 	}
 
 	const auto now = std::chrono::steady_clock::now();
-	if (now >= idleDeadline) {
+	if (now >= *effectiveDeadline) {
 		return false;
 	}
 
-	waitTimeout = std::chrono::duration_cast<std::chrono::milliseconds>(idleDeadline - now);
+	waitTimeout = std::chrono::duration_cast<std::chrono::milliseconds>(*effectiveDeadline - now);
 	if (waitTimeout <= std::chrono::milliseconds::zero()) {
 		// Preserve the remaining sub-millisecond window instead of turning a
 		// rounded-down zero into WaitForSocket's "no timeout" sentinel.
@@ -399,7 +420,7 @@ static inline bool RecvAll(const SocketIoContext& io, char* buffer, int length) 
 			return false;
 
 		std::chrono::milliseconds waitTimeout;
-		if (!GetSocketIdleWaitTimeout(io.ioIdleTimeout, idleDeadline, waitTimeout))
+		if (!GetSocketWaitTimeout(io.ioIdleTimeout, idleDeadline, io.absoluteDeadline, waitTimeout))
 			return false;
 
 		const SocketWaitResult waitResult = WaitForSocket(io.socket, &io.wakeEvent, true, false, waitTimeout);
@@ -438,7 +459,7 @@ static inline bool SendAll(const SocketIoContext& io, const char* buffer, int le
 			return false;
 
 		std::chrono::milliseconds waitTimeout;
-		if (!GetSocketIdleWaitTimeout(io.ioIdleTimeout, idleDeadline, waitTimeout))
+		if (!GetSocketWaitTimeout(io.ioIdleTimeout, idleDeadline, io.absoluteDeadline, waitTimeout))
 			return false;
 
 		const SocketWaitResult waitResult = WaitForSocket(io.socket, &io.wakeEvent, false, true, waitTimeout);
