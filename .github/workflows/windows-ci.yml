@@ -11,8 +11,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write       # Azure OIDC: the launch/exit smoke test signs the exe first,
-                        # because an unsigned uiAccess binary refuses to launch
 
 jobs:
   build:
@@ -123,125 +121,10 @@ jobs:
             throw "Release exe imports non-system runtime/dependency DLLs: $($blocked -join '; ')"
           }
 
-      # ---- launch/exit smoke test -------------------------------------------------
-      # Replays the winget validation harness's launch-and-quit sequence and fails on any
-      # nonzero exit code — it treats one as a failed run (winget-pkgs PR #408205: Clipp
-      # 1.4.0.150 came back "returned exit code: -1073741189" = 0xC000027B,
-      # STATUS_STOWED_EXCEPTION; ../WM_NIGHT died the same way in #393605).
-      #
-      # This MUST test the shipped bits: build_windows.ps1 stamps uiAccess=true into every
-      # Release exe, and an unsigned uiAccess binary REFUSES TO LAUNCH ("A referral was
-      # returned from the server"). Stripping the stamp to make it launchable would test a
-      # binary we never ship, so CI signs first — same Trusted Signing path as the release
-      # workflow — and launches the real thing.
-      #
-      # Signing needs the AZURE_* secrets, which are absent on fork PRs. Those legs skip
-      # the smoke test rather than fail: nothing to verify without a signature.
-      - name: Can we sign? (smoke test needs a signed binary)
-        id: cansign
-        env:
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-        run: |
-          $ok = [bool]$env:AZURE_CLIENT_ID
-          "ok=$($ok.ToString().ToLower())" >> $env:GITHUB_OUTPUT
-          if (-not $ok) {
-            Write-Host "::notice::No signing credentials (fork PR?) — skipping the launch/exit smoke test."
-          }
-
-      - name: Azure login (Trusted Signing)
-        if: steps.cansign.outputs.ok == 'true'
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Sign Windows artifacts
-        if: steps.cansign.outputs.ok == 'true'
-        uses: azure/trusted-signing-action@v0
-        with:
-          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
-          trusted-signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
-          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_CERTIFICATE_PROFILE }}
-          files-folder: ${{ github.workspace }}\build\windows-release
-          files-folder-filter: exe,com
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-          # The action's dependency cache keys are arch-agnostic, so the amd64 and
-          # arm64 matrix legs poison each other's TrustedSigning module cache
-          # (Azure/trusted-signing-action#146). Fresh install costs ~1 min per leg.
-          cache-dependencies: false
-
-      - name: Verify signature and uiAccess stamp
-        if: steps.cansign.outputs.ok == 'true'
-        run: |
-          $exe = ".\build\windows-release\clipp.exe"
-          $sig = Get-AuthenticodeSignature $exe
-          if ($sig.Status -ne 'Valid') {
-            throw "Signature on $exe is not Valid: $($sig.Status) — $($sig.StatusMessage)"
-          }
-          Write-Host "[+] signed by: $($sig.SignerCertificate.Subject)"
-          # Assert we are about to launch a uiAccess binary — the whole point is that the
-          # shipped configuration is what gets exercised.
-          $mt = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\10.*\*\mt.exe" -ErrorAction SilentlyContinue |
-                Sort-Object FullName -Descending | Select-Object -First 1
-          if ($mt) {
-            $manifest = Join-Path $env:RUNNER_TEMP 'shipped.manifest'
-            & $mt.FullName -nologo -inputresource:"$exe;#1" -out:"$manifest" | Out-Null
-            $xml = Get-Content -Raw $manifest
-            if ($xml -match 'uiAccess="true"') { Write-Host '[+] uiAccess=true present (shipped configuration).' }
-            else { Write-Host '::warning::uiAccess=true NOT present in the embedded manifest.' }
-          }
-
-      - name: Enable WER local crash dumps
-        if: steps.cansign.outputs.ok == 'true'
-        run: |
-          # A stowed exception is a WinRT/COM fail-fast: it bypasses unhandled-exception
-          # filters, so Clipp's own crash handler never sees it and writes nothing. WER
-          # LocalDumps catches it at a lower level — the only way to get a dump at all.
-          $dumps = Join-Path $env:RUNNER_TEMP 'werdumps'
-          New-Item -ItemType Directory -Force $dumps | Out-Null
-          $key = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\clipp.exe'
-          New-Item -Path $key -Force | Out-Null
-          Set-ItemProperty -Path $key -Name DumpFolder -Value $dumps -Type ExpandString
-          Set-ItemProperty -Path $key -Name DumpType   -Value 2      -Type DWord   # full dump
-          Set-ItemProperty -Path $key -Name DumpCount  -Value 5      -Type DWord
-          "WER_DUMP_DIR=$dumps" >> $env:GITHUB_ENV
-
-      # -RequireWindow: this runner has a virgin HKCU, so no group key exists and Clipp
-      # must open its first-run XAML-Islands window — the exact path a validation VM takes,
-      # and the one a developer box with a configured key never exercises. If the window
-      # never appears, the island failed to come up: that is a failure, not a shrug.
-      # Graceful path: tray-menu Exit runs main()'s full teardown and must return 0.
-      - name: Smoke test — graceful exit (signed, uiAccess-stamped exe)
-        if: steps.cansign.outputs.ok == 'true'
-        run: .\scripts\exitcode_smoke.ps1 -ExePath ".\build\windows-release\clipp.exe" -RequireWindow -CloseMode TrayExit
-
-      # Harness path: close the main window like Process.CloseMainWindow, then verify the
-      # app stays resident instead of self-terminating. A 0xC000027B here IS the winget
-      # validation failure reproduced — this is the leg that can actually catch it.
-      - name: Smoke test — winget harness sequence
-        if: steps.cansign.outputs.ok == 'true'
-        run: .\scripts\exitcode_smoke.ps1 -ExePath ".\build\windows-release\clipp.exe" -RequireWindow -CloseMode Harness
-
-      - name: Collect crash diagnostics
-        if: failure() && steps.cansign.outputs.ok == 'true'
-        run: |
-          Write-Host '--- Application Error / WER events (last 30 min) ---'
-          Get-WinEvent -FilterHashtable @{
-            LogName = 'Application'; StartTime = (Get-Date).AddMinutes(-30)
-          } -ErrorAction SilentlyContinue |
-            Where-Object { $_.ProviderName -in 'Application Error', 'Windows Error Reporting' -and
-                           $_.Message -match 'clipp' } |
-            ForEach-Object { $_.TimeCreated; $_.Message; '---' }
-          Write-Host "--- Dumps in $env:WER_DUMP_DIR ---"
-          Get-ChildItem $env:WER_DUMP_DIR -ErrorAction SilentlyContinue
-
-      - name: Upload crash dumps
-        if: failure() && steps.cansign.outputs.ok == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: werdumps-${{ matrix.arch }}
-          path: ${{ env.WER_DUMP_DIR }}
-          if-no-files-found: ignore
+      # NOTE: the launch/exit smoke test (scripts/exitcode_smoke.ps1) deliberately does NOT
+      # run here. It has to drive a SIGNED binary — an unsigned uiAccess exe refuses to
+      # launch — and signing on every push/PR would burn Trusted Signing operations for a
+      # check that only matters at release time. It lives in _release.yml instead, where it
+      # runs against the INSTALLED, signed MSIX: the only configuration in which uiAccess is
+      # actually granted (WindowsApps is a secure path), which is what winget's validation
+      # exercises.

@@ -496,8 +496,15 @@ public:
     HWND Hwnd() const { return hwnd_; }
 
     void Destroy() {
-        if (xamlSource_) {
-            xamlSource_.Close();
+        // Island teardown is not allowed to throw: see the note on
+        // PopupWindow::Destroy — an hresult_error escaping here rides out
+        // through a COM boundary and fail-fasts the process.
+        try {
+            if (xamlSource_) {
+                xamlSource_.Close();
+                xamlSource_ = nullptr;
+            }
+        } catch (const winrt::hresult_error&) {
             xamlSource_ = nullptr;
         }
         if (hwnd_ != nullptr) {
@@ -742,18 +749,35 @@ public:
         return translated == TRUE;
     }
 
+    // Teardown must be exception-PROOF, not merely exception-safe. This runs from
+    // the tray window's WM_DESTROY — i.e. inside a window procedure dispatched by
+    // the message loop — and a C++/WinRT hresult_error that escapes into the COM
+    // boundary above us gets converted by RoFailFastWithErrorContext into a
+    // STOWED EXCEPTION (0xC000027B), which no filter and no crash handler can
+    // intercept. That is the exit code winget's install verification reported for
+    // this build (and the same class ../WM_NIGHT hardened its own shutdown
+    // against). Nothing here is worth dying for: every handle is about to be
+    // abandoned by process exit anyway.
     void Destroy() {
-        EndActivityNotifications();
-        toastWindow_.Destroy();
-        previewWindow_.Destroy();
-        if (xamlSource_) {
-            xamlSource_.Close();
+        try {
+            EndActivityNotifications();
+        } catch (const winrt::hresult_error&) {
+        }
+        toastWindow_.Destroy();     // GDI only; cannot throw WinRT
+        previewWindow_.Destroy();   // guards its own island
+        try {
+            if (xamlSource_) {
+                xamlSource_.Close();
+                xamlSource_ = nullptr;
+            }
+        } catch (const winrt::hresult_error&) {
             xamlSource_ = nullptr;
         }
         if (hwnd_ != nullptr) {
             DestroyWindow(hwnd_);
             hwnd_ = nullptr;
         }
+        dispatcher_ = nullptr;
     }
 
 private:
@@ -2667,22 +2691,43 @@ std::unique_ptr<PopupWindow> g_popupWindow;
 
 namespace clipp {
 
+// The three public entry points all run inside the tray window's message
+// pump (hotkey, menu command, WM_DESTROY). A WinRT exception escaping any of
+// them reaches a COM boundary and fail-fasts the process with a stowed
+// exception (0xC000027B) — invisible to crash handlers. The popup is a
+// convenience surface: losing it is always better than taking the app down,
+// so every boundary swallows-and-logs instead.
 void TogglePopupWindow() {
-    if (!g_popupWindow) {
-        g_popupWindow = std::make_unique<PopupWindow>();
+    try {
+        if (!g_popupWindow) {
+            g_popupWindow = std::make_unique<PopupWindow>();
+        }
+        g_popupWindow->Toggle();
+    } catch (const winrt::hresult_error& e) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning,
+            L"Popup toggle failed (0x%08X): %ls", static_cast<uint32_t>(e.code()),
+            e.message().c_str());
+    } catch (...) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning, L"Popup toggle failed.");
     }
-    g_popupWindow->Toggle();
 }
 
 bool PopupPreTranslateMessage(MSG* msg) {
-    return g_popupWindow ? g_popupWindow->PreTranslateMessage(msg) : false;
+    try {
+        return g_popupWindow ? g_popupWindow->PreTranslateMessage(msg) : false;
+    } catch (...) {
+        return false;  // an unrouted key is nothing; a dead process is something
+    }
 }
 
 void DestroyPopupWindow() {
-    if (g_popupWindow) {
-        g_popupWindow->Destroy();
-        g_popupWindow.reset();
+    try {
+        if (g_popupWindow) {
+            g_popupWindow->Destroy();
+        }
+    } catch (...) {
     }
+    g_popupWindow.reset();  // released even if teardown misbehaved
 }
 
 }  // namespace clipp
