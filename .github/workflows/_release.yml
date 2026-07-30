@@ -206,6 +206,84 @@ jobs:
           }
           Write-Host "[+] $msix signed by: $($sig.SignerCertificate.Subject)"
 
+      # ---- MSIX launch/exit smoke test --------------------------------------------
+      # Installs the SIGNED package and drives the app the way winget's validation VM
+      # does — install, launch, close, exit — asserting a clean exit code. This is the
+      # only configuration where uiAccess is genuinely ACTIVE: the package lands in
+      # C:\Program Files\WindowsApps, a secure path, so Windows grants the UIAccess
+      # token. (A loose signed exe outside a secure path silently drops the privilege,
+      # so testing the build directory tests a different app than we ship.)
+      #
+      # Exists because winget-pkgs PR #408205 rejected 1.4.0.150 with
+      # "App Clipp returned exit code: -1073741189" (0xC000027B, STATUS_STOWED_EXCEPTION)
+      # and we could not reproduce it anywhere outside their harness. A stowed exception
+      # is a WinRT/COM fail-fast: it bypasses unhandled-exception filters, so Clipp's own
+      # crash handler never sees it and writes nothing — WER LocalDumps below is the only
+      # way to capture one.
+      #
+      # Failing here BLOCKS the release, which is the point: better a red release job than
+      # a rejected winget submission and a two-week moderation queue.
+      - name: Enable WER local crash dumps (packaged app)
+        run: |
+          $dumps = Join-Path $env:RUNNER_TEMP 'werdumps'
+          New-Item -ItemType Directory -Force $dumps | Out-Null
+          foreach ($image in @('clippmain.exe', 'clipp.exe')) {
+            $key = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\$image"
+            New-Item -Path $key -Force | Out-Null
+            Set-ItemProperty -Path $key -Name DumpFolder -Value $dumps -Type ExpandString
+            Set-ItemProperty -Path $key -Name DumpType   -Value 2      -Type DWord   # full dump
+            Set-ItemProperty -Path $key -Name DumpCount  -Value 5      -Type DWord
+          }
+          "WER_DUMP_DIR=$dumps" >> $env:GITHUB_ENV
+
+      - name: Install signed MSIX
+        run: |
+          $msix = ".\build\msix\clipp-${{ inputs.version }}-${{ matrix.arch }}.msix"
+          Add-AppxPackage -Path $msix
+          $pkg = Get-AppxPackage -Name 'Clipp'
+          if (-not $pkg) { throw 'Clipp package not found after Add-AppxPackage.' }
+          Write-Host "[+] installed $($pkg.PackageFullName)"
+          Write-Host "    install location: $($pkg.InstallLocation)"
+          "CLIPP_AUMID=$($pkg.PackageFamilyName)!Clipp" >> $env:GITHUB_ENV
+
+      # -RequireWindow: the runner has a virgin HKCU, so no group key exists and Clipp
+      # must open its first-run window — the same path a validation VM takes. If the
+      # window never appears, the XAML island failed to initialize under a real UIAccess
+      # token, which is exactly the untested configuration this job exists to cover.
+      - name: Smoke test — packaged app, graceful exit
+        run: .\scripts\exitcode_smoke.ps1 -Aumid $env:CLIPP_AUMID -RequireWindow -CloseMode TrayExit
+
+      # Same package, harness-shaped ending: close the window and verify the app stays
+      # resident (it is a tray app) instead of self-terminating. A 0xC000027B here is the
+      # winget failure reproduced.
+      - name: Smoke test — packaged app, winget harness sequence
+        run: .\scripts\exitcode_smoke.ps1 -Aumid $env:CLIPP_AUMID -RequireWindow -CloseMode Harness
+
+      - name: Collect crash diagnostics
+        if: failure()
+        run: |
+          Write-Host '--- Application Error / WER events (last 30 min) ---'
+          Get-WinEvent -FilterHashtable @{
+            LogName = 'Application'; StartTime = (Get-Date).AddMinutes(-30)
+          } -ErrorAction SilentlyContinue |
+            Where-Object { $_.ProviderName -in 'Application Error', 'Windows Error Reporting' -and
+                           $_.Message -match 'clipp' } |
+            ForEach-Object { $_.TimeCreated; $_.Message; '---' }
+          Write-Host "--- Dumps in $env:WER_DUMP_DIR ---"
+          Get-ChildItem $env:WER_DUMP_DIR -ErrorAction SilentlyContinue
+
+      - name: Upload crash dumps
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: werdumps-${{ matrix.arch }}
+          path: ${{ env.WER_DUMP_DIR }}
+          if-no-files-found: ignore
+
+      - name: Uninstall MSIX
+        if: always()
+        run: Get-AppxPackage -Name 'Clipp' | Remove-AppxPackage -ErrorAction SilentlyContinue
+
       - name: Package artifacts
         run: |
           $ver = "${{ inputs.version }}"

@@ -34,7 +34,13 @@
 # uiAccess from the binary first. On a normal desktop, point this at any signed build.
 
 param(
-    [Parameter(Mandatory)] [string] $ExePath,
+    # Exactly one of these. -ExePath launches a loose exe (note: outside a secure path a
+    # signed uiAccess binary silently runs WITHOUT the privilege). -Aumid activates an
+    # INSTALLED MSIX by "PackageFamilyName!AppId", which is the only way to exercise the
+    # app with uiAccess actually granted — and the way winget's harness runs it.
+    [Parameter(Mandatory, ParameterSetName = 'Exe')] [string] $ExePath,
+    [Parameter(Mandatory, ParameterSetName = 'Package')] [string] $Aumid,
+
     [string] $DumpDir = $env:WER_DUMP_DIR,
     [int] $WindowTimeoutSec = 90,
     [int] $ExitTimeoutSec = 60,
@@ -128,6 +134,33 @@ public static class ClippSmoke
     public static extern bool MiniDumpWriteDump(IntPtr hProcess, uint ProcessId, IntPtr hFile,
         int DumpType, IntPtr ExceptionParam, IntPtr UserStreamParam, IntPtr CallbackParam);
 }
+
+// Packaged-app activation. shell:AppsFolder via Start-Process hands off to the AppX broker
+// and returns no process, so exit codes are unobservable that way; ActivateApplication hands
+// back the PID. This is also the same API App Installer's post-install "Launch" button uses —
+// which is documented to FAIL for Clipp because a sandboxed activation cannot broker a
+// uiAccess launch. If that is what winget's harness hits, this call reproduces it directly.
+[ComImport, Guid("45BA127D-10A8-46EA-8AB7-56EA9078943C")]
+class ApplicationActivationManager { }
+
+[ComImport, Guid("2E941141-7F97-4756-BA1D-9DECDE894A3D"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IApplicationActivationManager
+{
+    void ActivateApplication([MarshalAs(UnmanagedType.LPWStr)] string appUserModelId,
+                             [MarshalAs(UnmanagedType.LPWStr)] string arguments,
+                             uint options, out uint processId);
+}
+
+public static class ClippActivate
+{
+    public static uint Launch(string aumid)
+    {
+        var mgr = (IApplicationActivationManager)(new ApplicationActivationManager());
+        uint pid;
+        mgr.ActivateApplication(aumid, null, 0 /* AO_NONE */, out pid);
+        return pid;
+    }
+}
 '@
 
 $WM_CLOSE     = 0x0010
@@ -182,11 +215,26 @@ function Assert-CleanExit([int] $code)
     throw ("FAIL: nonzero exit code {0} (0x{1:X8})" -f $code, $code)
 }
 
-if (-not (Test-Path $ExePath)) { throw "Not found: $ExePath" }
-
-# Launch like the winget harness: by path, no arguments.
-Write-Host "Launching $ExePath"
-$p = Start-Process -FilePath $ExePath -PassThru
+if ($PSCmdlet.ParameterSetName -eq 'Package') {
+    # Activate the installed package. A failure here is a finding, not an error to paper
+    # over: it is precisely the "sandboxed activation cannot broker a uiAccess launch"
+    # behavior we already see from App Installer's Launch button.
+    Write-Host "Activating $Aumid"
+    try {
+        $pid_ = [ClippActivate]::Launch($Aumid)
+    } catch {
+        throw "FAIL: ActivateApplication('$Aumid') threw: $($_.Exception.Message) — a uiAccess package may be unlaunchable by brokered activation in this environment."
+    }
+    if (-not $pid_) { throw "FAIL: ActivateApplication returned PID 0 for $Aumid." }
+    Write-Host "Activated as PID $pid_"
+    # Hold a Process object so ExitCode stays readable after the process dies.
+    $p = Get-Process -Id $pid_ -ErrorAction Stop
+} else {
+    if (-not (Test-Path $ExePath)) { throw "Not found: $ExePath" }
+    # Launch like a plain double-click: by path, no arguments.
+    Write-Host "Launching $ExePath"
+    $p = Start-Process -FilePath $ExePath -PassThru
+}
 
 # On a clean profile (no group key) Clipp opens its main XAML-Islands window unprompted.
 # Islands cold-start can be slow on a runner, hence the generous timeout.
