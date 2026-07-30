@@ -63,15 +63,17 @@ namespace {
     // manifest's windows.startupTask is the autostart that actually fires; drive it
     // through the StartupTask WinRT API instead.
 
-    // Fire-and-forget enable. Runs on a thread-pool (MTA) thread that outlives the call,
-    // so RequestEnableAsync completes on its own -- a WinRT async op isn't cancelled by
-    // dropping its handle. We neither wait nor inspect the result: if it's DisabledByUser
-    // this is a silent no-op, which is exactly the behavior we want.
+    // Fire-and-forget enable. Runs on a thread-pool (MTA) thread that outlives the call.
+    // We don't care about the RESULT (DisabledByUser is a silent no-op, exactly what we
+    // want) but we MUST co_await it: an abandoned WinRT async operation that faults has
+    // no continuation to hand the error to, so the runtime fail-fasts the process with a
+    // STOWED EXCEPTION (0xC000027B) that no try/catch up the stack can intercept — the
+    // enclosing catch here only ever covered the co_awaited GetAsync.
     winrt::fire_and_forget EnableStartupTaskAsync() {
         try {
             co_await winrt::resume_background();
             auto task = co_await winrt::Windows::ApplicationModel::StartupTask::GetAsync(kStartupTaskId);
-            task.RequestEnableAsync();
+            co_await task.RequestEnableAsync();
         }
         catch (...) {
         }
