@@ -71,17 +71,27 @@ jobs:
       - name: Prepare vcpkg binary cache
         run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
 
-      - name: Cache vcpkg binaries
-        uses: actions/cache@v5
+      # Restore/save split (see windows-ci.yml): vcpkg's ABI hash includes the
+      # toolchain version, so an Xcode/clang image update otherwise deadlocks a
+      # combined actions/cache step into a permanent rebuild loop.
+      - name: Restore vcpkg binary cache
+        uses: actions/cache/restore@v5
         with:
           path: vcpkg-cache
-          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-ios-simulator-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-ios-simulator-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}-ci-${{ github.run_id }}
           restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-vcpkg-ios-simulator-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}-
             ${{ runner.os }}-${{ runner.arch }}-vcpkg-ios-simulator-
             ${{ runner.os }}-${{ runner.arch }}-vcpkg-
 
       - name: Build Release
         run: ./scripts/build_ios.sh --disable-code-signing
+
+      - name: Save vcpkg binary cache
+        uses: actions/cache/save@v5
+        with:
+          path: vcpkg-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-ios-simulator-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}-ci-${{ github.run_id }}
 
       - name: Verify iOS app bundle
         run: |

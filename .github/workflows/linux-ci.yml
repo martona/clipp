@@ -110,20 +110,29 @@ jobs:
       - name: Prepare vcpkg binary cache
         run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
 
-      - name: Cache vcpkg binaries
-        uses: actions/cache@v5
+      # Restore/save split (see windows-ci.yml): a combined actions/cache step
+      # deadlocks into a permanent rebuild loop after any toolchain drift.
+      - name: Restore vcpkg binary cache
+        uses: actions/cache/restore@v5
         with:
           # Same key scheme as the release build-linux job, so CI and release share the
           # warm cache instead of each rebuilding the dependency tree from source.
           path: vcpkg-cache
-          key: linux-${{ matrix.arch }}-glibc231-vcpkg-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}
+          key: linux-${{ matrix.arch }}-glibc231-vcpkg-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}-ci-${{ github.run_id }}
           restore-keys: |
+            linux-${{ matrix.arch }}-glibc231-vcpkg-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}-
             linux-${{ matrix.arch }}-glibc231-vcpkg-
 
       - name: Build Release
         # A synthetic 0.0.0.0 version: nothing in the build/package/smoke path depends on
         # the value (the release pipeline passes the real tag).
         run: bash ./scripts/build_linux.sh --release --version 0.0.0.0
+
+      - name: Save vcpkg binary cache
+        uses: actions/cache/save@v5
+        with:
+          path: vcpkg-cache
+          key: linux-${{ matrix.arch }}-glibc231-vcpkg-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}-ci-${{ github.run_id }}
 
       - name: Unit tests (doctest)
         # The engine + wire tests are pure, portable C++ (no platform code), so one arch

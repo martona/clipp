@@ -95,16 +95,28 @@ jobs:
       - name: Prepare vcpkg binary cache
         run: New-Item -ItemType Directory -Force vcpkg-cache | Out-Null
 
-      - name: Cache vcpkg binaries
-        uses: actions/cache@v5
+      # Restore/save split: vcpkg's ABI hash includes the compiler version, which this
+      # key cannot see — a combined actions/cache step deadlocks after an MSVC image
+      # update (exact key hit -> restores stale binaries -> vcpkg rebuilds -> "cache
+      # hit, not saving"). run_id-suffixed key = always save; prefix restore-keys =
+      # newest prior entry. See windows-ci.yml for the full story.
+      - name: Restore vcpkg binary cache
+        uses: actions/cache/restore@v5
         with:
           path: vcpkg-cache
-          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ matrix.triplet }}-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ matrix.triplet }}-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}-rel-${{ github.run_id }}
           restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ matrix.triplet }}-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}-
             ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ matrix.triplet }}-
 
       - name: Build Release
         run: .\scripts\build_windows.ps1 -BuildType Release -Triplet $env:CLIPP_RELEASE_TRIPLET -VcVarsArch ${{ matrix.vcvars_arch }} -Version "${{ inputs.version }}" -DisableCodeSigning
+
+      - name: Save vcpkg binary cache
+        uses: actions/cache/save@v5
+        with:
+          path: vcpkg-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ matrix.triplet }}-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}-rel-${{ github.run_id }}
 
       - name: Verify Windows artifacts
         run: |
@@ -372,12 +384,17 @@ jobs:
       - name: Prepare vcpkg binary cache
         run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
 
-      - name: Cache vcpkg binaries
-        uses: actions/cache@v5
+      # Restore/save split (see windows-ci.yml): the ABI hash includes the Apple
+      # toolchain version, so an Xcode/clang image update otherwise deadlocks this
+      # cache into a permanent rebuild loop. The job tag (-macos-) keeps this job's
+      # save key distinct from the MAS job, which shares the same restore prefix.
+      - name: Restore vcpkg binary cache
+        uses: actions/cache/restore@v5
         with:
           path: vcpkg-cache
-          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}-macos-${{ github.run_id }}
           restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}-
             ${{ runner.os }}-${{ runner.arch }}-vcpkg-
 
       # Imports the Developer ID Application cert into a temporary keychain
@@ -411,6 +428,12 @@ jobs:
           APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER_ID: ${{ vars.APPLE_API_ISSUER_ID }}
         run: ./scripts/build_macos.sh --version "${{ inputs.version }}" --notarize
+
+      - name: Save vcpkg binary cache
+        uses: actions/cache/save@v5
+        with:
+          path: vcpkg-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}-macos-${{ github.run_id }}
 
       - name: Verify macOS app bundle
         run: |
@@ -580,16 +603,25 @@ jobs:
       - name: Prepare vcpkg binary cache
         run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
 
-      - name: Cache vcpkg binaries
-        uses: actions/cache@v5
+      # Restore/save split (see windows-ci.yml): a container-toolchain change
+      # otherwise deadlocks this cache into a permanent rebuild loop.
+      - name: Restore vcpkg binary cache
+        uses: actions/cache/restore@v5
         with:
           path: vcpkg-cache
-          key: linux-${{ matrix.arch }}-glibc231-vcpkg-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}
+          key: linux-${{ matrix.arch }}-glibc231-vcpkg-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}-rel-${{ github.run_id }}
           restore-keys: |
+            linux-${{ matrix.arch }}-glibc231-vcpkg-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}-
             linux-${{ matrix.arch }}-glibc231-vcpkg-
 
       - name: Build Release
         run: bash ./scripts/build_linux.sh --release --version "${{ inputs.version }}"
+
+      - name: Save vcpkg binary cache
+        uses: actions/cache/save@v5
+        with:
+          path: vcpkg-cache
+          key: linux-${{ matrix.arch }}-glibc231-vcpkg-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}-rel-${{ github.run_id }}
 
       - name: Verify dependency closure
         run: |
@@ -758,16 +790,18 @@ jobs:
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
           mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
 
-      # Same key as build-macos on purpose: build_macos_mas.sh uses the same
-      # deps + triplet (only sandbox entitlements and post-build signing
-      # differ), so the Developer ID job's cache serves this one too.
-      - name: Cache vcpkg binaries
+      # Same restore prefix as build-macos on purpose: build_macos_mas.sh uses the
+      # same deps + triplet (only sandbox entitlements and post-build signing
+      # differ), so the Developer ID job's cache serves this one too. Only the save
+      # key's job tag (-mas-) differs, so the two jobs never collide on a save.
+      - name: Restore vcpkg binary cache
         if: steps.guard.outputs.ok == 'true'
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: vcpkg-cache
-          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}-mas-${{ github.run_id }}
           restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}-
             ${{ runner.os }}-${{ runner.arch }}-vcpkg-
 
       - name: Import App Store signing certificates
@@ -805,6 +839,16 @@ jobs:
           APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER_ID: ${{ vars.APPLE_API_ISSUER_ID }}
         run: ./scripts/build_macos_mas.sh --version "${{ inputs.version }}" --upload
+
+      # always(): Apple-side failures (upload/validation) are routine and must not
+      # discard the vcpkg deps that DID build — every restored-or-built package in
+      # the dir is valid regardless of how the step above ended.
+      - name: Save vcpkg binary cache
+        if: always() && steps.guard.outputs.ok == 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: vcpkg-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}-mas-${{ github.run_id }}
 
       # The vcpkg port logs live only on the runner; without this a dependency
       # build failure is undiagnosable after the fact.
@@ -873,13 +917,14 @@ jobs:
           mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
 
       # DEVICE triplet (arm64-ios), distinct from ios-ci.yml's simulator cache.
-      - name: Cache vcpkg binaries
+      - name: Restore vcpkg binary cache
         if: steps.guard.outputs.ok == 'true'
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: vcpkg-cache
-          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-ios-device-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-ios-device-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}-ios-${{ github.run_id }}
           restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-vcpkg-ios-device-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}-
             ${{ runner.os }}-${{ runner.arch }}-vcpkg-ios-device-
 
       - name: Import App Store signing certificates
@@ -920,6 +965,14 @@ jobs:
           APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER_ID: ${{ vars.APPLE_API_ISSUER_ID }}
         run: bash ./scripts/build_ios_appstore.sh --version "${{ inputs.version }}" --upload
+
+      # always(): see the MAS job — a failed upload must not discard built deps.
+      - name: Save vcpkg binary cache
+        if: always() && steps.guard.outputs.ok == 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: vcpkg-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-ios-device-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}-ios-${{ github.run_id }}
 
       - name: Upload vcpkg failure logs
         if: failure() && steps.guard.outputs.ok == 'true'

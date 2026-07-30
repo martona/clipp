@@ -85,16 +85,31 @@ jobs:
       - name: Prepare vcpkg binary cache
         run: New-Item -ItemType Directory -Force vcpkg-cache | Out-Null
 
-      - name: Cache vcpkg binaries
-        uses: actions/cache@v5
+      # Restore/save are split because vcpkg's binary-cache entries are keyed by an ABI
+      # hash that includes the COMPILER version, which actions/cache's key cannot see.
+      # When a runner-image update rolls MSVC, every stored package goes stale, vcpkg
+      # rebuilds — and a combined actions/cache step then refuses to save the fresh
+      # binaries because the primary key still hits ("cache hit, not saving"). The
+      # run_id suffix makes every run's key unique so the save ALWAYS happens; the
+      # prefix restore-keys pick up the newest prior entry. Compiler drift then costs
+      # one rebuild, not a permanent rebuild loop.
+      - name: Restore vcpkg binary cache
+        uses: actions/cache/restore@v5
         with:
           path: vcpkg-cache
-          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ matrix.triplet }}-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ matrix.triplet }}-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}-ci-${{ github.run_id }}
           restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ matrix.triplet }}-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}-
             ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ matrix.triplet }}-
 
       - name: Build Release
         run: .\scripts\build_windows.ps1 -BuildType Release -Triplet $env:CLIPP_RELEASE_TRIPLET -VcVarsArch ${{ matrix.vcvars_arch }} -DisableCodeSigning
+
+      - name: Save vcpkg binary cache
+        uses: actions/cache/save@v5
+        with:
+          path: vcpkg-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ matrix.triplet }}-${{ hashFiles('src/vcpkg.json', 'src/vcpkg-triplets/**') }}-ci-${{ github.run_id }}
 
       - name: Verify Windows artifacts
         run: |
