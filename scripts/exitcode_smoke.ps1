@@ -14,8 +14,9 @@
 # Sequence, mirroring the harness: launch the exe with NO arguments; wait for the main XAML-
 # Islands window (on a clean profile there is no group key, so Clipp opens it by itself —
 # the same first-run path a validation VM takes, and the riskiest surface in the app); close
-# it with WM_CLOSE; exit through the tray window (WM_COMMAND/ID_TRAY_EXIT, the full teardown
-# path); assert exit code 0.
+# it with WM_CLOSE (which HIDES it — Clipp is a tray app and keeps the HWND for reuse, so
+# this waits for the window to stop SHOWING, not to be destroyed); then exit through the
+# tray window (WM_COMMAND/ID_TRAY_EXIT, the full teardown path); assert exit code 0.
 #
 # NOTE on the first-run window: it appears only when no group key is configured. On a
 # developer box that HAS one, Clipp starts to the tray with no window at all and this script
@@ -37,7 +38,20 @@ param(
     [string] $DumpDir = $env:WER_DUMP_DIR,
     [int] $WindowTimeoutSec = 90,
     [int] $ExitTimeoutSec = 60,
-    [switch] $RequireWindow
+    [switch] $RequireWindow,
+
+    # How to end the run:
+    #   TrayExit — the graceful path a user takes: tray menu Exit (WM_COMMAND/ID_TRAY_EXIT)
+    #              -> WM_CLOSE -> WM_DESTROY -> PostQuitMessage -> main()'s full teardown
+    #              (network stop, register-persistence flush, WSACleanup) -> exit 0.
+    #              Asserts a clean exit code.
+    #   Harness  — what winget's validation actually does: close the main window the way
+    #              .NET's Process.CloseMainWindow() does, observe that the app correctly
+    #              stays resident (it is a tray app), then force-kill it. The assertion
+    #              here is INVERTED: the app must NOT die on its own. A self-termination
+    #              with 0xC000027B is the winget failure, reproduced.
+    [ValidateSet('TrayExit', 'Harness')]
+    [string] $CloseMode = 'TrayExit'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -65,6 +79,16 @@ public static class ClippSmoke
 
     [DllImport("user32.dll")]
     public static extern bool IsWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll", EntryPoint = "IsWindowVisible")]
+    static extern bool IsWindowVisibleNative(IntPtr hWnd);
+
+    // Clipp HIDES its main window on close and keeps the HWND for reuse (it is a tray
+    // app), so "closed" means gone-or-hidden, never destroyed.
+    public static bool IsWindowShowing(IntPtr hWnd)
+    {
+        return IsWindow(hWnd) && IsWindowVisibleNative(hWnd);
+    }
 
     delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
     [DllImport("user32.dll")]
@@ -209,19 +233,44 @@ Start-Sleep -Seconds 5
 
 Write-Host 'Closing the main window (WM_CLOSE)...'
 [void][ClippSmoke]::PostMessage($dialog, $WM_CLOSE, [UIntPtr]::Zero, [IntPtr]::Zero)
+# Success is the window no longer SHOWING. Clipp hides it and keeps the HWND alive for the
+# next open, so IsWindow() stays true forever and must not be the condition — the island's
+# teardown-on-hide is what we are exercising here, not window destruction.
 $deadline = (Get-Date).AddSeconds(15)
-while ((Get-Date) -lt $deadline -and [ClippSmoke]::IsWindow($dialog)) {
+while ((Get-Date) -lt $deadline -and [ClippSmoke]::IsWindowShowing($dialog)) {
     Start-Sleep -Milliseconds 250
 }
-if ([ClippSmoke]::IsWindow($dialog)) {
-    Invoke-HangAutopsy $p 'main-window-wont-close'
-    throw 'Main window did not close on WM_CLOSE.'
+if ([ClippSmoke]::IsWindowShowing($dialog)) {
+    Invoke-HangAutopsy $p 'main-window-wont-hide'
+    throw 'Main window did not hide on WM_CLOSE.'
 }
+Write-Host 'Main window closed (hidden; app stays resident, as designed).'
 if ($p.HasExited) {
-    # Closing the window should leave the app alive in the tray; dying here is itself a bug.
+    # Closing the window must leave the app alive in the tray; dying here is itself a bug.
     Write-Host 'App exited on WM_CLOSE of the main window (expected: stays resident in tray).'
     Assert-CleanExit $p.ExitCode
     throw 'FAIL: the app terminated when its main window closed; it should remain in the tray.'
+}
+
+if ($CloseMode -eq 'Harness') {
+    # Replay the validation harness: the main window is already closed (above, the same
+    # WM_CLOSE that .NET's Process.CloseMainWindow posts). A tray app is SUPPOSED to keep
+    # running. Give it room to die of its own accord — that self-termination, not our kill,
+    # is what produced "App Clipp returned exit code: -1073741189".
+    Write-Host "Harness mode: watching for ${ExitTimeoutSec}s to see if the app self-terminates..."
+    if ($p.WaitForExit($ExitTimeoutSec * 1000)) {
+        Write-Host ("App exited ON ITS OWN after its window was closed: {0} (0x{1:X8})" -f $p.ExitCode, $p.ExitCode)
+        if ($p.ExitCode -eq -1073741189) {
+            throw 'FAIL: exit code 0xC000027B (stowed exception) after window close — the winget validation failure, REPRODUCED.'
+        }
+        throw ("FAIL: app self-terminated ({0} / 0x{1:X8}); a tray app must stay resident after its window closes." -f $p.ExitCode, $p.ExitCode)
+    }
+    Write-Host 'Still resident, as designed. Force-killing the way the harness does...'
+    Stop-Process -Id $p.Id -Force
+    $p.WaitForExit(15000) | Out-Null
+    Write-Host ("Exit code after force-kill: {0} (0x{1:X8}) — not meaningful; the kill sets it." -f $p.ExitCode, $p.ExitCode)
+    Write-Host 'PASS: survived the harness sequence without self-terminating.'
+    return
 }
 
 Write-Host 'Exiting via the tray window (WM_COMMAND / ID_TRAY_EXIT)...'

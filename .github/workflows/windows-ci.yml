@@ -213,9 +213,17 @@ jobs:
       # must open its first-run XAML-Islands window — the exact path a validation VM takes,
       # and the one a developer box with a configured key never exercises. If the window
       # never appears, the island failed to come up: that is a failure, not a shrug.
-      - name: Launch/exit smoke test (signed, uiAccess-stamped exe)
+      # Graceful path: tray-menu Exit runs main()'s full teardown and must return 0.
+      - name: Smoke test — graceful exit (signed, uiAccess-stamped exe)
         if: steps.cansign.outputs.ok == 'true'
-        run: .\scripts\exitcode_smoke.ps1 -ExePath ".\build\windows-release\clipp.exe" -RequireWindow
+        run: .\scripts\exitcode_smoke.ps1 -ExePath ".\build\windows-release\clipp.exe" -RequireWindow -CloseMode TrayExit
+
+      # Harness path: close the main window like Process.CloseMainWindow, then verify the
+      # app stays resident instead of self-terminating. A 0xC000027B here IS the winget
+      # validation failure reproduced — this is the leg that can actually catch it.
+      - name: Smoke test — winget harness sequence
+        if: steps.cansign.outputs.ok == 'true'
+        run: .\scripts\exitcode_smoke.ps1 -ExePath ".\build\windows-release\clipp.exe" -RequireWindow -CloseMode Harness
 
       - name: Collect crash diagnostics
         if: failure() && steps.cansign.outputs.ok == 'true'
