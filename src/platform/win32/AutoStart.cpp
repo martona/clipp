@@ -73,8 +73,7 @@ namespace {
         try {
             co_await winrt::resume_background();
             auto task = co_await winrt::Windows::ApplicationModel::StartupTask::GetAsync(kStartupTaskId);
-            // TEMPORARY REMOVAL TO REPRO 0xC000027B ON GH CI
-            /*co_await*/ task.RequestEnableAsync();
+            co_await task.RequestEnableAsync();
         }
         catch (...) {
         }
