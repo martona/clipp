@@ -27,11 +27,6 @@
 # On any timeout the script enumerates every window the process owns and writes a full
 # minidump of the LIVE process into -DumpDir (defaults to $env:WER_DUMP_DIR) before killing
 # it, so a hang is as diagnosable as a crash.
-#
-# The exe must be launchable in the calling environment. A uiAccess-manifested build will not
-# launch AT ALL where UAC is disabled (GitHub-hosted runners: EnableLUA=0 means Windows
-# cannot mint a UIAccess token, so CreateProcess fails outright) — the CI workflow strips
-# uiAccess from the binary first. On a normal desktop, point this at any signed build.
 
 param(
     # Exactly one of these. -ExePath launches a loose exe (note: outside a secure path a
@@ -133,6 +128,43 @@ public static class ClippSmoke
     [DllImport("dbghelp.dll", SetLastError = true)]
     public static extern bool MiniDumpWriteDump(IntPtr hProcess, uint ProcessId, IntPtr hFile,
         int DumpType, IntPtr ExceptionParam, IntPtr UserStreamParam, IntPtr CallbackParam);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool OpenProcessToken(IntPtr hProcess, uint access, out IntPtr hToken);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool GetTokenInformation(IntPtr hToken, int infoClass, out uint info, uint len, out uint retLen);
+    [DllImport("kernel32.dll")]
+    static extern bool CloseHandle(IntPtr h);
+
+    // Whether the process token carries the UIAccess flag (TokenUIAccess, class 26) — i.e.
+    // Windows actually granted the manifest's uiAccess request, the configuration whose
+    // faults this test exists to catch. Opens its own PROCESS_QUERY_LIMITED_INFORMATION
+    // handle: that right is grantable across the UIPI/integrity boundary a UIAccess target
+    // sits behind, where the PROCESS_ALL_ACCESS handle .NET's Process.Handle wants is not.
+    // Returns 1 (granted), 0 (not granted), or the negated Win32 error on failure.
+    public static int GetUIAccess(uint pid)
+    {
+        IntPtr proc = OpenProcess(0x1000 /* PROCESS_QUERY_LIMITED_INFORMATION */, false, pid);
+        if (proc == IntPtr.Zero)
+            return -Marshal.GetLastWin32Error();
+        IntPtr token = IntPtr.Zero;
+        try
+        {
+            if (!OpenProcessToken(proc, 0x0008 /* TOKEN_QUERY */, out token))
+                return -Marshal.GetLastWin32Error();
+            uint val, len;
+            if (!GetTokenInformation(token, 26 /* TokenUIAccess */, out val, 4, out len))
+                return -Marshal.GetLastWin32Error();
+            return val != 0 ? 1 : 0;
+        }
+        finally
+        {
+            if (token != IntPtr.Zero) CloseHandle(token);
+            CloseHandle(proc);
+        }
+    }
 }
 
 // Packaged-app activation. shell:AppsFolder via Start-Process hands off to the AppX broker
@@ -234,6 +266,22 @@ if ($PSCmdlet.ParameterSetName -eq 'Package') {
     # Launch like a plain double-click: by path, no arguments.
     Write-Host "Launching $ExePath"
     $p = Start-Process -FilePath $ExePath -PassThru
+}
+
+# Report whether Windows actually granted the manifest's uiAccess request. Without the token
+# a green run says nothing about the uiAccess configuration winget validates — the packaged
+# case warns loudly rather than failing, so the exit-code reading below still happens.
+$ui = [ClippSmoke]::GetUIAccess([uint32]$p.Id)
+if ($ui -eq 1) {
+    Write-Host 'UIAccess token: GRANTED'
+} elseif ($ui -eq 0) {
+    if ($PSCmdlet.ParameterSetName -eq 'Package') {
+        Write-Host '::warning::UIAccess token NOT granted to the packaged app — this run does not exercise the uiAccess configuration winget validates.'
+    } else {
+        Write-Host 'UIAccess token: not granted (expected for a loose exe outside a secure path).'
+    }
+} else {
+    Write-Host ("UIAccess token: unreadable (Win32 {0})" -f (-$ui))
 }
 
 # On a clean profile (no group key) Clipp opens its main XAML-Islands window unprompted.
