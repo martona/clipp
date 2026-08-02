@@ -16,6 +16,7 @@
 
 #include "Logger.h"
 #include "AutoStart.h"
+#include "SendTo.h"
 #include "ClipboardFlowUi.h"
 #include "Settings.h"
 #include "resource.h"
@@ -369,6 +370,7 @@ LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                 break;
             case ID_TRAY_EXIT:
                 UnregisterClippAutoStart();
+                UnregisterClippSendTo();
                 PostMessageW(hwnd, WM_CLOSE, 0, 0);
                 break;
             }

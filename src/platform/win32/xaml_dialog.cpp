@@ -9,6 +9,7 @@
 #include "AboutPage.h"
 #include "SettingsPage.h"
 #include "AutoStart.h"
+#include "SendTo.h"
 #include "resource.h"
 #include "platform/uistrings.h"
 
@@ -696,6 +697,7 @@ private:
 
     void ExitApplication() {
         UnregisterClippAutoStart();
+        UnregisterClippSendTo();
 
         if (owner_ && IsWindow(owner_)) {
             PostMessageW(owner_, WM_CLOSE, 0, 0);

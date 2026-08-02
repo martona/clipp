@@ -28,6 +28,19 @@
 #define CLP_UI_SECRET_TOO_SHORT "Passphrase must be at least 8 characters."
 #define CLP_UI_WORKING "... working ..."
 
+// Explorer "Send To -> Clipp" helper (Windows). Fixed phrases only; per-file
+// error lines are assembled as "<filename>: <phrase>" in SendTo.cpp.
+#define CLP_UI_SENDTO_DESCRIPTION "Send to your Clipp clipboard"
+#define CLP_UI_SENDTO_ERR_NO_FILES "Nothing to send."
+#define CLP_UI_SENDTO_ERR_STARTUP "Clipp failed to start up for sending."
+#define CLP_UI_SENDTO_ERR_NOT_PAIRED "This device isn't paired yet. Open Clipp and join a group first."
+#define CLP_UI_SENDTO_ERR_NO_GATEWAY "Could not reach any Clipp device to accept the content."
+#define CLP_UI_SENDTO_ERR_UNREADABLE "could not be read."
+#define CLP_UI_SENDTO_ERR_TOO_LARGE "is too large to share."
+#define CLP_UI_SENDTO_ERR_EMPTY "is empty."
+#define CLP_UI_SENDTO_ERR_NOT_TEXT "isn't a PNG, JPEG, or text file."
+#define CLP_UI_SENDTO_ERR_ENCODE "could not be encoded."
+
 #define CLP_UI_CLIPBOARD "Clipboard"
 #define CLP_UI_CLIPBOARD_EMPTY "Your clipboard syncs automatically. Recent text and images will appear here for reference."
 #define CLP_UI_NO_NETWORK_KEY_CONFIGURED "Not paired yet"

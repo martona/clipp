@@ -12,9 +12,11 @@ namespace clipp {
 // `#if defined(_WIN32) || defined(__APPLE__)`.
 
 // App state files (the sealed register snapshot lives here), created:
-//   * Windows -> %LOCALAPPDATA%\Clipp\state  (under MSIX the write lands in
-//                the package's virtualized LocalAppData — exactly the scoping
-//                we want)
+//   * Windows -> %LOCALAPPDATA%\Clipp\state  (the REAL location even under
+//                MSIX: the package disables file-system write virtualization
+//                so the SendTo shortcut can reach the real shell:SendTo folder
+//                — see AppxManifest.xml.in. Settings/key/host id are registry
+//                and stay package-virtualized.)
 //   * macOS   -> ~/Library/Application Support/Clipp  (container-mapped under
 //                the MAS sandbox)
 bool ResolveStateDirectory(std::string& outUtf8Dir);

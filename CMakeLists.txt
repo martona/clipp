@@ -232,15 +232,16 @@ if (WIN32)
     # The GUI binary compiles NO command line -- clipp.com (clipp-win32-cli) owns
     # that now, and this exe's CLI path was dead in production anyway (it's uiAccess,
     # so it can't be terminal-launched; the MSIX GUI starts arg-less via the Start
-    # tile). Dropping Cli.cpp takes CLI11 (header-only, instantiated only there) and
-    # OneShotPeer.cpp (Windows: referenced only by Cli.cpp) out of the binary.
-    # InitializeSodium moved to SodiumInit.cpp so it survives the cut; CLIPP_NO_CLI
-    # makes main() skip cli::Run and go straight to the GUI. (macOS keeps Cli.cpp --
-    # there the single app binary IS the CLI; this is a Windows-only trim.)
+    # tile). Dropping Cli.cpp takes CLI11 (header-only, instantiated only there) out
+    # of the binary. OneShotPeer.cpp stays: the Explorer SendTo handler
+    # (platform/win32/SendTo.cpp, dispatched on --sendto in main.cpp) relays through
+    # a gateway the same way `clipp copy` does. InitializeSodium moved to
+    # SodiumInit.cpp so it survives the cut; CLIPP_NO_CLI makes main() skip cli::Run
+    # and go straight to the GUI. (macOS keeps Cli.cpp -- there the single app
+    # binary IS the CLI; this is a Windows-only trim.)
     set(CLIPP_WIN32_GUI_SOURCES ${CLIPP_COMMON_SOURCES})
     list(REMOVE_ITEM CLIPP_WIN32_GUI_SOURCES
         "${CMAKE_CURRENT_SOURCE_DIR}/src/Cli.cpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/OneShotPeer.cpp"
     )
     add_executable(clipp-win32 WIN32
         ${CLIPP_WIN32_GUI_SOURCES}

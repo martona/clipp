@@ -15,6 +15,7 @@
 #include "Cli.h"
 #else
 #include "platform/win32/CrashHandler.h"  // cli::Run installs this on the other builds
+#include "platform/win32/SendTo.h"
 #endif
 #include "KeyManager.h"
 #include "Settings.h"
@@ -340,6 +341,13 @@ int main(int argc, char* argv[]) {
     (void)argc;
     (void)argv;
     clipp::InstallCrashHandler();
+
+    // Explorer "Send To -> Clipp": one-shot relay of the named files to the mesh.
+    // Runs BEFORE the single-instance gate — the helper must neither disturb nor
+    // be deflected by the running tray daemon — and never falls through to the GUI.
+    if (auto sendToExitCode = RunSendToIfRequested()) {
+        return *sendToExitCode;
+    }
 #endif
 
 #ifdef CLIPP_NO_DAEMON
@@ -370,6 +378,13 @@ int main(int argc, char* argv[]) {
     if (!IsMacAppStoreBuild()) {
         RegisterClippAutoStart();
     }
+
+#if defined(_WIN32) && defined(CLIPP_NO_CLI)
+    // Explorer SendTo entry, same lifecycle as autostart: refreshed every launch,
+    // removed on manual exit (tray.cpp / xaml_dialog.cpp). GUI binary only — the
+    // .lnk must point at this exe, which handles --sendto above.
+    RegisterClippSendTo();
+#endif
 
     #ifdef _WIN32
         WSADATA wsaData;

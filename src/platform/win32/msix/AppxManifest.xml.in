@@ -50,7 +50,8 @@
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
   xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  IgnorableNamespaces="uap uap5 rescap">
+  xmlns:desktop6="http://schemas.microsoft.com/appx/manifest/desktop/windows10/6"
+  IgnorableNamespaces="uap uap5 rescap desktop6">
 
   <Identity
     Name="@IDENTITY_NAME@"
@@ -62,6 +63,19 @@
     <DisplayName>Clipp</DisplayName>
     <PublisherDisplayName>@PUBLISHER_DISPLAY_NAME@</PublisherDisplayName>
     <Logo>Images\StoreLogo.png</Logo>
+    <!-- File writes land in the REAL file system, not the per-package overlay.
+         Needed by the Explorer SendTo integration: the Clipp.lnk must land in the
+         real shell:SendTo folder (under %APPDATA%) or Explorer never shows it -- the
+         file-side twin of the copy-on-write registry trap above. Pairs with the
+         unvirtualizedResources capability below. Consequences: (a) app state files
+         (%LOCALAPPDATA%\Clipp: register snapshot, logs, crashdumps) now land in the
+         real location, shared with an unpackaged install and left behind on
+         uninstall -- settings/key/host id are REGISTRY and stay virtualized, and a
+         once-virtualized register snapshot is re-synced from the mesh, so no file
+         migration is needed on upgrade; (b) desktop6 is ignorable, so pre-2004
+         Windows keeps virtualization on and SendTo registration is silently inert
+         there. -->
+    <desktop6:FileSystemWriteVirtualization>disabled</desktop6:FileSystemWriteVirtualization>
   </Properties>
 
   <Dependencies>
@@ -75,6 +89,11 @@
   <Capabilities>
     <rescap:Capability Name="runFullTrust" />
     <rescap:Capability Name="uiAccess" />
+    <!-- Gates desktop6:FileSystemWriteVirtualization above. RESTRICTED capability:
+         sideload/winget of a signed package is fine; a Store submission needs
+         Partner Center approval (justification: the SendTo shortcut must be written
+         to the user's real shell:SendTo folder to appear in Explorer). -->
+    <rescap:Capability Name="unvirtualizedResources" />
     <Capability Name="privateNetworkClientServer" />
     <Capability Name="internetClientServer" />
   </Capabilities>
@@ -92,6 +111,17 @@
       <Extensions>
         <uap5:Extension Category="windows.startupTask" Executable="clippmain.exe" EntryPoint="Windows.FullTrustApplication">
           <uap5:StartupTask TaskId="ClippAutoStart" Enabled="false" DisplayName="Clipp" />
+        </uap5:Extension>
+        <!-- NOT a command-line entry point (`clipp` on PATH is the CLI twin's alias
+             below) — this exists as the VERSION-STABLE target for the SendTo shortcut
+             (SendTo.cpp): the real WindowsApps\<name>_<version>_...\clippmain.exe path
+             dies on every package update, while the alias under
+             %LOCALAPPDATA%\Microsoft\WindowsApps survives them, forwards the appended
+             file arguments, and launches with package identity. -->
+        <uap5:Extension Category="windows.appExecutionAlias">
+          <uap5:AppExecutionAlias>
+            <uap5:ExecutionAlias Alias="clippgui.exe" />
+          </uap5:AppExecutionAlias>
         </uap5:Extension>
       </Extensions>
     </Application>
