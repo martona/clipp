@@ -202,6 +202,37 @@ bool MakeRegisterCurrent(const std::string& name) {
     return true;
 }
 
+bool TryGetActivityItemText(uint64_t itemID, std::string& outUtf8) {
+    const auto stored = g_clipboardActivityStore.PayloadReference(itemID);
+    if (!stored || !IsClippTextFormat(stored->meta.formatId)) {
+        return false;
+    }
+    // Canonical (LF) bytes, not the localized CRLF form: the typer turns each
+    // LF into exactly one Enter, and a CRLF pair would double them.
+    const std::vector<unsigned char>* bytes = stored->TryGetUncompressedBytes();
+    if (bytes == nullptr || bytes->empty()) {
+        return false;
+    }
+    std::size_t size = bytes->size();
+    if (bytes->back() == '\0') {
+        --size;  // capture-convention trailing NUL
+    }
+    if (size == 0) {
+        return false;
+    }
+    outUtf8.assign(reinterpret_cast<const char*>(bytes->data()), size);
+    return true;
+}
+
+bool TryGetRegisterText(const std::string& name, std::string& outUtf8) {
+    const auto rec = g_registerStore.Read(name);  // touch side effect, like `paste`
+    if (!rec.has_value() || rec->IsBinary() || rec->value.empty()) {
+        return false;
+    }
+    outUtf8 = rec->value;
+    return true;
+}
+
 bool SaveActivityItemAsRegister(uint64_t itemID, const std::string& name, bool markPrivate) {
     const auto stored = g_clipboardActivityStore.PayloadReference(itemID);
     if (!stored) {

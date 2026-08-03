@@ -63,6 +63,25 @@
 #define CLP_UI_POPUP_MAKE_PRIVATE "Mark private"
 #define CLP_UI_POPUP_MAKE_PUBLIC "Mark non-private"
 #define CLP_UI_POPUP_UNDO_TIP "Undo the last delete (Ctrl+Z)"
+// "Type it out": deliver the item as keystrokes for windows that can't take a
+// paste (iKVM/BMC consoles, virt-manager/SPICE/VNC viewers, RDP without
+// clipboard redirection). Confirm bubble is anchored under the toolbar button.
+#define CLP_UI_POPUP_TYPE_TIP "Type it out, key by key (Ctrl+T)"
+#define CLP_UI_POPUP_TYPE_TIP_TYPING "Typing... (any key or click stops)"
+#define CLP_UI_POPUP_TYPE_CONFIRM_SUFFIX " - click again to type"
+#define CLP_UI_POPUP_TYPE_ENTER_PREFIX "Will press Enter "
+#define CLP_UI_POPUP_TYPE_KEYSTROKES_PREFIX ""
+#define CLP_UI_POPUP_TYPE_KEYSTROKES_MIDDLE " keystrokes, ~"
+#define CLP_UI_POPUP_TYPE_KEYSTROKES_SUFFIX " s"
+#define CLP_UI_POPUP_TYPE_NO_TEXT "This item isn't text; only text can be typed."
+#define CLP_UI_POPUP_TYPE_IME "Typing needs a plain keyboard layout; switch away from the IME first."
+#define CLP_UI_POPUP_TYPE_CANT_PREFIX "Can't type "
+#define CLP_UI_POPUP_TYPE_CANT_LINE " - line "
+#define CLP_UI_POPUP_TYPE_CANT_COLUMN ", col "
+// Progress pill parked above the tray while a run is in flight.
+#define CLP_UI_TYPING_PROGRESS_PREFIX "Typing... "
+#define CLP_UI_TYPING_PROGRESS_MIDDLE " keystrokes left (~"
+#define CLP_UI_TYPING_PROGRESS_SUFFIX " s) - any key or click stops"
 #define CLP_UI_POPUP_UNDO_OF_PREFIX "Undo delete of "
 // macOS flavors of the popup shortcut hints (same actions, native key names).
 #define CLP_UI_POPUP_TOAST_MAC "Arrow keys to select, Return to paste"

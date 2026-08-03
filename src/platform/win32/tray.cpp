@@ -17,6 +17,7 @@
 #include "Logger.h"
 #include "AutoStart.h"
 #include "SendTo.h"
+#include "TextTyper.h"
 #include "ClipboardFlowUi.h"
 #include "Settings.h"
 #include "resource.h"
@@ -385,6 +386,7 @@ LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             UnregisterHotKey(hwnd, HOTKEY_ID_POPUP);
             UnregisterHotKey(hwnd, HOTKEY_ID_POPUP_SECONDARY);
             clipp::DestroyPopupWindow();
+            clipp::ShutdownTyping();  // stops any run in flight; releases held keys
             KillTimer(hwnd, IDT_NUDGE);
             DestroyNudgeFrames();
             CloseClippMainDialog();

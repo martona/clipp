@@ -33,6 +33,16 @@ bool ReshareActivityItem(uint64_t itemID);
 // the local removal result.
 bool DeleteActivityItemEverywhere(uint64_t itemID);
 
+// ---- Read-only text access (the popup's "type it out" action) ----
+// Typing delivers text as keystrokes to a window that can't take a paste; it
+// never touches any clipboard, so unlike the make-current actions above these
+// are pure reads with no mesh side effects. False for images, empty content,
+// private placeholders, and anything undecodable. Output is UTF-8 with the
+// capture-convention trailing NUL stripped and LF line endings (the typer maps
+// each LF to one Enter, so no CRLF expansion is wanted here).
+bool TryGetActivityItemText(uint64_t itemID, std::string& outUtf8);
+bool TryGetRegisterText(const std::string& name, std::string& outUtf8);
+
 // ---- Named-register actions (the popup's registers column) ----
 // Each performs the local store op AND the mesh half the register gateway does
 // for one-shot clients (Peer.cpp REGW-relay): note the HLC floor, then push the

@@ -11,6 +11,9 @@
 #include "RegisterStore.h"
 #include "RegisterWire.h"
 #include "Settings.h"
+#include "TextTyper.h"
+#include "TypeLayout.h"
+#include "TypePlan.h"
 #include "clipp-win32-darkmode32/DMSubclass.h"
 #include "platform/uiClippPage.h"
 #include "platform/uistrings.h"
@@ -884,6 +887,10 @@ private:
         EndActivityNotifications();
         toastWindow_.Hide();
         previewWindow_.Hide();
+        // A pending Type confirmation does not survive the popup closing: the
+        // next summon must start from a clean, unarmed state.
+        DisarmType();
+        HideTypeBubble();
         // Session-scoped peeks: anything revealed inside the popup is
         // forgotten the moment it hides.
         uiClippPage::ForgetAllPeekedItems();
@@ -1109,14 +1116,29 @@ private:
         undoButton_.Click([this](auto const&, auto const&) {
             UndoLastDelete();
         });
+        // Keyboard glyph: type the item out instead of pasting it.
+        typeButton_ = MakeToolbarButton(L"\xE765", CLP_W(CLP_UI_POPUP_TYPE_TIP));
+        typeButton_.Click([this](auto const&, auto const&) {
+            TypeSelected();
+        });
         toolbar.Children().Append(saveButton_);
         toolbar.Children().Append(pasteButton_);
+        toolbar.Children().Append(typeButton_);
         toolbar.Children().Append(renameButton_);
         toolbar.Children().Append(privateButton_);
         toolbar.Children().Append(deleteButton_);
         toolbar.Children().Append(undoButton_);
         Grid::SetRow(toolbar, 1);
         root.Children().Append(toolbar);
+
+        // Confirm / error bubble, anchored under the Type button. Lives as a
+        // root-Grid overlay (not a XAML Flyout) so it can never take focus from
+        // the filter box or trip the popup's light-dismiss.
+        typeBubble_ = BuildTypeBubble();
+        Grid::SetRow(typeBubble_, 1);
+        Grid::SetRowSpan(typeBubble_, 3);
+        root.Children().Append(typeBubble_);
+        contentRoot_ = root;  // the bubble anchors against this coordinate space
 
         // Two star columns: Registers (left, collapsed to zero width until any
         // exist) and the Clipboard stream (right). The column labels appear
@@ -1292,6 +1314,14 @@ private:
                 args.Handled(true);
             }
             return;
+        case VirtualKey::T:
+            // Ctrl+T types the selection out instead of pasting it; a plain
+            // 't' keeps flowing into the filter.
+            if ((GetKeyState(VK_CONTROL) & 0x8000) != 0) {
+                TypeSelected();
+                args.Handled(true);
+            }
+            return;
         case VirtualKey::Z:
             // Ctrl+Z restores the last delete while one is armed; otherwise
             // the TextBox keeps its own text-undo of the filter.
@@ -1333,6 +1363,7 @@ private:
         std::shared_ptr<const std::vector<unsigned char>> imageData;  // image stream, or null
         bool contentRow = false;   // previewText is real content: find matches + re-windows it
         bool isPrivate = false;
+        bool isBinary = false;     // image/stream register: nothing to type out
         // Age = last touch (reads AND writes), the same clock `clipp ls` shows.
         uint64_t touchedWallMs = 0;
     };
@@ -1349,6 +1380,7 @@ private:
             RegisterRowInfo info;
             info.name = Utf8ToWideString(rec.name);
             info.isPrivate = rec.IsPrivate();
+            info.isBinary = rec.IsBinary();
             info.touchedWallMs = rec.touched.wallMs;
 
             PopupItem item;
@@ -1954,6 +1986,23 @@ private:
         if (deleteButton_) {
             deleteButton_.IsEnabled(item != nullptr);
         }
+        if (typeButton_) {
+            // Text only: an image has no keystrokes. Registers carry their own
+            // binary flag; history rows are classified in the display cache.
+            bool canType = false;
+            if (item != nullptr && item->actionable) {
+                if (item->kind == PopupItem::Kind::Register) {
+                    const auto cached = registerCache_.find(item->registerName);
+                    canType = cached == registerCache_.end() || !cached->second.isBinary;
+                } else {
+                    const auto cached = displayCache_.find(item->historyId);
+                    canType = cached != displayCache_.end()
+                        && (cached->second.kind == ClipboardActivityPayloadKind::Text
+                            || cached->second.kind == ClipboardActivityPayloadKind::Link);
+                }
+            }
+            typeButton_.IsEnabled(canType);
+        }
         if (undoButton_) {
             const auto undoKind = clipp::PendingUndoKind();
             undoButton_.IsEnabled(undoKind != clipp::UndoSlotKind::None);
@@ -2123,6 +2172,233 @@ private:
 
     // ---- actions ----
 
+    // ---- "type it out" -----------------------------------------------------
+    // Anchored bubble: a pointer nub aimed at the Type button over a rounded
+    // text plate. Positioned in ShowTypeBubble once layout has run.
+    StackPanel BuildTypeBubble() {
+        StackPanel panel;
+        panel.Orientation(Orientation::Vertical);
+        panel.HorizontalAlignment(HorizontalAlignment::Left);
+        panel.VerticalAlignment(VerticalAlignment::Top);
+        panel.Visibility(Visibility::Collapsed);
+        panel.IsHitTestVisible(false);  // pure signage; clicks belong to the button
+
+        const Brush plate = TypeBubbleBrush();
+        // The nub is a square rotated 45 degrees, sunk into the plate so only
+        // its top corner shows — same trick as a CSS speech-bubble tail.
+        Grid nubRow;
+        nubRow.Height(6);
+        nubRow.HorizontalAlignment(HorizontalAlignment::Left);
+        typeBubblePointer_ = Border();
+        typeBubblePointer_.Width(10);
+        typeBubblePointer_.Height(10);
+        typeBubblePointer_.Background(plate);
+        typeBubblePointer_.HorizontalAlignment(HorizontalAlignment::Left);
+        typeBubblePointer_.VerticalAlignment(VerticalAlignment::Top);
+        typeBubblePointer_.Margin(ThicknessHelper::FromLengths(0, 1, 0, 0));
+        RotateTransform rotate;
+        rotate.Angle(45);
+        rotate.CenterX(5);
+        rotate.CenterY(5);
+        typeBubblePointer_.RenderTransform(rotate);
+        nubRow.Children().Append(typeBubblePointer_);
+        panel.Children().Append(nubRow);
+
+        Border plateBorder;
+        plateBorder.Background(plate);
+        plateBorder.CornerRadius(CornerRadiusHelper::FromUniformRadius(6));
+        plateBorder.Padding(ThicknessHelper::FromLengths(10, 6, 10, 7));
+        plateBorder.MaxWidth(300);
+        typeBubbleText_ = TextBlock();
+        typeBubbleText_.FontSize(12);
+        typeBubbleText_.TextWrapping(TextWrapping::Wrap);
+        typeBubbleText_.Foreground(ArgbBrush(255, 255, 255, 255));
+        plateBorder.Child(typeBubbleText_);
+        panel.Children().Append(plateBorder);
+        return panel;
+    }
+
+    Brush TypeBubbleBrush() {
+        // Reads as an instruction, not chrome: the page's accent, opaque.
+        return DarkMode::isEnabled() ? ArgbBrush(255, 38, 92, 160) : ArgbBrush(255, 20, 82, 150);
+    }
+
+    void ShowTypeBubble(const std::wstring& text) {
+        if (!typeBubble_ || !typeBubbleText_ || !contentRoot_ || !typeButton_) {
+            return;
+        }
+        typeBubbleText_.Text(winrt::hstring{ text });
+        // Anchor under the Type button, in the root's coordinate space.
+        double left = 12;
+        double top = 0;
+        try {
+            const auto transform = typeButton_.TransformToVisual(contentRoot_);
+            const auto origin = transform.TransformPoint(winrt::Windows::Foundation::Point{ 0, 0 });
+            left = origin.X;
+            top = origin.Y + typeButton_.ActualHeight() + 2;
+        } catch (const winrt::hresult_error&) {
+            // Not laid out yet (bubble raised before the first measure pass):
+            // the default margin still puts it under the toolbar.
+        }
+        typeBubble_.Margin(ThicknessHelper::FromLengths(left, top, 0, 0));
+        if (typeBubblePointer_) {
+            // Center the nub on the button, clamped to the plate.
+            const double nub = (std::max)(0.0, typeButton_.ActualWidth() / 2.0 - 5.0);
+            typeBubblePointer_.Margin(ThicknessHelper::FromLengths(nub, 1, 0, 0));
+        }
+        typeBubble_.Visibility(Visibility::Visible);
+    }
+
+    void HideTypeBubble() {
+        if (typeBubble_) {
+            typeBubble_.Visibility(Visibility::Collapsed);
+        }
+    }
+
+    // Identity of the selected row, so an arm can't survive a selection change
+    // (the confirmation quoted counts for a DIFFERENT item).
+    std::wstring SelectedItemKey() const {
+        const PopupItem* item = model_.SelectedItem();
+        if (item == nullptr) {
+            return {};
+        }
+        return item->kind == PopupItem::Kind::Register
+            ? L"R:" + Utf8ToWideString(item->registerName)
+            : L"H:" + std::to_wstring(item->historyId);
+    }
+
+    // Armed = the button is lit and the bubble is up; the next click runs.
+    void SetTypeArmed(bool armed) {
+        typeArmed_ = armed;
+        if (typeButton_) {
+            if (armed) {
+                typeButton_.Background(TypeBubbleBrush());
+            } else {
+                // ClearValue, not Background(nullptr): the latter would pin a
+                // null local value and cost the button its themed rest/hover
+                // brushes for good.
+                typeButton_.ClearValue(Control::BackgroundProperty());
+            }
+        }
+        typeArmedKey_ = armed ? SelectedItemKey() : std::wstring{};
+        if (armed) {
+            SetTimer(hwnd_, kTypeArmTimerId, 4000, nullptr);
+        } else {
+            KillTimer(hwnd_, kTypeArmTimerId);
+        }
+    }
+
+    void DisarmType() {
+        if (typeArmed_) {
+            SetTypeArmed(false);
+        }
+    }
+
+    void TypeSelected() {
+        DismissHintToast();
+        CommitOrCancelRename();
+        // Re-summoning mid-run and hitting the button again means "stop".
+        if (clipp::IsTyping()) {
+            clipp::CancelTyping();
+            DisarmType();
+            HideTypeBubble();
+            return;
+        }
+        const PopupItem* item = model_.SelectedItem();
+        if (item == nullptr || !item->actionable) {
+            return;
+        }
+        // Selection moved since the confirmation was raised: that bubble's
+        // counts described another item, so make them earn a fresh one.
+        if (typeArmed_ && typeArmedKey_ != SelectedItemKey()) {
+            DisarmType();
+        }
+
+        std::string utf8;
+        const bool haveText = item->kind == PopupItem::Kind::History
+            ? clipp::TryGetActivityItemText(item->historyId, utf8)
+            : clipp::TryGetRegisterText(item->registerName, utf8);
+        if (!haveText) {
+            DisarmType();
+            ShowTypeBubble(CLP_W(CLP_UI_POPUP_TYPE_NO_TEXT));
+            return;
+        }
+        // An IME has no character-to-keystroke map at all; refuse rather than
+        // type garbage into a composition window.
+        if (clipp::ActiveLayoutIsIme()) {
+            DisarmType();
+            ShowTypeBubble(CLP_W(CLP_UI_POPUP_TYPE_IME));
+            return;
+        }
+
+        const clipp::TypeResult result = clipp::TranslateTextToPlan(Utf8ToWideString(utf8));
+        if (!result.ok) {
+            DisarmType();
+            ShowTypeBubble(DescribeTypeError(result.error));
+            return;
+        }
+        clipp::TypeSchedule schedule = clipp::BuildTypeSchedule(result.plan);
+        const int seconds = clipp::EstimateTypeSeconds(schedule);
+
+        // Arm-and-confirm for anything with consequences: every Enter may run a
+        // command on the far side, and a run measured in tens of seconds is
+        // usually a mis-click. Short, Enter-free text types on the first click.
+        if (!typeArmed_ && (schedule.enterCount > 0 || seconds >= 10)) {
+            SetTypeArmed(true);
+            ShowTypeBubble(DescribeTypeConfirmation(schedule, seconds));
+            return;
+        }
+
+        DisarmType();
+        HideTypeBubble();
+        const HWND target = previousForeground_;
+        Dismiss(/*restoreFocus=*/true);
+        if (target != nullptr && IsWindow(target)) {
+            // Same activation-polling path as the paste chord: the keystrokes
+            // only start once the intended window really holds the foreground.
+            pendingIsType_ = true;
+            pendingTypeSchedule_ = std::move(schedule);
+            BeginPasteInjection(target);
+        }
+    }
+
+    std::wstring DescribeTypeConfirmation(const clipp::TypeSchedule& schedule, int seconds) const {
+        std::wstring text;
+        if (schedule.enterCount > 0) {
+            text = CLP_W(CLP_UI_POPUP_TYPE_ENTER_PREFIX) + std::to_wstring(schedule.enterCount)
+                + L"×";
+            if (seconds >= 10) {
+                text += L", ~" + std::to_wstring(seconds) + CLP_W(CLP_UI_POPUP_TYPE_KEYSTROKES_SUFFIX);
+            }
+        } else {
+            text = std::to_wstring(schedule.events.size())
+                + CLP_W(CLP_UI_POPUP_TYPE_KEYSTROKES_MIDDLE) + std::to_wstring(seconds)
+                + CLP_W(CLP_UI_POPUP_TYPE_KEYSTROKES_SUFFIX);
+        }
+        text += CLP_W(CLP_UI_POPUP_TYPE_CONFIRM_SUFFIX);
+        return text;
+    }
+
+    // "Can't type 'ß' (U+00DF) - line 3, col 14 [United States]"
+    std::wstring DescribeTypeError(const clipp::TypeError& error) const {
+        std::wstring text = CLP_W(CLP_UI_POPUP_TYPE_CANT_PREFIX);
+        if (error.codepoint <= 0xFFFF && iswprint(static_cast<wint_t>(error.codepoint))) {
+            text += L"'";
+            text += static_cast<wchar_t>(error.codepoint);
+            text += L"' ";
+        }
+        wchar_t hex[16] = {};
+        swprintf(hex, 16, L"(U+%04X)", static_cast<unsigned>(error.codepoint));
+        text += hex;
+        text += CLP_W(CLP_UI_POPUP_TYPE_CANT_LINE) + std::to_wstring(error.line);
+        text += CLP_W(CLP_UI_POPUP_TYPE_CANT_COLUMN) + std::to_wstring(error.column);
+        const std::wstring layout = clipp::ActiveKeyboardLayoutName();
+        if (!layout.empty()) {
+            text += L" [" + layout + L"]";
+        }
+        return text;
+    }
+
     void ActivateSelected() {
         DismissHintToast();      // button-borne invocations skip the root handler
         CommitOrCancelRename();  // an action supersedes an in-flight rename
@@ -2171,6 +2447,8 @@ private:
             KillTimer(hwnd_, kPasteTimerId);
             pasteTargetWindow_ = nullptr;
         }
+        pendingIsType_ = false;
+        pendingTypeSchedule_ = clipp::TypeSchedule{};
     }
 
     void OnPasteTimer() {
@@ -2190,10 +2468,18 @@ private:
             // first foreground sighting can vanish into that gap. Inject only
             // after two consecutive foreground confirmations (+25ms).
             if (++pasteFocusStreak_ >= 2) {
-                g_logger.log(__FUNCTION__, Logger::Level::Debug,
-                    L"Paste chord -> %ls", DescribeWindow(foreground).c_str());
+                // Take the pending work before CancelPasteInjection clears it.
+                const bool typeMode = pendingIsType_;
+                clipp::TypeSchedule schedule = std::move(pendingTypeSchedule_);
                 CancelPasteInjection();
-                InjectPasteChord();
+                g_logger.log(__FUNCTION__, Logger::Level::Debug,
+                    typeMode ? L"Typing -> %ls" : L"Paste chord -> %ls",
+                    DescribeWindow(foreground).c_str());
+                if (typeMode) {
+                    clipp::StartTyping(std::move(schedule));
+                } else {
+                    InjectPasteChord();
+                }
                 return;
             }
         } else {
@@ -2581,6 +2867,12 @@ private:
                 OnPasteTimer();
                 return 0;
             }
+            if (wParam == kTypeArmTimerId) {
+                // The confirming click never came; stand down quietly.
+                DisarmType();
+                HideTypeBubble();
+                return 0;
+            }
             return DefWindowProcW(hwnd_, msg, wParam, lParam);
         case WM_DPICHANGED: {
             // The satellites' geometry is stale at the new DPI; they re-derive
@@ -2659,6 +2951,17 @@ private:
     Button privateButton_{ nullptr };
     Button deleteButton_{ nullptr };
     Button undoButton_{ nullptr };
+    Button typeButton_{ nullptr };
+    Grid contentRoot_{ nullptr };
+    // Confirm/error bubble anchored under the Type button, and the arm state
+    // that makes a risky run take a second, deliberate click.
+    StackPanel typeBubble_{ nullptr };
+    TextBlock typeBubbleText_{ nullptr };
+    Border typeBubblePointer_{ nullptr };
+    bool typeArmed_ = false;
+    std::wstring typeArmedKey_;
+    clipp::TypeSchedule pendingTypeSchedule_;
+    bool pendingIsType_ = false;
     TextBox nameEditor_{ nullptr };
     bool previewUpdatePending_ = false;
     ToastWindow toastWindow_;
@@ -2675,6 +2978,8 @@ private:
     // Pending paste keystroke: armed at dismissal, fired once the target
     // regains the foreground (kPasteTimerId polls).
     static constexpr UINT_PTR kPasteTimerId = 1;
+    // Disarms the Type confirmation if the second click never comes.
+    static constexpr UINT_PTR kTypeArmTimerId = 2;
     HWND pasteTargetWindow_ = nullptr;
     int pasteRetriesLeft_ = 0;
     int pasteFocusStreak_ = 0;
