@@ -174,6 +174,10 @@ std::optional<ClipboardActivityDisplayItem> ClipboardActivityStore::BuildDisplay
         }
 
         display.detailText = *text;
+        // Previews render as a single clipped line, so text that opens with
+        // newlines (pasted code blocks, quoted mail) would show its blank first
+        // line and read as an empty row. Every preview below is built from the
+        // TRIMMED text for that reason; detailText above keeps the real content.
         const std::wstring trimmed = TrimCopy(*text);
         if (sourceMarkedPrivate) {
             // Explicit privacy signal from the source app overrides the heuristic
@@ -182,7 +186,7 @@ std::optional<ClipboardActivityDisplayItem> ClipboardActivityStore::BuildDisplay
             display.kind = ClipboardActivityPayloadKind::PrivateText;
             display.sourceMarked = true;
             display.previewText = L"••••••••";
-            display.revealedPreviewText = PreviewText(*text);
+            display.revealedPreviewText = PreviewText(trimmed);
         } else if (LooksLikeUrl(trimmed)) {
             display.kind = ClipboardActivityPayloadKind::Link;
             display.previewText = PreviewText(trimmed);
@@ -190,10 +194,10 @@ std::optional<ClipboardActivityDisplayItem> ClipboardActivityStore::BuildDisplay
         } else if (g_settings.maskShortTextPreviews() && LooksPrivateText(trimmed)) {
             display.kind = ClipboardActivityPayloadKind::PrivateText;
             display.previewText = L"••••••••";
-            display.revealedPreviewText = PreviewText(*text);
+            display.revealedPreviewText = PreviewText(trimmed);
         } else {
             display.kind = ClipboardActivityPayloadKind::Text;
-            display.previewText = PreviewText(*text);
+            display.previewText = PreviewText(trimmed);
         }
     } else {
         display.kind = ClipboardActivityPayloadKind::Unsupported;

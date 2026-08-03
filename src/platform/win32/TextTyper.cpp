@@ -95,7 +95,15 @@ public:
             return;
         }
         text_ = text;
-        InvalidateRect(hwnd_, nullptr, TRUE);
+        // Repaint at ~10 Hz, not once per keystroke. At 15 ms/event the pill
+        // would otherwise redraw 60+ times a second — faster than anyone can
+        // read a counter, and enough to make the text visibly shimmer.
+        const DWORD now = GetTickCount();
+        if (now - lastPaintTick_ < 90) {
+            return;  // text_ is already current; the next repaint shows it
+        }
+        lastPaintTick_ = now;
+        InvalidateRect(hwnd_, nullptr, FALSE);  // Paint() covers every pixel
         UpdateWindow(hwnd_);
     }
 
@@ -189,20 +197,40 @@ private:
             SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
 
+    // Double-buffered: the fill and the text land on an off-screen bitmap and
+    // reach the screen as one BitBlt. Painting them straight onto the window
+    // shows the bare background between the two operations, which is what the
+    // eye reads as flicker on a pill that repaints continuously.
     void Paint() {
         PAINTSTRUCT ps{};
         const HDC hdc = BeginPaint(hwnd_, &ps);
         RECT client{};
         GetClientRect(hwnd_, &client);
-        const HBRUSH background = CreateSolidBrush(RGB(38, 35, 32));
-        FillRect(hdc, &client, background);
-        DeleteObject(background);
-        SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, RGB(245, 240, 235));
-        const HGDIOBJ previous = SelectObject(hdc, font_);
-        DrawTextW(hdc, text_.c_str(), -1, &client,
-            DT_CENTER | DT_VCENTER | DT_NOPREFIX | DT_SINGLELINE);
-        SelectObject(hdc, previous);
+        const int width = client.right - client.left;
+        const int height = client.bottom - client.top;
+
+        const HDC memoryDC = CreateCompatibleDC(hdc);
+        const HBITMAP bitmap = CreateCompatibleBitmap(hdc, width, height);
+        if (memoryDC != nullptr && bitmap != nullptr) {
+            const HGDIOBJ previousBitmap = SelectObject(memoryDC, bitmap);
+            const HBRUSH background = CreateSolidBrush(RGB(38, 35, 32));
+            FillRect(memoryDC, &client, background);
+            DeleteObject(background);
+            SetBkMode(memoryDC, TRANSPARENT);
+            SetTextColor(memoryDC, RGB(245, 240, 235));
+            const HGDIOBJ previousFont = SelectObject(memoryDC, font_);
+            DrawTextW(memoryDC, text_.c_str(), -1, &client,
+                DT_CENTER | DT_VCENTER | DT_NOPREFIX | DT_SINGLELINE);
+            SelectObject(memoryDC, previousFont);
+            BitBlt(hdc, 0, 0, width, height, memoryDC, 0, 0, SRCCOPY);
+            SelectObject(memoryDC, previousBitmap);
+        }
+        if (bitmap != nullptr) {
+            DeleteObject(bitmap);
+        }
+        if (memoryDC != nullptr) {
+            DeleteDC(memoryDC);
+        }
         EndPaint(hwnd_, &ps);
     }
 
@@ -219,6 +247,9 @@ private:
             self->Paint();
             return 0;
         }
+        if (msg == WM_ERASEBKGND) {
+            return 1;  // Paint() owns every pixel; erasing first only flickers
+        }
         return DefWindowProcW(hwnd, msg, wParam, lParam);
     }
 
@@ -227,6 +258,7 @@ private:
     UINT fontDpi_ = 0;
     int width_ = 0;
     int height_ = 0;
+    DWORD lastPaintTick_ = 0;
     std::wstring text_;
 };
 

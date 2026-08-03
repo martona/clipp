@@ -134,6 +134,17 @@ SolidColorBrush ArgbBrush(uint8_t a, uint8_t r, uint8_t g, uint8_t b) {
     return SolidColorBrush(winrt::Windows::UI::ColorHelper::FromArgb(a, r, g, b));
 }
 
+// Row previews are a single clipped line, so leading blank lines (or indent)
+// would push the real content out of sight and leave the row looking empty.
+// Display-only: every action still works on the untrimmed value.
+std::wstring TrimLeadingWhitespace(const std::wstring& text) {
+    std::size_t first = 0;
+    while (first < text.size() && std::iswspace(static_cast<wint_t>(text[first])) != 0) {
+        ++first;
+    }
+    return first == 0 ? text : text.substr(first);
+}
+
 // ---- palette ---------------------------------------------------------------
 // The popup lives in ClippPage's visual family, warmed up: the page's world is
 // accent-blue washes (outgoing bubbles), amber accents (private badges, the
@@ -1406,9 +1417,13 @@ private:
             } else {
                 info.contentRow = true;
                 info.fullText = Utf8ToWideString(rec.value);
-                info.previewText = info.fullText.size() > kRegisterPreviewChars
-                    ? info.fullText.substr(0, kRegisterPreviewChars) + L"..."
-                    : info.fullText;
+                // Preview from the leading-whitespace-trimmed text: a value that
+                // opens with newlines would otherwise show its blank first line
+                // and render as an empty row. fullText (the flyout) stays exact.
+                const std::wstring shown = TrimLeadingWhitespace(info.fullText);
+                info.previewText = shown.size() > kRegisterPreviewChars
+                    ? shown.substr(0, kRegisterPreviewChars) + L"..."
+                    : shown;
                 item.searchText += L"\n" + info.previewText;
             }
             registerCache_.emplace(rec.name, std::move(info));
