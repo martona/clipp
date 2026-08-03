@@ -529,8 +529,14 @@ elseif (UNIX AND NOT APPLE)
     add_executable(clipp-linux
         ${CLIPP_LINUX_SOURCES}
         "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/linux/Settings.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/linux/DesktopClipboard.cpp"
     )
     clipp_apply_common_target_settings(clipp-linux)
+    # `copy -c` desktop clipboard reader: xcb HEADERS only (libxcb1-dev). The
+    # binary dlopens libxcb.so.1 at runtime, so the packaged dependency list
+    # stays avahi-only and headless installs never pull X libraries.
+    find_path(CLIPP_XCB_INCLUDE_DIR xcb/xcb.h REQUIRED)
+    target_include_directories(clipp-linux PRIVATE ${CLIPP_XCB_INCLUDE_DIR})
     # Drives the terminal-only collapse of main() (no daemon/clipboard/tray) and the
     # omission of the `gui` subcommand in Cli.cpp. CLIPP_NO_DAEMON is the shared
     # no-mesh-daemon/no-GUI profile (the Windows clipp.com companion sets it too);
@@ -540,6 +546,7 @@ elseif (UNIX AND NOT APPLE)
         Threads::Threads
         PkgConfig::AVAHI
         utf8proc::utf8proc
+        ${CMAKE_DL_LIBS}  # dlopen for the lazy libxcb load (DesktopClipboard.cpp)
     )
     # Statically link the C++ runtime (libstdc++) and the GCC support lib (libgcc).
     # We build releases on an old-glibc base (Debian 11 / glibc 2.31) for broad

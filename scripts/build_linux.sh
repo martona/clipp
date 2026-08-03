@@ -138,9 +138,17 @@ if ! pkg-config --exists avahi-client 2>/dev/null; then
     missing=1
 fi
 
+# xcb HEADERS for the `copy -c` desktop clipboard reader (build-time only: the
+# binary dlopens libxcb.so.1 lazily, so the runtime dependency list stays
+# avahi-only and headless installs never need X libraries).
+if ! pkg-config --exists xcb 2>/dev/null && [[ ! -e /usr/include/xcb/xcb.h ]]; then
+    echo "[!] Missing required dev package: xcb headers (Debian/Ubuntu: libxcb1-dev)" >&2
+    missing=1
+fi
+
 if [[ "$missing" == "1" ]]; then
     echo "[!] Install the prerequisites and retry. On a Debian/Ubuntu box:" >&2
-    install_hint "build-essential cmake ninja-build pkg-config git curl zip unzip tar autoconf autoconf-archive automake libtool libavahi-client-dev" >&2
+    install_hint "build-essential cmake ninja-build pkg-config git curl zip unzip tar autoconf autoconf-archive automake libtool libavahi-client-dev libxcb1-dev" >&2
     echo "    (autoconf/automake/libtool are needed by vcpkg to build libsodium from source.)" >&2
     exit 1
 fi

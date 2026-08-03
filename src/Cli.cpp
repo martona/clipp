@@ -32,6 +32,9 @@
 #include "SodiumInit.h"
 #include "platform.h"
 #include "platform/DataPaths.h"
+#ifdef __linux__
+    #include "platform/linux/DesktopClipboard.h"
+#endif
 #include "version.h"
 
 #ifdef _WIN32
@@ -464,7 +467,35 @@ int RunHostIdReset() {
 // synced mesh, so one push reaches everyone. No GUI required on this machine.
 // echoStdinToStdout is the inferred `x | clipp | y` mode: tee the consumed bytes
 // back out (explicit `clipp copy` never echoes).
-int RunCopy(bool echoStdinToStdout) {
+#ifdef __linux__
+// `copy -c`: the desktop clipboard as the byte source instead of stdin. Maps
+// the reader's outcomes onto CLI errors; true = bytes/formatId filled.
+bool ReadDesktopClipboardForCopy(std::vector<unsigned char>& bytes, uint32_t& formatId) {
+    clipp::DesktopClipboardData data;
+    std::string detail;
+    switch (clipp::ReadDesktopClipboard(data, detail)) {
+    case clipp::DesktopClipboardStatus::Ok:
+        bytes = std::move(data.bytes);
+        formatId = data.formatId;
+        return true;
+    case clipp::DesktopClipboardStatus::NoSession:
+        ErrLine(L"No desktop clipboard reachable: " + ToWide(detail) + L".");
+        return false;
+    case clipp::DesktopClipboardStatus::Empty:
+        ErrLine(L"The desktop clipboard is empty.");
+        return false;
+    case clipp::DesktopClipboardStatus::Unsupported:
+        ErrLine(L"The desktop clipboard holds neither text nor a PNG image.");
+        return false;
+    case clipp::DesktopClipboardStatus::Error:
+        ErrLine(L"Failed to read the desktop clipboard: " + ToWide(detail) + L".");
+        return false;
+    }
+    return false;
+}
+#endif
+
+int RunCopy(bool echoStdinToStdout, bool fromClipboard) {
     if (!g_keyManager.HaveNetworkKey()) {
         ErrLine(L"No group key configured. Run `clipp key set` first.");
         return 1;
@@ -476,26 +507,44 @@ int RunCopy(bool echoStdinToStdout) {
         return 1;
     }
 
-    std::vector<unsigned char> bytes = ReadAllStdin();
-    if (bytes.empty()) {
-        ErrLine(L"Nothing on stdin to copy.");
-        return 1;
+    std::vector<unsigned char> bytes;
+    uint32_t formatId = CLIPP_FORMAT_UTF8;
+#ifdef __linux__
+    if (fromClipboard) {
+        if (!ReadDesktopClipboardForCopy(bytes, formatId)) {
+            return 1;
+        }
+        VerboseLine(L"Read " + std::to_wstring(bytes.size()) + L" byte(s) from the desktop clipboard.");
+    } else
+#else
+    (void)fromClipboard;
+#endif
+    {
+        bytes = ReadAllStdin();
+        if (bytes.empty()) {
+            ErrLine(L"Nothing on stdin to copy.");
+            return 1;
+        }
+        VerboseLine(L"Read " + std::to_wstring(bytes.size()) + L" byte(s) from stdin.");
     }
-    VerboseLine(L"Read " + std::to_wstring(bytes.size()) + L" byte(s) from stdin.");
 
     // Tee mode keeps its own copy: `bytes` is consumed by the payload below.
+    // (-c has no stream flowing through, so there is nothing to tee.)
     std::vector<unsigned char> echoBytes;
-    if (echoStdinToStdout) {
+    if (echoStdinToStdout && !fromClipboard) {
         echoBytes = bytes;
     }
 
-    // v1: UTF-8 text. Append a trailing NUL to match the platform capture
-    // convention (receivers strip one trailing NUL when writing to the clipboard),
-    // so CLI-copied text is byte-identical to GUI-copied text.
-    bytes.push_back('\0');
+    // Text: append a trailing NUL to match the platform capture convention
+    // (receivers strip one trailing NUL when writing to the clipboard), so
+    // CLI-copied text is byte-identical to GUI-copied text. Image bytes (a
+    // -c PNG grab) go verbatim.
+    if (formatId == CLIPP_FORMAT_UTF8) {
+        bytes.push_back('\0');
+    }
 
     ClipboardPayload payload;
-    payload.meta.formatId = CLIPP_FORMAT_UTF8;
+    payload.meta.formatId = formatId;
     if (!payload.SetUncompressedBytes(std::move(bytes))) {
         ErrLine(L"Failed to encode clipboard payload.");
         return 1;
@@ -809,7 +858,7 @@ bool WithRegisterGateway(const HostId& localHostId, const std::string& localHost
         });
 }
 
-int RunRegisterCopy(const std::string& nameArg, bool isPrivate) {
+int RunRegisterCopy(const std::string& nameArg, bool isPrivate, bool fromClipboard) {
     // NFC at ingress: macOS input methods can produce decomposed sequences; the
     // same visual name must address the same register from every platform.
     const std::string name = clipp_platform_detail::NormalizeUtf8Canonical(nameArg);
@@ -826,14 +875,24 @@ int RunRegisterCopy(const std::string& nameArg, bool isPrivate) {
         ErrLine(L"Failed to initialize networking.");
         return 1;
     }
-    std::vector<unsigned char> bytes = ReadAllStdin();
-    if (bytes.empty()) {
-        ErrLine(L"Nothing on stdin to copy.");
-        return 1;
+    std::vector<unsigned char> bytes;
+    uint32_t formatId = CLIPP_FORMAT_UTF8;
+#ifdef __linux__
+    if (fromClipboard) {
+        if (!ReadDesktopClipboardForCopy(bytes, formatId)) {
+            return 1;
+        }
+    } else
+#else
+    (void)fromClipboard;
+#endif
+    {
+        bytes = ReadAllStdin();
+        if (bytes.empty()) {
+            ErrLine(L"Nothing on stdin to copy.");
+            return 1;
+        }
     }
-    // Registers are text: fold CRLF/CR -> LF so the same content stored from any platform
-    // or shell settles to one canonical form, matching clipboard text (SetUncompressedBytes).
-    CanonicalizeCrlfToLf(bytes);
 
     HostId localHostId;
     g_settings.ensureHostID(localHostId);
@@ -842,9 +901,19 @@ int RunRegisterCopy(const std::string& nameArg, bool isPrivate) {
 
     RegisterRecord rec;
     rec.name = name;
-    rec.value.assign(bytes.begin(), bytes.end());
-    rec.originHostId = localHostId;
     rec.flags = isPrivate ? RegisterFlags::Private : 0;
+    if (formatId == CLIPP_FORMAT_UTF8) {
+        // Registers are text: fold CRLF/CR -> LF so the same content stored from any platform
+        // or shell settles to one canonical form, matching clipboard text (SetUncompressedBytes).
+        CanonicalizeCrlfToLf(bytes);
+        rec.value.assign(bytes.begin(), bytes.end());
+    } else {
+        // A -c image grab: store as the typed binary-value form (header + raw
+        // stream) that RPUT/`put` already parse on the way back out.
+        rec.value = RegisterWire::EncodeBinaryValue(formatId, bytes.data(), bytes.size());
+        rec.flags |= RegisterFlags::BinaryHeader;
+    }
+    rec.originHostId = localHostId;
     // HLCs left zero: the gateway re-stamps from its authoritative clock (keeping our
     // origin). We wait for its ack so the socket stays open until the write lands —
     // a fire-and-forget close races the gateway's read and drops the frame.
@@ -1878,10 +1947,18 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
 
     std::string copyRegisterName;
     bool copyPrivate = false;
+    bool copyFromClipboard = false;
     CLI::App* copyCommand = app.add_subcommand("copy", "Read stdin and copy it to the network, or to a named register");
     copyCommand->alias("c");
     copyCommand->add_option("name", copyRegisterName, "Named register (default: the shared clipboard)");
     copyCommand->add_flag("--private", copyPrivate, "Mask the value in `ls -v` and refuse to print it to a terminal on paste");
+#ifdef __linux__
+    // Desktop-only source; the terminal build is otherwise clipboard-blind. Windows
+    // and macOS get their local clipboard through the daemon, so the flag would be
+    // redundant noise there (revisit if the daemonless-CLI case ever matters).
+    copyCommand->add_flag("-c,--clipboard", copyFromClipboard,
+        "Read the desktop clipboard (X11/XWayland) instead of stdin");
+#endif
     copyCommand->callback([&]() { action = Action::Copy; });
 
     std::string pasteRegisterName;
@@ -2084,8 +2161,8 @@ std::optional<int> Run(int argc, char** argv, bool launchedFromConsole) {
     case Action::HostIdReset:
         return RunHostIdReset();
     case Action::Copy:
-        return copyRegisterName.empty() ? RunCopy(inferredEchoToStdout)
-                                        : RunRegisterCopy(copyRegisterName, copyPrivate);
+        return copyRegisterName.empty() ? RunCopy(inferredEchoToStdout, copyFromClipboard)
+                                        : RunRegisterCopy(copyRegisterName, copyPrivate, copyFromClipboard);
     case Action::Paste:
         return pasteRegisterName.empty() ? RunPaste() : RunRegisterPaste(pasteRegisterName);
     case Action::Put:

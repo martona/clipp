@@ -62,7 +62,7 @@ jobs:
           apt-get install -y --no-install-recommends \
             build-essential ninja-build pkg-config git curl ca-certificates \
             autoconf autoconf-archive automake libtool \
-            libavahi-client-dev \
+            libavahi-client-dev libxcb1-dev \
             gettext-base rpm zstd \
             zip unzip tar
 
