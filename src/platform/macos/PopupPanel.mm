@@ -13,6 +13,9 @@
 #include "RegisterStore.h"
 #include "RegisterWire.h"
 #include "Settings.h"
+#include "TextTyper.h"
+#include "TypeLayout.h"
+#include "TypePlan.h"
 #include "platform/uiClippPage.h"
 #include "platform/uistrings.h"
 #include "UiHelpers.h"
@@ -264,6 +267,7 @@ struct RegisterRowInfo {
     NSData* imageData = nil;       // BinaryHeader image stream, or nil
     bool contentRow = false;       // previewText is content: find matches + re-windows it
     bool isPrivate = false;
+    bool isBinary = false;         // image/stream register: nothing to type out
     uint64_t touchedWallMs = 0;    // same clock `clipp ls` shows
 };
 
@@ -333,6 +337,11 @@ struct RegisterRowInfo {
     bool flyoutUpdatePending_;
     bool axJourneyStarted_;
     int axPollTicks_;
+    // "Type it out" confirmation state: armed until the second click, the
+    // 4s timeout, or a selection change.
+    bool typeArmed_;
+    std::string typeArmedKey_;
+    NSTimer* typeArmTimer_;
 }
 @property(nonatomic, strong) ClippPopupMainPanel* panel;
 @property(nonatomic, strong) NSSearchField* filterField;
@@ -353,6 +362,10 @@ struct RegisterRowInfo {
 @property(nonatomic, strong) NSButton* privateButton;
 @property(nonatomic, strong) NSButton* deleteButton;
 @property(nonatomic, strong) NSButton* undoButton;
+@property(nonatomic, strong) NSButton* typeButton;
+// Confirm/error bubble anchored under the Type button.
+@property(nonatomic, strong) NSView* typeBubble;
+@property(nonatomic, strong) NSTextField* typeBubbleLabel;
 @property(nonatomic, strong) NSTextField* renameField;
 @property(nonatomic, strong) NSMutableArray<ClippPopupRowView*>* registerRowViews;
 @property(nonatomic, strong) NSMutableArray<ClippPopupRowView*>* historyRowViews;
@@ -370,6 +383,10 @@ struct RegisterRowInfo {
 - (void)toggle;
 - (void)dismiss;
 - (void)handleF2;
+- (void)typeSelected;
+- (void)hideTypeBubble;
+- (void)setTypeArmed:(BOOL)armed;
+- (std::string)selectedItemKey;
 - (BOOL)handleCommandEquivalent:(NSEvent*)event;
 - (void)rowClicked:(ClippPopupRowView*)row clickCount:(NSInteger)clicks;
 - (NSMenu*)contextMenuForRow:(ClippPopupRowView*)row;
@@ -535,6 +552,8 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
                                             self, @selector(deleteClicked:));
     self.undoButton = MacOSMakeIconButton(@"arrow.uturn.backward", CLP_NS(CLP_UI_POPUP_UNDO_TIP_MAC),
                                           self, @selector(undoClicked:));
+    self.typeButton = MacOSMakeIconButton(@"keyboard", CLP_NS(CLP_UI_POPUP_TYPE_TIP_MAC),
+                                          self, @selector(typeClicked:));
     NSStackView* toolbar = [[NSStackView alloc] initWithFrame:NSZeroRect];
     toolbar.translatesAutoresizingMaskIntoConstraints = NO;
     toolbar.orientation = NSUserInterfaceLayoutOrientationHorizontal;
@@ -544,9 +563,11 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
     [toolbar addArrangedSubview:self.renameButton];
     [toolbar addArrangedSubview:self.privateButton];
     [toolbar addArrangedSubview:self.deleteButton];
+    [toolbar addArrangedSubview:self.typeButton];
     [toolbar addArrangedSubview:self.undoButton];
     for (NSButton* button in @[ self.saveButton, self.activateButton, self.renameButton,
-                                self.privateButton, self.deleteButton, self.undoButton ]) {
+                                self.privateButton, self.deleteButton, self.undoButton,
+                                self.typeButton ]) {
         // Toolbar clicks must never move the keyboard out of the filter field
         // (or steal the focus the rename editor is about to take).
         button.refusesFirstResponder = YES;
@@ -608,9 +629,27 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
     [historyColumn.heightAnchor constraintEqualToAnchor:columns.heightAnchor].active = YES;
 
     [root addSubview:title];
+    // Confirm/error bubble for the Type action, anchored under its toolbar
+    // button so the second click lands where the finger already is. A plain
+    // subview (not a popover): it can never take the keyboard from the filter
+    // field or dismiss the panel.
+    self.typeBubble = [[NSView alloc] initWithFrame:NSZeroRect];
+    self.typeBubble.translatesAutoresizingMaskIntoConstraints = NO;
+    self.typeBubble.wantsLayer = YES;
+    self.typeBubble.layer.cornerRadius = 6.0;
+    self.typeBubble.layer.backgroundColor = [NSColor controlAccentColor].CGColor;
+    self.typeBubble.hidden = YES;
+    self.typeBubbleLabel = [NSTextField wrappingLabelWithString:@""];
+    self.typeBubbleLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.typeBubbleLabel.font = [NSFont systemFontOfSize:11.0];
+    self.typeBubbleLabel.textColor = [NSColor whiteColor];
+    self.typeBubbleLabel.selectable = NO;
+    [self.typeBubble addSubview:self.typeBubbleLabel];
+
     [root addSubview:toolbar];
     [root addSubview:filter];
     [root addSubview:columns];
+    [root addSubview:self.typeBubble positioned:NSWindowAbove relativeTo:nil];
 
     [NSLayoutConstraint activateConstraints:@[
         [title.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:14.0],
@@ -620,6 +659,15 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
         [toolbar.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:12.0],
         [toolbar.trailingAnchor constraintLessThanOrEqualToAnchor:root.trailingAnchor constant:-12.0],
         [toolbar.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:6.0],
+
+        [self.typeBubble.leadingAnchor constraintEqualToAnchor:self.typeButton.leadingAnchor],
+        [self.typeBubble.topAnchor constraintEqualToAnchor:self.typeButton.bottomAnchor constant:2.0],
+        [self.typeBubble.trailingAnchor constraintLessThanOrEqualToAnchor:root.trailingAnchor constant:-12.0],
+        [self.typeBubbleLabel.leadingAnchor constraintEqualToAnchor:self.typeBubble.leadingAnchor constant:9.0],
+        [self.typeBubbleLabel.trailingAnchor constraintEqualToAnchor:self.typeBubble.trailingAnchor constant:-9.0],
+        [self.typeBubbleLabel.topAnchor constraintEqualToAnchor:self.typeBubble.topAnchor constant:5.0],
+        [self.typeBubbleLabel.bottomAnchor constraintEqualToAnchor:self.typeBubble.bottomAnchor constant:-6.0],
+        [self.typeBubbleLabel.widthAnchor constraintLessThanOrEqualToConstant:280.0],
 
         [filter.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:12.0],
         [filter.trailingAnchor constraintEqualToAnchor:root.trailingAnchor constant:-12.0],
@@ -945,6 +993,10 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
                                                   object:self.panel];
     [self endWatcher];
     [self.toastPanel orderOut:nil];
+    // A pending Type confirmation does not survive the popup closing: the next
+    // summon must start from a clean, unarmed state.
+    [self setTypeArmed:NO];
+    [self hideTypeBubble];
     // The onboarding toast normally lives and dies with the popup — EXCEPT
     // mid-journey (grant button clicked): System Settings stealing focus is
     // the very thing that triggered this dismiss, and the toast must stay
@@ -988,6 +1040,7 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
         RegisterRowInfo info;
         info.name = MacOSToNSString(rec.name);
         info.isPrivate = rec.IsPrivate();
+        info.isBinary = rec.IsBinary();
         info.touchedWallMs = rec.touched.wallMs;
 
         PopupItem item;
@@ -1544,6 +1597,21 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
         ? CLP_NS(CLP_UI_POPUP_MAKE_PUBLIC) : CLP_NS(CLP_UI_POPUP_MAKE_PRIVATE);
     self.deleteButton.enabled = item != nullptr;
 
+    // Text only: an image has no keystrokes.
+    bool canType = false;
+    if (item != nullptr && item->actionable) {
+        if (registerSelected) {
+            const auto cached = registerCache_.find(item->registerName);
+            canType = cached == registerCache_.end() || !cached->second.isBinary;
+        } else {
+            const auto cached = displayCache_.find(item->historyId);
+            canType = cached != displayCache_.end()
+                && (cached->second.kind == ClipboardActivityPayloadKind::Text
+                    || cached->second.kind == ClipboardActivityPayloadKind::Link);
+        }
+    }
+    self.typeButton.enabled = canType;
+
     const auto undoKind = clipp::PendingUndoKind();
     self.undoButton.enabled = undoKind != clipp::UndoSlotKind::None;
     NSString* undoTip = CLP_NS(CLP_UI_POPUP_UNDO_TIP_MAC);
@@ -1887,6 +1955,157 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
     }
 }
 
+// ---- type it out ----------------------------------------------------------
+// Delivers the selection as real keystrokes instead of a paste, for windows
+// that cannot take one (iKVM/BMC consoles, SPICE/VNC viewers, RDP without
+// clipboard redirection). Never touches any clipboard.
+
+- (void)typeClicked:(id)sender {
+    (void)sender;
+    [self typeSelected];
+}
+
+- (void)showTypeBubble:(NSString*)text {
+    self.typeBubbleLabel.stringValue = text ?: @"";
+    self.typeBubble.hidden = NO;
+}
+
+- (void)hideTypeBubble {
+    self.typeBubble.hidden = YES;
+}
+
+// Armed = the button is lit and the bubble is up; the next click runs.
+- (void)setTypeArmed:(BOOL)armed {
+    typeArmed_ = armed;
+    self.typeButton.contentTintColor =
+        armed ? [NSColor controlAccentColor] : [NSColor secondaryLabelColor];
+    typeArmedKey_ = armed ? [self selectedItemKey] : std::string{};
+    [typeArmTimer_ invalidate];
+    typeArmTimer_ = nil;
+    if (armed) {
+        typeArmTimer_ = [NSTimer scheduledTimerWithTimeInterval:4.0
+                                                        repeats:NO
+                                                          block:^(NSTimer* timer) {
+            (void)timer;
+            // The confirming click never came; stand down quietly.
+            [self setTypeArmed:NO];
+            [self hideTypeBubble];
+        }];
+    }
+}
+
+// Identity of the selected row, so an arm can't survive a selection change
+// (the confirmation quoted counts for a DIFFERENT item).
+- (std::string)selectedItemKey {
+    const PopupItem* item = model_.SelectedItem();
+    if (item == nullptr) {
+        return {};
+    }
+    return item->kind == PopupItem::Kind::Register
+        ? "R:" + item->registerName
+        : "H:" + std::to_string(item->historyId);
+}
+
+- (void)typeSelected {
+    [self dismissToast];
+    [self commitOrCancelRename];
+    // Re-summoning mid-run and hitting the button again means "stop".
+    if (clipp::IsTyping()) {
+        clipp::CancelTyping();
+        [self setTypeArmed:NO];
+        [self hideTypeBubble];
+        return;
+    }
+    const PopupItem* item = model_.SelectedItem();
+    if (item == nullptr || !item->actionable) {
+        return;
+    }
+    // Selection moved since the confirmation was raised: that bubble's counts
+    // described another item, so make them earn a fresh one.
+    if (typeArmed_ && typeArmedKey_ != [self selectedItemKey]) {
+        [self setTypeArmed:NO];
+    }
+
+    std::string utf8;
+    const bool haveText = item->kind == PopupItem::Kind::History
+        ? clipp::TryGetActivityItemText(item->historyId, utf8)
+        : clipp::TryGetRegisterText(item->registerName, utf8);
+    if (!haveText) {
+        [self setTypeArmed:NO];
+        [self showTypeBubble:CLP_NS(CLP_UI_POPUP_TYPE_NO_TEXT)];
+        return;
+    }
+    // An IME has no character-to-keystroke map at all; refuse rather than type
+    // garbage into a composition window.
+    if (clipp::ActiveLayoutIsIme()) {
+        [self setTypeArmed:NO];
+        [self showTypeBubble:CLP_NS(CLP_UI_POPUP_TYPE_IME)];
+        return;
+    }
+
+    const clipp::TypeResult result = clipp::TranslateTextToPlan(Utf8ToWideString(utf8));
+    if (!result.ok) {
+        [self setTypeArmed:NO];
+        [self showTypeBubble:[self describeTypeError:result.error]];
+        return;
+    }
+    clipp::TypeSchedule schedule = clipp::BuildTypeSchedule(result.plan);
+    const int seconds = clipp::EstimateTypeSeconds(schedule);
+
+    // Arm-and-confirm for anything with consequences: every Return may run a
+    // command on the far side, and a run measured in tens of seconds is
+    // usually a mis-click. Short, Return-free text types on the first click.
+    if (!typeArmed_ && (schedule.enterCount > 0 || seconds >= 10)) {
+        [self setTypeArmed:YES];
+        [self showTypeBubble:[self describeTypeConfirmation:schedule seconds:seconds]];
+        return;
+    }
+
+    [self setTypeArmed:NO];
+    [self hideTypeBubble];
+    [self dismiss];
+    // Same beat the paste keystroke takes: our non-activating panel never held
+    // the app's focus, so the target is already frontmost — this only lets the
+    // panel finish resigning key.
+    __block clipp::TypeSchedule pending = std::move(schedule);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.06 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        clipp::StartTyping(std::move(pending));
+    });
+}
+
+- (NSString*)describeTypeConfirmation:(const clipp::TypeSchedule&)schedule seconds:(int)seconds {
+    NSString* detail = nil;
+    if (schedule.enterCount > 0) {
+        detail = [NSString stringWithFormat:@"%@%d×", CLP_NS(CLP_UI_POPUP_TYPE_ENTER_PREFIX),
+                                            schedule.enterCount];
+        if (seconds >= 10) {
+            detail = [NSString stringWithFormat:@"%@, ~%d s", detail, seconds];
+        }
+    } else {
+        detail = [NSString stringWithFormat:@"%zu%@%d%@", schedule.events.size(),
+                                            CLP_NS(CLP_UI_POPUP_TYPE_KEYSTROKES_MIDDLE), seconds,
+                                            CLP_NS(CLP_UI_POPUP_TYPE_KEYSTROKES_SUFFIX)];
+    }
+    return [NSString stringWithFormat:@"%@%@", detail, CLP_NS(CLP_UI_POPUP_TYPE_CONFIRM_SUFFIX)];
+}
+
+// "Can't type 'ß' (U+00DF) - line 3, col 14 [ABC]"
+- (NSString*)describeTypeError:(const clipp::TypeError&)error {
+    NSMutableString* text = [NSMutableString stringWithString:CLP_NS(CLP_UI_POPUP_TYPE_CANT_PREFIX)];
+    if (error.codepoint >= 0x20 && error.codepoint != 0x7F && error.codepoint <= 0xFFFF) {
+        [text appendFormat:@"'%C' ", (unichar)error.codepoint];
+    }
+    [text appendFormat:@"(U+%04X)", (unsigned)error.codepoint];
+    [text appendFormat:@"%@%d%@%d", CLP_NS(CLP_UI_POPUP_TYPE_CANT_LINE), error.line,
+                       CLP_NS(CLP_UI_POPUP_TYPE_CANT_COLUMN), error.column];
+    const std::wstring layout = clipp::ActiveKeyboardLayoutName();
+    if (!layout.empty()) {
+        [text appendFormat:@" [%@]", MacOSToNSString(layout)];
+    }
+    return text;
+}
+
 // Post ⌘V to the frontmost app. The nonactivating panel never took the app's
 // focus, so the target is already frontmost — the only timing need is a beat
 // for our key panel to finish resigning. Requires the user to have granted
@@ -2146,6 +2365,10 @@ static NSAttributedString* HighlightedStringWrapped(NSString* text, NSString* fi
     NSString* chars = event.charactersIgnoringModifiers.lowercaseString;
     if ([chars isEqualToString:@"s"]) {
         [self saveSelected];
+        return YES;
+    }
+    if ([chars isEqualToString:@"t"]) {
+        [self typeSelected];
         return YES;
     }
     if ([chars isEqualToString:@"z"]

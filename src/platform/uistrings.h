@@ -67,6 +67,7 @@
 // paste (iKVM/BMC consoles, virt-manager/SPICE/VNC viewers, RDP without
 // clipboard redirection). Confirm bubble is anchored under the toolbar button.
 #define CLP_UI_POPUP_TYPE_TIP "Type it out, key by key (Ctrl+T)"
+#define CLP_UI_POPUP_TYPE_TIP_MAC "Type it out, key by key (⌘T)"
 #define CLP_UI_POPUP_TYPE_TIP_TYPING "Typing... (any key or click stops)"
 #define CLP_UI_POPUP_TYPE_CONFIRM_SUFFIX " - click again to type"
 #define CLP_UI_POPUP_TYPE_ENTER_PREFIX "Will press Enter "

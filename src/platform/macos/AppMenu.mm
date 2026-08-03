@@ -6,6 +6,7 @@
 #include "ClipboardFlowUi.h"
 #include "Logger.h"
 #include "Settings.h"
+#include "TextTyper.h"
 #include "AboutPage.h"
 #include "ClippPage.h"
 #include "NetworkPage.h"
@@ -1223,6 +1224,7 @@ static void StopMacOSAppOnMainThread(bool unregisterAutoStart) {
     }
 
     clipp::DestroyPopupPanel();
+    clipp::ShutdownTyping();  // stops any run in flight
 
     NSApplication* app = [NSApplication sharedApplication];
     [app stop:nil];
