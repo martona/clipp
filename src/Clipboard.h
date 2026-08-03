@@ -23,6 +23,13 @@ ClipboardPayload ReadClipboardData(PlatformWindowHandle hwnd);
 bool IsClipboardDataCurrent(const ClipboardPayload& payload);
 // Writes the payload to the OS clipboard. The shared_ptr doubles as the
 // delayed-render reference (Win32 needs it alive across CF_DIB rendering).
+//
+// forceWrite bypasses the hash guard's "already current, nothing to do" skip.
+// Pass it for writes the USER explicitly asked for (the popup making an item
+// current), because the guard can be stale: any clipboard change we couldn't
+// read leaves it asserting the previous content is still there. Incoming
+// network payloads must NOT set it — there the guard is real echo suppression.
 void SetClipboardData(
     std::shared_ptr<const ClipboardPayload> payload,
-    bool markAsClippOriginated = true);
+    bool markAsClippOriginated = true,
+    bool forceWrite = false);

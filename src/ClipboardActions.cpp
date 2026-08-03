@@ -55,7 +55,19 @@ namespace {
 // treats the resulting clipboard-change notification as an echo instead of
 // re-stamping it as a brand-new locally-originated event.
 void ApplyAndBroadcastPayload(const std::shared_ptr<const ClipboardPayload>& payload) {
-    SetClipboardData(payload, true);
+    // forceWrite: both callers are the user pointing at an item and saying
+    // "make this the clipboard", so the write must not be second-guessed. The
+    // hash guard can be STALE — every clipboard change we fail to read (a file
+    // copied in Explorer/Finder leaves only CF_HDROP / public.file-url, a
+    // malformed CF_UNICODETEXT, a failed OpenClipboard) returns from
+    // ReadClipboardData before AcceptCurrent, so the guard keeps asserting the
+    // PREVIOUS content is still current. Skipping the write on that stale
+    // belief is what made the popup's top item paste nothing: the synthetic
+    // Ctrl+V landed on whatever was really there. Writing unconditionally also
+    // re-syncs the guard (RememberCurrent), so the stale state self-heals.
+    // Incoming network payloads deliberately don't come through here — for
+    // those the guard is genuine echo suppression and must be obeyed.
+    SetClipboardData(payload, true, /*forceWrite=*/true);
     g_clipboardActivityStore.Add(payload);
     MirrorClipboardToDefaultRegister(payload);
     const size_t queuedToPeers = g_peerManager.BroadcastClipboard(payload);

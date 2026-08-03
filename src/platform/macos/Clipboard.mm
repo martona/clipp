@@ -163,12 +163,13 @@ bool IsClipboardDataCurrent(const ClipboardPayload& payload) {
 
 void SetClipboardData(
     std::shared_ptr<const ClipboardPayload> payload,
-    bool markAsClippOriginated) {
+    bool markAsClippOriginated,
+    bool forceWrite) {
     if (!payload) {
         return;
     }
 
-    if (markAsClippOriginated && g_clipboardHashGuard.IsCurrent(*payload)) {
+    if (markAsClippOriginated && !forceWrite && g_clipboardHashGuard.IsCurrent(*payload)) {
         g_logger.log(__FUNCTION__, Logger::Level::Info, "Clipboard contents already current; not setting clipboard data");
         return;
     }
