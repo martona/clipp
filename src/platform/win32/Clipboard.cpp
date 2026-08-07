@@ -746,6 +746,34 @@ done:
     return readable >= bytes;
 }
 
+static int ForeignReadExceptionFilter(DWORD code) {
+    return (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_IN_PAGE_ERROR)
+        ? EXCEPTION_EXECUTE_HANDLER
+        : EXCEPTION_CONTINUE_SEARCH;
+}
+
+// Copy a span of clipboard-owner memory into caller-owned storage under a
+// structured exception guard. The handle GetClipboardData returns is a
+// per-process marshaled copy that win32k can free ASYNCHRONOUSLY -- even while
+// the clipboard is held open and the handle is GlobalLock'd. Proven by the
+// 2026-08-06 PageHeap dump: the readable-span probe and a full
+// WideCharToMultiByte sizing scan both succeeded, then the very next read of
+// the same buffer faulted on its first byte. No probe can close that race
+// (ClipboardSpanIsReadable only inspects page state, and the answer is stale
+// the moment it returns), so the one read that touches the foreign pages is
+// the guarded one; callers parse only the private copy afterwards. Losing the
+// event when the buffer is revoked is acceptable -- we log and drop it.
+// No locals with destructors here (see SafeDecodeDibPixels for why).
+static bool CopyForeignSpanGuarded(void* dst, const void* src, size_t bytes) {
+    __try {
+        std::memcpy(dst, src, bytes);
+        return true;
+    }
+    __except (ForeignReadExceptionFilter(GetExceptionCode())) {
+        return false;
+    }
+}
+
 // Decode a single little-endian uint32 (DWORD) out of a registered clipboard format.
 // Returns true and sets *outValue only when the format is present AND backed by at
 // least a readable DWORD; returns false (without touching *outValue) otherwise.
@@ -781,9 +809,9 @@ static bool TryReadClipboardUint32(UINT format, uint32_t* outValue) {
     bool ok = false;
     const SIZE_T dataSize = GlobalSize(hData);
     size_t readable = 0;
-    if (dataSize >= sizeof(uint32_t) && ClipboardSpanIsReadable(raw, sizeof(uint32_t), &readable)) {
-        uint32_t value = 0;
-        std::memcpy(&value, raw, sizeof(value)); // little-endian DWORD on Windows/x86-64
+    uint32_t value = 0; // little-endian DWORD on Windows/x86-64
+    if (dataSize >= sizeof(uint32_t) && ClipboardSpanIsReadable(raw, sizeof(uint32_t), &readable) &&
+        CopyForeignSpanGuarded(&value, raw, sizeof(value))) {
         *outValue = value;
         ok = true;
     }
@@ -843,12 +871,6 @@ struct DibPixelDecode {
     bool standard32BppBgra;
     bool preserveAlpha;
 };
-
-static int DibReadExceptionFilter(DWORD code) {
-    return (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_IN_PAGE_ERROR)
-        ? EXCEPTION_EXECUTE_HANDLER
-        : EXCEPTION_CONTINUE_SEARCH;
-}
 
 // No locals with destructors may live here: under /EHsc a structured exception
 // unwinding through this frame would not run C++ destructors, so keeping the body
@@ -922,7 +944,7 @@ static DibDecodeResult SafeDecodeDibPixels(const DibPixelDecode& d) {
         }
         return DibDecodeResult::Ok;
     }
-    __except (DibReadExceptionFilter(GetExceptionCode())) {
+    __except (ForeignReadExceptionFilter(GetExceptionCode())) {
         return DibDecodeResult::Faulted;
     }
 }
@@ -1506,21 +1528,30 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
                 if (hData) {
                     const wchar_t* utf16Str = static_cast<const wchar_t*>(GlobalLock(hData));
                     if (utf16Str) {
-                        // A conformant CF_UNICODETEXT buffer is NUL-terminated within its
-                        // own allocation. A foreign owner (notably the RDP / Terminal
-                        // Services clipboard) can hand us one that isn't -- passing -1 to
-                        // WideCharToMultiByte would then scan for a NUL past the end of the
-                        // buffer (an over-read: intermittent AV in the wild, deterministic
-                        // under PageHeap). So sanity-check first: probe how much of the
-                        // declared buffer is committed and require a NUL within it. No NUL
-                        // -> truncated/garbage (or hostile); drop the whole clipboard event.
-                        // A NUL that IS present makes the -1 scans below safe by construction.
+                        // Two hazards stack up here. (1) A conformant CF_UNICODETEXT
+                        // buffer is NUL-terminated within its own allocation, but a
+                        // foreign owner (notably the RDP / Terminal Services clipboard)
+                        // can hand us one that isn't -- a -1 WideCharToMultiByte scan
+                        // would then run past the end of the committed pages. (2) win32k
+                        // can revoke the marshaled buffer asynchronously, MID-READ, even
+                        // while the clipboard is open and the handle is GlobalLock'd
+                        // (see CopyForeignSpanGuarded). So: probe the committed span,
+                        // copy it exactly once under the SEH guard, and do all scanning
+                        // and conversion against the private copy.
                         const SIZE_T byteSize = GlobalSize(hData);
                         size_t readableBytes = 0;
                         ClipboardSpanIsReadable(reinterpret_cast<const unsigned char*>(utf16Str),
                                                 static_cast<size_t>(byteSize), &readableBytes);
                         const size_t readableChars = readableBytes / sizeof(wchar_t);
-                        if (readableChars == 0 || wmemchr(utf16Str, L'\0', readableChars) == nullptr) {
+                        std::vector<wchar_t> utf16Copy(readableChars);
+                        if (readableChars > 0 &&
+                            !CopyForeignSpanGuarded(utf16Copy.data(), utf16Str, readableChars * sizeof(wchar_t))) {
+                            g_logger.log(__FUNCTION__, Logger::Level::Warning,
+                                L"Ignoring clipboard event: CF_UNICODETEXT buffer was revoked mid-read (declared %zu bytes, %zu readable at probe time).",
+                                static_cast<size_t>(byteSize), readableBytes);
+                            LogClipboardOwnerDossier(__FUNCTION__, L"revoked CF_UNICODETEXT clipboard buffer");
+                        }
+                        else if (readableChars == 0 || wmemchr(utf16Copy.data(), L'\0', readableChars) == nullptr) {
                             g_logger.log(__FUNCTION__, Logger::Level::Warning,
                                 L"Ignoring clipboard event: CF_UNICODETEXT is not NUL-terminated within its committed buffer (declared %zu bytes, %zu readable).",
                                 static_cast<size_t>(byteSize), readableBytes);
@@ -1528,12 +1559,12 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
                         }
                         else {
                             // Calculate required buffer size for UTF-8 (including null terminator)
-                            int utf8Size = WideCharToMultiByte(CP_UTF8, 0, utf16Str, -1, nullptr, 0, nullptr, nullptr);
+                            int utf8Size = WideCharToMultiByte(CP_UTF8, 0, utf16Copy.data(), -1, nullptr, 0, nullptr, nullptr);
                             if (utf8Size > 0) {
                                 payload.meta.formatId = CLIPP_FORMAT_UTF8;
                                 bytes.resize(utf8Size);
                                 // Perform the actual conversion straight into the vector
-                                if (WideCharToMultiByte(CP_UTF8, 0, utf16Str, -1,
+                                if (WideCharToMultiByte(CP_UTF8, 0, utf16Copy.data(), -1,
                                     reinterpret_cast<char*>(bytes.data()), utf8Size, nullptr, nullptr) > 0) {
                                     g_logger.log(__FUNCTION__, Logger::Level::Info, L"Read CF_UNICODETEXT from system clipboard (UTF-8 payload: %zu bytes)", bytes.size());
                                 }
@@ -1579,8 +1610,14 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
                             LogClipboardOwnerDossier(__FUNCTION__, L"truncated \"PNG\" clipboard buffer");
                         }
                         else if (dataSize > 0) {
-                            std::vector<unsigned char> pngData(pngBytes, pngBytes + static_cast<size_t>(dataSize));
-                            if (IsPngStream(pngData)) {
+                            // One guarded pass over the foreign bytes; validate the private copy.
+                            std::vector<unsigned char> pngData(static_cast<size_t>(dataSize));
+                            if (!CopyForeignSpanGuarded(pngData.data(), pngBytes, static_cast<size_t>(dataSize))) {
+                                g_logger.log(__FUNCTION__, Logger::Level::Warning,
+                                    L"\"PNG\" clipboard buffer was revoked mid-read (%zu bytes); skipping image payload", static_cast<size_t>(dataSize));
+                                LogClipboardOwnerDossier(__FUNCTION__, L"revoked \"PNG\" clipboard buffer");
+                            }
+                            else if (IsPngStream(pngData)) {
                                 payload.meta.formatId = CLIPP_FORMAT_PNG;
                                 bytes = std::move(pngData);
                                 g_logger.log(__FUNCTION__, Logger::Level::Info, L"Read \"PNG\" clipboard format from system clipboard (%zu bytes)", static_cast<size_t>(dataSize));
@@ -1599,7 +1636,8 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
                 }
             }
             // 2b. Fall back to CF_DIB (Windows synthesizes it from whatever the
-            // source offered). DIBToPNG re-encodes it under the truncation guard.
+            // source offered). The whole DIB is copied once under the SEH guard,
+            // so DIBToPNG's header/palette/pixel parsing runs on private memory.
             else if (IsClipboardFormatAvailable(CF_DIB)) {
                 HANDLE hData = GetClipboardData(CF_DIB);
                 if (hData) {
@@ -1608,18 +1646,34 @@ ClipboardPayload ReadClipboardData(HWND hwnd) {
                         // GlobalSize tells us exactly how many bytes the DIB takes up in memory.
                         // Encode the local DIB as PNG before placing it into the network payload.
                         SIZE_T dataSize = GlobalSize(hData);
-                        if (dataSize > 0) {
-                            std::vector<unsigned char> pngData;
-							ScopedTimer timer(L"Clipboard DIB to PNG encoding");
-                            if (DIBToPNG(dibData, static_cast<size_t>(dataSize), pngData)) {
-                                payload.meta.formatId = CLIPP_FORMAT_PNG;
-                                bytes = std::move(pngData);
-                                g_logger.log(__FUNCTION__, Logger::Level::Info, L"Read CF_DIB from system clipboard and encoded PNG payload (DIB: %zu bytes, PNG: %zu bytes)", static_cast<size_t>(dataSize), bytes.size());
-                            } else {
-                                g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Failed to encode CF_DIB clipboard image as PNG; skipping image payload");
-                            }
-                        } else {
+                        size_t readableDibBytes = 0;
+                        if (dataSize == 0) {
                             g_logger.log(__FUNCTION__, Logger::Level::Debug, L"CF_DIB clipboard data has zero byte GlobalSize; skipping image payload");
+                        }
+                        else if (!ClipboardSpanIsReadable(dibData, static_cast<size_t>(dataSize), &readableDibBytes)) {
+                            g_logger.log(__FUNCTION__, Logger::Level::Error,
+                                L"Refusing to read CF_DIB clipboard data: buffer is not fully committed (declared %zu bytes, only %zu readable)",
+                                static_cast<size_t>(dataSize), readableDibBytes);
+                            LogClipboardOwnerDossier(__FUNCTION__, L"truncated CF_DIB clipboard buffer");
+                        }
+                        else {
+                            std::vector<unsigned char> dibCopy(static_cast<size_t>(dataSize));
+                            if (!CopyForeignSpanGuarded(dibCopy.data(), dibData, static_cast<size_t>(dataSize))) {
+                                g_logger.log(__FUNCTION__, Logger::Level::Warning,
+                                    L"CF_DIB clipboard buffer was revoked mid-read (%zu bytes); skipping image payload", static_cast<size_t>(dataSize));
+                                LogClipboardOwnerDossier(__FUNCTION__, L"revoked CF_DIB clipboard buffer");
+                            }
+                            else {
+                                std::vector<unsigned char> pngData;
+                                ScopedTimer timer(L"Clipboard DIB to PNG encoding");
+                                if (DIBToPNG(dibCopy.data(), static_cast<size_t>(dataSize), pngData)) {
+                                    payload.meta.formatId = CLIPP_FORMAT_PNG;
+                                    bytes = std::move(pngData);
+                                    g_logger.log(__FUNCTION__, Logger::Level::Info, L"Read CF_DIB from system clipboard and encoded PNG payload (DIB: %zu bytes, PNG: %zu bytes)", static_cast<size_t>(dataSize), bytes.size());
+                                } else {
+                                    g_logger.log(__FUNCTION__, Logger::Level::Debug, L"Failed to encode CF_DIB clipboard image as PNG; skipping image payload");
+                                }
+                            }
                         }
                         GlobalUnlock(hData);
                     } else {
