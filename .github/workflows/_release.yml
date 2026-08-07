@@ -153,7 +153,7 @@ jobs:
           }
 
       - name: Azure login (Trusted Signing)
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -286,7 +286,7 @@ jobs:
 
       - name: Upload crash dumps
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: werdumps-${{ matrix.arch }}
           # Spelled out rather than ${{ env.WER_DUMP_DIR }}: that var is exported by
@@ -333,7 +333,7 @@ jobs:
           Get-ChildItem $stage | Format-Table Name, Length
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-${{ matrix.arch }}
           path: release-stage/*
@@ -405,7 +405,7 @@ jobs:
       # scoped to this job. The action auto-cleans the keychain on job exit
       # via its post-step, so the runner ends up in the same state it started.
       - name: Import code signing certificate
-        uses: apple-actions/import-codesign-certs@v3
+        uses: apple-actions/import-codesign-certs@v7
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_P12 }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_P12_PASSWORD }}
@@ -506,7 +506,7 @@ jobs:
           ls -la release-stage/
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-arm64
           path: release-stage/*
@@ -708,7 +708,7 @@ jobs:
         run: cp scripts/install.sh release-stage/install.sh
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-${{ matrix.arch }}
           path: release-stage/*
@@ -810,7 +810,7 @@ jobs:
 
       - name: Import App Store signing certificates
         if: steps.guard.outputs.ok == 'true'
-        uses: apple-actions/import-codesign-certs@v3
+        uses: apple-actions/import-codesign-certs@v7
         with:
           p12-file-base64: ${{ secrets.APPLE_APPSTORE_P12 }}
           p12-password: ${{ secrets.APPLE_APPSTORE_P12_PASSWORD }}
@@ -858,7 +858,7 @@ jobs:
       # build failure is undiagnosable after the fact.
       - name: Upload vcpkg failure logs
         if: failure() && steps.guard.outputs.ok == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vcpkg-failure-logs-appstore-macos
           path: |
@@ -933,7 +933,7 @@ jobs:
 
       - name: Import App Store signing certificates
         if: steps.guard.outputs.ok == 'true'
-        uses: apple-actions/import-codesign-certs@v3
+        uses: apple-actions/import-codesign-certs@v7
         with:
           p12-file-base64: ${{ secrets.APPLE_APPSTORE_P12 }}
           p12-password: ${{ secrets.APPLE_APPSTORE_P12_PASSWORD }}
@@ -980,7 +980,7 @@ jobs:
 
       - name: Upload vcpkg failure logs
         if: failure() && steps.guard.outputs.ok == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vcpkg-failure-logs-appstore-ios
           path: |
@@ -994,7 +994,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
@@ -1025,7 +1025,7 @@ jobs:
           subject-path: 'artifacts/*'
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ inputs.tag }}
           name: ${{ inputs.tag }}
