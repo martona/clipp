@@ -65,12 +65,12 @@
     <Logo>Images\StoreLogo.png</Logo>
     <!-- File writes land in the REAL file system, not the per-package overlay.
          Needed by the Explorer SendTo integration: the Clipp.lnk must land in the
-         real shell:SendTo folder (under %APPDATA%) or Explorer never shows it -- the
+         real shell:SendTo folder (under %APPDATA%) or Explorer never shows it — the
          file-side twin of the copy-on-write registry trap above. Pairs with the
          unvirtualizedResources capability below. Consequences: (a) app state files
          (%LOCALAPPDATA%\Clipp: register snapshot, logs, crashdumps) now land in the
          real location, shared with an unpackaged install and left behind on
-         uninstall -- settings/key/host id are REGISTRY and stay virtualized, and a
+         uninstall — settings/key/host id are REGISTRY and stay virtualized, and a
          once-virtualized register snapshot is re-synced from the mesh, so no file
          migration is needed on upgrade; (b) desktop6 is ignorable, so pre-2004
          Windows keeps virtualization on and SendTo registration is silently inert

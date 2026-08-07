@@ -227,7 +227,19 @@ $manifest = (Get-Content -Raw $manifestTemplate).
     Replace('@PUBLISHER_DISPLAY_NAME@', $PublisherDisplayName).
     Replace('@VERSION@', $Version).
     Replace('@ARCH@', $msixArch)
-Set-Content -Path (Join-Path $layout 'AppxManifest.xml') -Value $manifest -Encoding UTF8
+$manifestPath = Join-Path $layout 'AppxManifest.xml'
+Set-Content -Path $manifestPath -Value $manifest -Encoding UTF8
+# makepri reports a malformed manifest as PRI191 buried mid-scroll in a UTF-16-mangled
+# usage dump (first hit: '--' inside an XML comment, which the XML spec forbids).
+# Validate here so the failure is one readable line instead.
+try {
+    $probe = New-Object System.Xml.XmlDocument
+    $probe.LoadXml((Get-Content -Raw $manifestPath))
+}
+catch {
+    $reason = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message }
+    throw "Substituted AppxManifest.xml is not well-formed XML: $reason"
+}
 
 # --- index resources (resources.pri) -----------------------------------------
 # Without this, Windows ignores the scale/targetsize/unplated qualifier files and the
@@ -236,7 +248,7 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $priConfig = Join-Path $OutDir 'priconfig.xml'
 & $makepri createconfig /cf $priConfig /dq en-US /o
 if ($LASTEXITCODE -ne 0) { throw "makepri createconfig failed ($LASTEXITCODE)." }
-& $makepri new /pr $layout /cf $priConfig /mn (Join-Path $layout 'AppxManifest.xml') /of (Join-Path $layout 'resources.pri') /o
+& $makepri new /pr $layout /cf $priConfig /mn $manifestPath /of (Join-Path $layout 'resources.pri') /o
 if ($LASTEXITCODE -ne 0) { throw "makepri new failed ($LASTEXITCODE)." }
 
 # --- pack --------------------------------------------------------------------

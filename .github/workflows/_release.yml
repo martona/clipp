@@ -289,7 +289,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: werdumps-${{ matrix.arch }}
-          path: ${{ env.WER_DUMP_DIR }}
+          # Spelled out rather than ${{ env.WER_DUMP_DIR }}: that var is exported by
+          # the enable-WER step, which is SKIPPED when an earlier step fails -- and
+          # this step runs precisely on failure. An empty path is a hard error that
+          # masks the real one.
+          path: ${{ runner.temp }}\werdumps
           if-no-files-found: ignore
 
       - name: Uninstall MSIX
