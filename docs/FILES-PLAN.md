@@ -6,7 +6,7 @@ and only when pasted. The synced clipboard already does this for text/image
 by-value; files are the first **by-reference** clipboard type.
 
 Draft 2 settles the transport, metadata-fidelity, conflict-reporting and
-liveness questions that draft 1 left implicit. Two items remain open and are
+liveness questions that draft 1 left implicit. One item remains open and is
 marked **OPEN** inline.
 
 ## Verified ground (don't relitigate)
@@ -50,13 +50,25 @@ The residual asymmetry: **Windows demands the entire tree's *metadata* at paste*
 (one flat `FILEGROUPDESCRIPTOR`), so the descriptor build recurses down the whole
 tree before the first byte moves.
 
-**OPEN — `maxDepth` on `listChildren`.** One level per call is the macOS shape;
-imposed on Windows it costs a network round trip *per directory*, so a deep tree
-is hundreds of sequential RTTs before Explorer paints. The origin already has the
-subtree on local disk, where walking it is nearly free. A `maxDepth` parameter
-(macOS always passes 1; Windows passes "unbounded") collapses that to roughly one
-call. **Decide before Phase 1 freezes the frame** — adding a field to a shipped
-frame is the annoying kind of migration.
+**`maxDepth`, and why the recursive walk STREAMS.** One level per call is the
+macOS shape; imposed on Windows it costs a round trip *per directory* — a 5k-
+directory tree is ~5 s of pure latency on a 1 ms LAN and ~50 s over 10 ms Wi-Fi,
+stacked on top of the ~1 s the local walk costs anyway.
+
+Incremental delivery buys nothing on Windows to offset that:
+`GetData(CFSTR_FILEDESCRIPTOR)` is a **single synchronous call returning one
+`HGLOBAL`**, and the format is flat (every file listed with its full relative
+path, `bigdir\sub\a.txt`). There is no partial descriptor and no expand-later, so
+Explorer sits in "Preparing to copy…" regardless. The only objective left is
+minimum total wall time.
+
+So the recursive walk is **streamed, not batched**: one request, and the origin
+emits entries *as it walks*, terminated explicitly (with a distinguishable error
+terminator if the walk dies at directory 4000). One round trip; no multi-MB
+buffer on either side; and walk time overlaps transfer time instead of summing —
+wall time is `max(walk, transfer)` plus an RTT, about as close to the storage
+floor as this gets. macOS passes `maxDepth = 1` while browsing; Windows passes
+unbounded at paste. Same frame, same channel, one code path.
 
 ### Data model — manifest rides the existing pipeline, bytes go out-of-band
 
@@ -171,7 +183,7 @@ Per-file forensics (which file, which reason, what the OS returned) go to the
 private-badge machinery) is an acceptable backstop, but it is explicitly not a
 channel — nobody is expected to go find it.
 
-Aggregate one toast per paste, debounced; the bulk channel's idle-close is a
+Aggregate one toast per paste, debounced; the file channel's idle-close is a
 serviceable "the paste is over" signal.
 
 Component work required: a **transient** mode alongside today's sticky one, and a
@@ -185,14 +197,17 @@ Two new request/response frames over the existing `CryptoChannel`, modeled on
 register copy (see [[project-oneshot-relay-ack]] — fire-and-forget is not an
 option here either):
 
-- `FLST` — `listChildren`: request `(eventGuid, relPath, maxDepth)`, response
-  entries for that level (or subtree). Errors: unknown guid / not-serving /
-  path-escaped / gone. **Always on the control connection** — macOS enumerates
-  when the user merely *browses* into a folder in Finder, with no paste and no
-  bulk channel in sight.
-- `FGET` — `readContents`: request `(eventGuid, relPath, offset, length)`.
-  `length == 0` ⇒ whole file (macOS `fetchContents`); Windows `IStream` requests
-  sequential ranges. **Always on the bulk side channel** (below).
+- `FLST` — `listChildren`: request `(eventGuid, relPath, maxDepth)`, streamed
+  entry response. Errors: unknown guid / not-serving / path-escaped / gone.
+- `FGET` — `readContents`: request `(eventGuid, relPath, offset, length)`,
+  streamed byte response. `length == 0` ⇒ whole file (macOS `fetchContents`);
+  Windows `IStream` requests sequential ranges.
+
+**Both travel on the file channel, always — never the control connection.** No
+per-frame routing rule to get wrong, no two-mode testing. The cost is that a
+macOS *browse* (enumerating a folder the user descended into, with no paste in
+sight) also opens the channel; that is one handshake, amortized over the session,
+in exchange for a single code path.
 
 BE serialization like `RegisterWire`. New capability bit
 `CryptoChannel::CAP0_SERVES_FILES = 0x10` — 0x01 RECENT, 0x02 REGISTERS, 0x04
@@ -202,9 +217,9 @@ grows more verbs, decide then whether `caps[1]` is in play.
 A receiver only writes file URLs to its OS clipboard / creates provider items if
 the bundle's origin is reachable and advertises `CAP0_SERVES_FILES`.
 
-### Bulk transfer — a dedicated side channel
+### The file channel — one dedicated side channel, carrying everything
 
-`FGET` must not ride the control connection. That connection's recv loop is
+`FLST`/`FGET` must not ride the control connection. That connection's recv loop is
 **strictly serial** (load-bearing elsewhere: it is what makes the `PING`/`PONG`
 delivery fence a valid ack), so bulk bytes there would block clipboard sync,
 register anti-entropy and keepalives for the duration of every chunk. Worse, it
@@ -236,22 +251,29 @@ drain today. Add a role byte the way `osType` was added: peeled off `caps[]` so
 Gate dialing on `CAP0_SERVES_FILES` so a role-tagged connection never reaches a
 peer that predates the field.
 
-**Bulk channels are `PeerManager`'s to track, but not peers.** They must be filed
+**File channels are `PeerManager`'s to track, but not peers.** They must be filed
 and managed as side channels — no broadcast queue, no anti-entropy, and invisible
 to the outgoing-peer reconciler, whose job is reaping same-endpoint churn and
-which would otherwise see a bulk channel as exactly that. `PeerManager.cpp`
+which would otherwise see a file channel as exactly that. `PeerManager.cpp`
 currently drops a second connection from a known host as a duplicate, so this is
-not optional. Tracking them there is also what gives quota a home: one bulk
+not optional. Tracking them there is also what gives quota a home: one file
 channel per peer by default (a named constant in `PeerLimits.h`), rejected by
 completing the handshake and answering with a busy error frame — one extra round
 trip buys a legible "origin is busy" instead of a bare reset.
 
-**Lifetime is per paste, not per file.** Explorer pastes a multi-file selection as
-a sequence of separate `IStream`s; connect-per-file would turn a 500-file paste
-into 500 handshakes. Open lazily on the first `FGET`, close after a few seconds
-idle.
+**Lifetime is per operation, not per file.** Explorer pastes a multi-file
+selection as a sequence of separate `IStream`s; connect-per-file would turn a
+500-file paste into 500 handshakes. Open lazily on the first `FLST`/`FGET`, close
+after a few seconds idle.
 
-**No fallback to bulk-over-control.** It would mean maintaining the slow path and
+**Requests queue on the channel.** macOS can have several `fetchContents` in
+flight during a tree copy, and Finder interleaves enumeration with fetching. With
+one channel those serialize. That costs approximately nothing — one link's
+bandwidth is the constraint either way, so serializing changes ordering, not
+throughput — and it avoids an in-protocol multiplexer. Queue on the receiver
+side; do not open a second channel to parallelize.
+
+**No fallback to file-RPCs-over-control.** It would mean maintaining the slow path and
 its interaction with the fast one to serve a case that only exists in a network
 where the mesh is already broken.
 
@@ -272,7 +294,7 @@ connection that announced itself as one-shot.
   `CFSTR_FILEDESCRIPTOR` + `CFSTR_FILECONTENTS`. `GetData(FILEDESCRIPTOR)` walks
   the tree via `FLST` (on the `IDataObjectAsyncCapability` thread) and emits the
   flat `FILEGROUPDESCRIPTOR`. `GetData(FILECONTENTS, lindex=i)` returns an
-  `IStream` whose `Read` issues ranged `FGET` over the bulk channel.
+  `IStream` whose `Read` issues ranged `FGET` over the file channel.
   `OleSetClipboard`; the data object stays alive on the daemon.
   - Note this is a different clipboard-ownership model from the existing
     `SetClipboardData`/`WM_RENDERFORMAT` path — the files branch bypasses it
@@ -288,6 +310,22 @@ connection that announced itself as one-shot.
   registered once via `NSFileProviderManager.add(domain:)`. Layout
   `~/Library/CloudStorage/clipp/<eventGuid>/…`. The domain is *ephemeral scratch*,
   not a product surface.
+- **There is no lighter provider to trade down to.** `NSFileProviderExtension`
+  (the older non-replicated, document-vending flavor) is the iOS Files-app model;
+  macOS requires the replicated one. The alternatives are all disqualified:
+  macFUSE needs a user-installed system extension (categorically not MAS), a
+  loopback SMB/NFS mount needs a privileged mount and is outside the sandbox, and
+  eager staging is the option already rejected. Replicated isn't the best choice
+  — it's the only one.
+- **The zero-extension fallback that already works is DRAG.** The 2026-06-17 probe
+  showed `NSFilePromiseProvider` fails on Cmd-V but functions for drags, because a
+  drop supplies a destination and a paste doesn't. Dragging an item out of the
+  Clipp window into Finder is lazy and native with no extension at all. It isn't
+  Cmd-V, so it can't replace the extension — but it's the shippable subset if the
+  extension work stalls, and it's the same degraded mode the MAS read path names.
+- Check whether `NSFileProviderDomain`'s hidden-domain support covers the
+  deployment target; if it does, it retires the long-standing cosmetic landmine of
+  the domain being visible under `~/Library/CloudStorage`.
 - **Provide (paste target):** on receiving a manifest, the daemon writes the
   top-level entries as **dataless placeholder items** under `<eventGuid>/` into
   the app-group store and signals the enumerator; it puts `public.file-url`s for
@@ -390,12 +428,26 @@ canonicalizing through the OS (`GetFinalPathNameByHandle` / `realpath`) and
 prefix-checking against the pinned roots — not by string-inspecting for `..`.
 Symlinks and junctions are what string checks miss.
 
-## Limits (extend `ClipboardLimits.h`)
+## Limits — deliberately few
 
-Max top-level entries per bundle; max total declared size before we refuse to
-advertise; per-`FGET` chunk size; max concurrent bulk channels per peer
-(`PeerLimits.h`). Path-escape rejection on every `FLST`/`FGET` relPath. Refusals
-are origin-side, never background eviction (layering law).
+Per-`FGET` chunk size; max concurrent file channels per peer (`PeerLimits.h`).
+Path-escape rejection on every `FLST`/`FGET` relPath. Refusals are origin-side,
+never background eviction (layering law).
+
+**No cap on bundle size or entry count.** The mechanism already has failure
+handling; use it, and otherwise let people copy what they copy. Know how it fails
+so the choice is informed rather than overlooked: the Windows descriptor is a
+*single* `HGLOBAL` at roughly 600 bytes per entry, so an absurd bundle surfaces as
+an allocation failure — `E_OUTOFMEMORY` out of `GetData`, an unhelpful Explorer
+error rather than a sentence explaining itself. It still fails before a single
+file is created, which is the property that matters.
+
+**No caching of the walk, on either side.** File contents change with no
+invalidation mechanism conceivable, and copy/paste is the most one-shot job there
+is — it essentially never repeats. If Explorer asks for the descriptor twice, walk
+twice. (Probe 3 is what could reopen this: if Explorer pulls the descriptor on
+every right-click rather than at paste, a repeated multi-second walk becomes its
+own problem and wants a different answer, not a cache.)
 
 ## Probes — gate the phases on these
 
@@ -406,21 +458,25 @@ are origin-side, never background eviction (layering law).
 2. **mac sandbox read** (standing #1 risk): can a sandboxed (MAS) build open a
    pasteboard-origin `public.file-url` via `startAccessingSecurityScopedResource`?
    → gates the Phase 3 *read* path (write/paste is unaffected either way).
-3. **win descriptor timing**: does Explorer pull `CFSTR_FILEDESCRIPTOR` only at
-   paste, or earlier (menu open / hover)? Affects when the `FLST` tree-walk fires,
-   and interacts with the `maxDepth` decision. → gates Phase 2 design.
+3. **win descriptor timing** (now the load-bearing one): does Explorer pull
+   `CFSTR_FILEDESCRIPTOR` only at paste, or earlier (menu open / hover)? A cheap
+   logging `IDataObject` that records every `GetData` answers it. If it fires at
+   paste, everything above holds. If it fires on every right-click, a multi-second
+   recursive walk runs when the user merely opens a context menu — which needs a
+   lazier answer (refuse to produce the descriptor until a real paste, if that is
+   even expressible), NOT a cache. → gates Phase 2 design.
 4. **`fetchContents` whole-file**: confirm there is no byte-range hydration in the
    replicated API (so a huge single file double-stores transiently). Expected.
 
 ## Phases
 
 1. **Engine + wire (pure, unit-tested).** Manifest type + serialization,
-   `FLST`/`FGET` frames (BE, `RegisterWire`-style), `CAP0_SERVES_FILES`, the
-   handshake role byte, `CLIPP_FORMAT_FILES`, an origin-side `FileBundleSource`
+   streamed `FLST`/`FGET` frames (BE, `RegisterWire`-style), `CAP0_SERVES_FILES`,
+   the handshake role byte, `CLIPP_FORMAT_FILES`, an origin-side `FileBundleSource`
    (disk → listChildren/readContents with path-escape guards), `CanServe`.
-   doctest over a temp tree. **Settle `maxDepth` here.**
+   doctest over a temp tree.
 2. **Windows end-to-end.** `IDataObject`/`IStream` provider + `OleSetClipboard`,
-   `CF_HDROP` read, `ReadClipboardData`/`SetClipboardData` files branch, bulk side
+   `CF_HDROP` read, `ReadClipboardData`/`SetClipboardData` files branch, the file
    channel + `PeerManager` side-channel tracking, activity `Files` kind + preview,
    conflict toast. Win→Win copy/paste. (No mac dependency — ship-able.)
 3. **macOS end-to-end.** File Provider extension target + XPC proxy + app group,
@@ -439,8 +495,12 @@ are origin-side, never background eviction (layering law).
 - Don't reconnect peers from the mac extension; proxy to the daemon.
 - A file history entry is not self-contained the way a text entry is — it is a
   claim check on a live origin. The UI must not present it as guaranteed-available.
-- Bulk channels are connections that are *not* peers. Every place that enumerates
+- File channels are connections that are *not* peers. Every place that enumerates
   connections needs to know the difference: `PeerManager` dedup, the outgoing-peer
   reconciler, broadcast fan-out, anti-entropy on accept.
+- Windows' descriptor is one allocation and one synchronous call. That single fact
+  drives the streamed recursive walk, the absence of a size cap, and the absence of
+  progressive paste feedback — don't "improve" one of them without rechecking the
+  other two.
 - Truncation that looks like success is the one unacceptable failure. The declared
   length + explicit terminator check is not optional politeness.
