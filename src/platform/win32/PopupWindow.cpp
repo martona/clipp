@@ -20,9 +20,11 @@
 #include "utils.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cwctype>
 #include <cstdint>
+#include <deque>
 #include <limits>
 #include <map>
 #include <set>
@@ -305,6 +307,357 @@ void InjectPasteChord() {
     addKey('V', true);
     addKey(VK_CONTROL, true);
     SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT));
+}
+
+// ---- Win+V-style input routing ----
+// The popup is WS_EX_NOACTIVATE and NEVER takes the system foreground: the
+// user's window keeps activation, Win32 focus, and its caret for the popup's
+// whole life, so the paste chord lands in a window that never lost focus (the
+// old restore-then-poll dance is gone, and with it its failure modes). The
+// price: keyboard input routes to the foreground thread, which is never us.
+// A WH_KEYBOARD_LL hook — armed only while the popup is visible — eats each
+// key and re-posts it as WM_KEYDOWN/WM_KEYUP to this thread's focus window
+// (the island's InputSite child), where the ordinary
+// PreTranslateMessage/TranslateMessage flow turns it into XAML key events and
+// WM_CHARs exactly like real input. TranslateMessage consults the THREAD's
+// keyboard state, which the system stops updating for a non-foreground
+// thread, so the hook snapshots its own mirrored modifier state per key and
+// PreTranslateMessage applies the matching snapshot just before translating
+// (applying at post time is wrong: a burst of posts would all translate
+// against the LAST state). Spike-verified 2026-08-07: chars + Shift casing +
+// real hardware keys work; XAML's own editing keys do NOT (see
+// HandleTextEditKey). Same trick Windows can't show us: Win+V itself rides an
+// OS-private input-host channel with focus nowhere at all.
+//
+// Everything here runs on the tray thread: LL hook callbacks fire on the
+// thread that installed them (it pumps), so no locking anywhere.
+
+constexpr UINT kHookDismissMessage = WM_APP + 0x50;
+
+HHOOK g_popupKeyboardHook = nullptr;
+HHOOK g_popupMouseHook = nullptr;
+HWINEVENTHOOK g_popupForegroundHook = nullptr;
+HWND g_hookPopupHwnd = nullptr;   // dismiss requests are posted here
+HWND g_hookIslandHwnd = nullptr;  // key target when the thread has no focus window
+BYTE g_hookKeyState[256] = {};
+std::deque<std::array<BYTE, 256>> g_pendingKeyState;
+struct HookChord { UINT mods; UINT vk; };
+HookChord g_summonChords[2] = {};
+
+bool IsModifierVk(UINT vk) {
+    switch (vk) {
+    case VK_SHIFT: case VK_LSHIFT: case VK_RSHIFT:
+    case VK_CONTROL: case VK_LCONTROL: case VK_RCONTROL:
+    case VK_MENU: case VK_LMENU: case VK_RMENU:
+    case VK_LWIN: case VK_RWIN:
+    case VK_CAPITAL: case VK_NUMLOCK: case VK_SCROLL:
+        return true;
+    default:
+        return false;
+    }
+}
+
+void TrackHookModifier(UINT vk, bool down) {
+    const BYTE state = down ? 0x80 : 0x00;
+    if (vk == VK_CAPITAL || vk == VK_NUMLOCK || vk == VK_SCROLL) {
+        // Toggle keys: keep the toggle bit truthful for TranslateMessage.
+        if (down) { g_hookKeyState[vk] ^= 0x01; }
+        g_hookKeyState[vk] = (g_hookKeyState[vk] & 0x01) | state;
+        return;
+    }
+    g_hookKeyState[vk] = state;
+    const auto mirror = [&](UINT left, UINT right, UINT generic) {
+        if (vk == left || vk == right) {
+            g_hookKeyState[generic] =
+                ((g_hookKeyState[left] | g_hookKeyState[right]) & 0x80) ? 0x80 : 0x00;
+        }
+    };
+    mirror(VK_LSHIFT, VK_RSHIFT, VK_SHIFT);
+    mirror(VK_LCONTROL, VK_RCONTROL, VK_CONTROL);
+    mirror(VK_LMENU, VK_RMENU, VK_MENU);
+}
+
+bool HookModifierHeld(UINT vk) { return (g_hookKeyState[vk] & 0x80) != 0; }
+
+// The summon hotkeys must keep reaching RegisterHotKey (re-summon toggles the
+// popup closed), so those exact chords pass through untouched.
+bool MatchesSummonChord(UINT vk) {
+    UINT mods = 0;
+    if (HookModifierHeld(VK_LWIN) || HookModifierHeld(VK_RWIN)) mods |= MOD_WIN;
+    if (HookModifierHeld(VK_CONTROL)) mods |= MOD_CONTROL;
+    if (HookModifierHeld(VK_MENU)) mods |= MOD_ALT;
+    if (HookModifierHeld(VK_SHIFT)) mods |= MOD_SHIFT;
+    for (const HookChord& chord : g_summonChords) {
+        if (chord.vk != 0 && chord.vk == vk && chord.mods == mods) {
+            return true;
+        }
+    }
+    return false;
+}
+
+LRESULT CALLBACK PopupKeyboardHookProc(int code, WPARAM wParam, LPARAM lParam) {
+    if (code != HC_ACTION || g_hookPopupHwnd == nullptr) {
+        return CallNextHookEx(nullptr, code, wParam, lParam);
+    }
+    const auto* key = reinterpret_cast<const KBDLLHOOKSTRUCT*>(lParam);
+    const bool up = (wParam == WM_KEYUP || wParam == WM_SYSKEYUP);
+    const UINT vk = key->vkCode;
+
+    // Modifiers pass through (the foreground app's picture of Shift/Ctrl/Alt
+    // stays coherent); the snapshots below carry their state to our chars.
+    if (IsModifierVk(vk)) {
+        TrackHookModifier(vk, !up);
+        return CallNextHookEx(nullptr, code, wParam, lParam);
+    }
+    // The OS keeps its chords: Win combos (Win+L, Win+Shift+S, ...), the
+    // configured summon hotkeys (RegisterHotKey must fire for toggle-close),
+    // the Alt window switcher, and hardware media keys.
+    if (HookModifierHeld(VK_LWIN) || HookModifierHeld(VK_RWIN)
+        || MatchesSummonChord(vk)
+        || (HookModifierHeld(VK_MENU) && (vk == VK_TAB || vk == VK_ESCAPE))
+        || (vk >= VK_VOLUME_MUTE && vk <= VK_MEDIA_PLAY_PAUSE)) {
+        return CallNextHookEx(nullptr, code, wParam, lParam);
+    }
+
+    // Ours: snapshot the modifier state this key was struck under, post it to
+    // the island, and swallow the original. Callback stays trivially fast
+    // (LL hooks that dawdle get silently uninstalled).
+    std::array<BYTE, 256> snapshot;
+    memcpy(snapshot.data(), g_hookKeyState, sizeof(g_hookKeyState));
+    snapshot[vk] = up ? 0x00 : 0x80;
+    g_pendingKeyState.push_back(snapshot);
+
+    UINT scan = key->scanCode & 0xFFu;
+    if (scan == 0) { scan = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC); }
+    const LPARAM keyLParam = 1 | (static_cast<LPARAM>(scan) << 16)
+        | ((key->flags & LLKHF_EXTENDED) ? (1LL << 24) : 0)
+        | (up ? ((1LL << 30) | (1LL << 31)) : 0);
+    const HWND focus = GetFocus();
+    PostMessageW(focus != nullptr ? focus : g_hookIslandHwnd,
+        up ? WM_KEYUP : WM_KEYDOWN, vk, keyLParam);
+    return 1;
+}
+
+// Click-outside light dismiss. The popup never activates, so WM_ACTIVATE
+// can't signal focus loss anymore; instead any button-down over a window of
+// another thread (or over nothing) closes the popup. Never eats the click —
+// it lands where the user aimed it.
+LRESULT CALLBACK PopupMouseHookProc(int code, WPARAM wParam, LPARAM lParam) {
+    if (code == HC_ACTION && g_hookPopupHwnd != nullptr) {
+        switch (wParam) {
+        case WM_LBUTTONDOWN: case WM_RBUTTONDOWN:
+        case WM_MBUTTONDOWN: case WM_XBUTTONDOWN: {
+            const auto* mouse = reinterpret_cast<const MSLLHOOKSTRUCT*>(lParam);
+            const HWND hit = WindowFromPoint(mouse->pt);
+            if (hit == nullptr
+                || GetWindowThreadProcessId(hit, nullptr) != GetCurrentThreadId()) {
+                PostMessageW(g_hookPopupHwnd, kHookDismissMessage, 0, 0);
+            }
+            break;
+        }
+        default:
+            break;
+        }
+    }
+    return CallNextHookEx(nullptr, code, wParam, lParam);
+}
+
+// Alt+Tab and friends: a foreground change to any foreign window dismisses.
+// WINEVENT_OUTOFCONTEXT delivers on our own pump — no locking, no injection.
+void CALLBACK PopupForegroundEventProc(HWINEVENTHOOK, DWORD, HWND hwnd, LONG, LONG,
+                                       DWORD, DWORD) {
+    if (g_hookPopupHwnd != nullptr && hwnd != nullptr
+        && GetWindowThreadProcessId(hwnd, nullptr) != GetCurrentThreadId()) {
+        PostMessageW(g_hookPopupHwnd, kHookDismissMessage, 0, 0);
+    }
+}
+
+void ArmPopupInputHooks(HWND popup, HWND island) {
+    g_hookPopupHwnd = popup;
+    g_hookIslandHwnd = island;
+    g_pendingKeyState.clear();
+    // Seed modifier tracking from live hardware state: the summon chord is
+    // usually still held at this instant.
+    memset(g_hookKeyState, 0, sizeof(g_hookKeyState));
+    const UINT seeds[] = { VK_LSHIFT, VK_RSHIFT, VK_LCONTROL, VK_RCONTROL,
+                           VK_LMENU, VK_RMENU, VK_LWIN, VK_RWIN };
+    for (const UINT vk : seeds) {
+        if (GetAsyncKeyState(static_cast<int>(vk)) & 0x8000) {
+            TrackHookModifier(vk, true);
+        }
+    }
+    if (GetKeyState(VK_CAPITAL) & 0x01) { g_hookKeyState[VK_CAPITAL] = 0x01; }
+    g_summonChords[0] = { g_settings.popupHotkeyPrimary() >> 16,
+                          g_settings.popupHotkeyPrimary() & 0xFFFFu };
+    g_summonChords[1] = { g_settings.popupHotkeySecondary() >> 16,
+                          g_settings.popupHotkeySecondary() & 0xFFFFu };
+    if (g_popupKeyboardHook == nullptr) {
+        g_popupKeyboardHook = SetWindowsHookExW(WH_KEYBOARD_LL, PopupKeyboardHookProc, nullptr, 0);
+    }
+    if (g_popupMouseHook == nullptr) {
+        g_popupMouseHook = SetWindowsHookExW(WH_MOUSE_LL, PopupMouseHookProc, nullptr, 0);
+    }
+    if (g_popupForegroundHook == nullptr) {
+        g_popupForegroundHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
+            nullptr, PopupForegroundEventProc, 0, 0, WINEVENT_OUTOFCONTEXT);
+    }
+    if (g_popupKeyboardHook == nullptr) {
+        g_logger.log(__FUNCTION__, Logger::Level::Warning,
+            L"Popup keyboard hook failed to install (%lu): popup will be mouse-only this session.",
+            GetLastError());
+    }
+}
+
+void DisarmPopupInputHooks() {
+    if (g_popupKeyboardHook != nullptr) {
+        UnhookWindowsHookEx(g_popupKeyboardHook);
+        g_popupKeyboardHook = nullptr;
+    }
+    if (g_popupMouseHook != nullptr) {
+        UnhookWindowsHookEx(g_popupMouseHook);
+        g_popupMouseHook = nullptr;
+    }
+    if (g_popupForegroundHook != nullptr) {
+        UnhookWinEvent(g_popupForegroundHook);
+        g_popupForegroundHook = nullptr;
+    }
+    g_pendingKeyState.clear();
+    g_hookPopupHwnd = nullptr;
+    g_hookIslandHwnd = nullptr;
+}
+
+// Editing keys, done by hand. Characters reach the TextBox through the hook
+// pipeline as genuine WM_CHARs, but XAML's own text EDITING (Backspace,
+// Delete, caret motion) sits behind input machinery that posted key messages
+// never reach (spike-verified: KeyDown fires, nothing edits). So the popup
+// implements the small editing vocabulary directly on the box: Backspace and
+// Delete (plain + Ctrl word variants), caret motion with full Shift
+// extension, and Ctrl+A. Caret ops are surrogate-pair aware. Returns true
+// when the key was one of ours.
+
+// The caret sits at one EDGE of the selection, but XAML only exposes
+// (start, length) — Shift-extension needs to know which edge moves. Every
+// keyboard selection change flows through HandleTextEditKey, so track the
+// edge here; only one box is ever being edited at a time. A mouse-made
+// selection defaults to caret-at-right (the dominant left-to-right drag), so
+// the first Shift+motion after one can anchor on the wrong edge — accepted.
+bool g_textEditCaretAtRight = true;
+
+bool HandleTextEditKey(TextBox const& box, winrt::Windows::System::VirtualKey key) {
+    using winrt::Windows::System::VirtualKey;
+    if (!box) {
+        return false;
+    }
+    const bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    std::wstring text{ box.Text() };
+    const int32_t size = static_cast<int32_t>(text.size());
+    int32_t selStart = box.SelectionStart();
+    int32_t selLen = box.SelectionLength();
+    selStart = std::clamp(selStart, 0, size);
+    selLen = std::clamp(selLen, 0, size - selStart);
+
+    const auto prevBoundary = [&text](int32_t pos) {
+        if (pos <= 0) return 0;
+        int32_t p = pos - 1;
+        if (p > 0 && IS_LOW_SURROGATE(text[p]) && IS_HIGH_SURROGATE(text[p - 1])) --p;
+        return p;
+    };
+    const auto nextBoundary = [&text, size](int32_t pos) {
+        if (pos >= size) return size;
+        int32_t p = pos + 1;
+        if (p < size && IS_HIGH_SURROGATE(text[pos]) && IS_LOW_SURROGATE(text[p])) ++p;
+        return p;
+    };
+    const auto prevWord = [&text, &prevBoundary](int32_t pos) {
+        int32_t p = pos;
+        while (p > 0 && iswspace(text[p - 1])) p = prevBoundary(p);
+        while (p > 0 && !iswspace(text[p - 1])) p = prevBoundary(p);
+        return p;
+    };
+    const auto nextWord = [&text, size, &nextBoundary](int32_t pos) {
+        int32_t p = pos;
+        while (p < size && !iswspace(text[p])) p = nextBoundary(p);
+        while (p < size && iswspace(text[p])) p = nextBoundary(p);
+        return p;
+    };
+    const auto commit = [&box, &text](int32_t caret) {
+        box.Text(winrt::hstring{ text });  // fires TextChanged (filter re-runs)
+        box.SelectionStart(caret);
+        box.SelectionLength(0);
+    };
+
+    switch (key) {
+    case VirtualKey::Back:
+        if (selLen > 0) {
+            text.erase(static_cast<size_t>(selStart), static_cast<size_t>(selLen));
+            commit(selStart);
+        } else {
+            const int32_t from = ctrl ? prevWord(selStart) : prevBoundary(selStart);
+            if (from >= selStart) {
+                return true;  // nothing to delete; consume without a re-render
+            }
+            text.erase(static_cast<size_t>(from), static_cast<size_t>(selStart - from));
+            commit(from);
+        }
+        return true;
+    case VirtualKey::Delete:
+        if (selLen > 0) {
+            text.erase(static_cast<size_t>(selStart), static_cast<size_t>(selLen));
+        } else {
+            const int32_t to = ctrl ? nextWord(selStart) : nextBoundary(selStart);
+            if (to <= selStart) {
+                return true;  // nothing to delete; consume without a re-render
+            }
+            text.erase(static_cast<size_t>(selStart), static_cast<size_t>(to - selStart));
+        }
+        commit(selStart);
+        return true;
+    case VirtualKey::Left:
+    case VirtualKey::Right:
+    case VirtualKey::Home:
+    case VirtualKey::End: {
+        const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+        const int32_t selEnd = selStart + selLen;
+        const int32_t caret = (selLen == 0 || g_textEditCaretAtRight) ? selEnd : selStart;
+        const int32_t anchor = (selLen == 0) ? caret
+            : (g_textEditCaretAtRight ? selStart : selEnd);
+        int32_t target;
+        if (key == VirtualKey::Left) {
+            target = ctrl ? prevWord(caret) : prevBoundary(caret);
+        } else if (key == VirtualKey::Right) {
+            target = ctrl ? nextWord(caret) : nextBoundary(caret);
+        } else if (key == VirtualKey::Home) {
+            target = 0;
+        } else {
+            target = size;
+        }
+        if (shift) {
+            // Extend: the anchor edge stays put, the caret edge moves (and
+            // may cross the anchor, flipping the selection's direction).
+            box.SelectionStart(std::min(anchor, target));
+            box.SelectionLength(std::max(anchor, target) - std::min(anchor, target));
+            g_textEditCaretAtRight = target >= anchor;
+        } else if (selLen > 0 && (key == VirtualKey::Left || key == VirtualKey::Right)) {
+            // Plain arrow with a selection: collapse to that edge (native
+            // semantics), no motion.
+            box.SelectionStart(key == VirtualKey::Left ? selStart : selEnd);
+            box.SelectionLength(0);
+        } else {
+            box.SelectionStart(target);
+            box.SelectionLength(0);
+        }
+        return true;
+    }
+    case VirtualKey::A:
+        if (ctrl) {
+            box.SelectAll();
+            g_textEditCaretAtRight = true;
+            return true;
+        }
+        return false;
+    default:
+        return false;
+    }
 }
 
 // ---- companion windows ----
@@ -713,7 +1066,7 @@ class PopupWindow {
 public:
     void Toggle() {
         if (hwnd_ != nullptr && IsWindowVisible(hwnd_)) {
-            Dismiss(/*restoreFocus=*/true);
+            Dismiss();
         } else {
             Summon();
         }
@@ -722,6 +1075,16 @@ public:
     bool PreTranslateMessage(MSG* msg) {
         if (hwnd_ == nullptr || !IsWindowVisible(hwnd_) || !xamlSource_) {
             return false;
+        }
+        // Hook-reposted keys: apply the modifier snapshot that was live when
+        // this key was struck, so the TranslateMessage below (in the tray
+        // pump) produces the right character. The system does not maintain a
+        // non-foreground thread's keyboard state — we do.
+        if ((msg->message == WM_KEYDOWN || msg->message == WM_KEYUP
+                || msg->message == WM_SYSKEYDOWN || msg->message == WM_SYSKEYUP)
+            && !g_pendingKeyState.empty()) {
+            SetKeyboardState(g_pendingKeyState.front().data());
+            g_pendingKeyState.pop_front();
         }
         // Wheel input doesn't reliably reach the island's ScrollViewer in this
         // hosting setup; when the cursor is over the popup, drive the list
@@ -773,6 +1136,7 @@ public:
     // against). Nothing here is worth dying for: every handle is about to be
     // abandoned by process exit anyway.
     void Destroy() {
+        DisarmPopupInputHooks();  // plain user32; cannot throw
         try {
             EndActivityNotifications();
         } catch (const winrt::hresult_error&) {
@@ -840,9 +1204,12 @@ private:
         RenderList();
 
         PositionOnCursorMonitor();
-        ShowWindow(hwnd_, SW_SHOW);
-        SetForegroundWindow(hwnd_);
+        // Shown WITHOUT activation: the paste target never loses the
+        // foreground. FocusFilterBox still runs — it moves this THREAD's
+        // focus into the island so the hook-reposted keys have a home.
+        ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
         FocusFilterBox();
+        ArmPopupInputHooks(hwnd_, xamlHost_);
 
         // Summoning by any route proves the ClippPage teach banner's lesson
         // landed — retire it for good (idempotent; the page re-checks on show).
@@ -888,10 +1255,11 @@ private:
         }
     }
 
-    void Dismiss(bool restoreFocus) {
+    void Dismiss() {
         if (hwnd_ == nullptr || !IsWindowVisible(hwnd_)) {
             return;
         }
+        DisarmPopupInputHooks();
         if (editingRegister_.has_value()) {
             EndEditMode();  // silent cancel; the next summon rebuilds the rows
         }
@@ -907,7 +1275,15 @@ private:
         uiClippPage::ForgetAllPeekedItems();
         peekedRegisterNames_.clear();
         ShowWindow(hwnd_, SW_HIDE);
-        if (restoreFocus && previousForeground_ != nullptr && IsWindow(previousForeground_)) {
+        // The target held the foreground throughout — no restoration to do.
+        // The one exception: something of OURS grabbed it anyway (XAML
+        // context-menu flyouts can activate their own popup HWNDs); only then
+        // hand the foreground back to the recorded target.
+        const HWND foreground = GetForegroundWindow();
+        const bool oursHoldsForeground = foreground != nullptr
+            && (IsOwnWindow(foreground)
+                || GetWindowThreadProcessId(foreground, nullptr) == GetCurrentThreadId());
+        if (oursHoldsForeground && previousForeground_ != nullptr && IsWindow(previousForeground_)) {
             SetForegroundWindow(previousForeground_);
         }
         previousForeground_ = nullptr;
@@ -936,8 +1312,12 @@ private:
             AppsUseLightThemeRegValue());
         RegisterPopupClass();
         const HINSTANCE hInstance = GetModuleHandleW(nullptr);
+        // NOACTIVATE is the Win+V trick: the popup never takes the system
+        // foreground, so the paste target keeps focus/caret for the popup's
+        // whole life and the paste chord needs no focus restoration at all.
+        // Keyboard reaches the island via the LL-hook repost pipeline above.
         CreateWindowExW(
-            WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+            WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
             kPopupClassName,
             L"Clipp",
             WS_POPUP,
@@ -1044,7 +1424,7 @@ private:
         closeButton.Background(ArgbBrush(0, 0, 0, 0));
         closeButton.IsTabStop(false);
         closeButton.Click([this](auto const&, auto const&) {
-            Dismiss(/*restoreFocus=*/true);
+            Dismiss();
         });
         Grid::SetColumn(closeButton, 1);
         header.Children().Append(closeButton);
@@ -1293,10 +1673,13 @@ private:
         case VirtualKey::Left:
         case VirtualKey::Right:
             // Group hops — but only when the filter box has no text for the
-            // caret to move through.
+            // caret to move through; with text, the caret motion is ours to
+            // implement (hook-pipeline keys don't reach XAML's text editing).
             if (filterEmpty) {
                 if (key == VirtualKey::Left) model_.MoveLeft(); else model_.MoveRight();
                 RenderHighlight();
+                args.Handled(true);
+            } else if (HandleTextEditKey(filterBox_, key)) {
                 args.Handled(true);
             }
             return;
@@ -1304,11 +1687,26 @@ private:
             ActivateSelected();
             args.Handled(true);
             return;
+        case VirtualKey::Back:
+        case VirtualKey::Home:
+        case VirtualKey::End:
+            if (HandleTextEditKey(filterBox_, key)) {
+                args.Handled(true);
+            }
+            return;
+        case VirtualKey::A:
+            // Ctrl+A selects the filter text; a plain 'a' keeps flowing in.
+            if ((GetKeyState(VK_CONTROL) & 0x8000) != 0 && HandleTextEditKey(filterBox_, key)) {
+                args.Handled(true);
+            }
+            return;
         case VirtualKey::Delete:
             // With filter text present, Delete edits the text; on an empty
             // filter it deletes the selected item everywhere.
             if (filterEmpty) {
                 DeleteSelected();
+                args.Handled(true);
+            } else if (HandleTextEditKey(filterBox_, key)) {
                 args.Handled(true);
             }
             return;
@@ -1349,7 +1747,7 @@ private:
                     filterBox_.Text(L"");  // TextChanged re-syncs the (already clear) model
                 }
             } else if (result == PopupModel::EscapeResult::Close) {
-                Dismiss(/*restoreFocus=*/true);
+                Dismiss();
             }
             args.Handled(true);
             return;
@@ -1736,6 +2134,11 @@ private:
                     args.Handled(true);
                     return;
                 default:
+                    // Backspace/Delete/caret keys are ours to implement under
+                    // the hook pipeline (see HandleTextEditKey).
+                    if (HandleTextEditKey(nameEditor_, args.Key())) {
+                        args.Handled(true);
+                    }
                     return;
                 }
             });
@@ -2367,7 +2770,7 @@ private:
         DisarmType();
         HideTypeBubble();
         const HWND target = previousForeground_;
-        Dismiss(/*restoreFocus=*/true);
+        Dismiss();
         if (target != nullptr && IsWindow(target)) {
             // Same activation-polling path as the paste chord: the keystrokes
             // only start once the intended window really holds the foreground.
@@ -2431,16 +2834,19 @@ private:
         // apps that shouldn't receive a synthetic Ctrl+V).
         const bool wantPaste = applied && (GetKeyState(VK_SHIFT) & 0x8000) == 0;
         const HWND pasteTarget = previousForeground_;
-        Dismiss(/*restoreFocus=*/true);
+        Dismiss();
         if (wantPaste && pasteTarget != nullptr && IsWindow(pasteTarget)) {
             BeginPasteInjection(pasteTarget);
         }
     }
 
-    // The paste keystroke fires only once the restored target actually holds
-    // the foreground — never into a bystander window. Activation isn't
-    // instant after SetForegroundWindow, so poll briefly and give up
-    // gracefully (the clipboard is set either way; a manual Ctrl+V works).
+    // The paste keystroke fires only once the target actually holds the
+    // foreground — never into a bystander window. Under the no-activate
+    // popup the target held the foreground throughout, so the poll normally
+    // succeeds on its first ticks; it remains as the safety net for the rare
+    // paths where something of ours stole activation (context-menu flyouts)
+    // and Dismiss had to hand it back. Give up gracefully either way (the
+    // clipboard is set; a manual Ctrl+V works).
     void BeginPasteInjection(HWND target) {
         g_logger.log(__FUNCTION__, Logger::Level::Debug,
             L"Paste injection armed for %ls; foreground now %ls",
@@ -2857,15 +3263,26 @@ private:
 
     LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         switch (msg) {
+        case WM_MOUSEACTIVATE:
+            // Belt to the WS_EX_NOACTIVATE suspenders: clicks never activate.
+            return MA_NOACTIVATE;
+        case kHookDismissMessage:
+            // Light dismiss, posted by the LL mouse hook (click landed on a
+            // foreign window) or the foreground watcher (activation moved to a
+            // foreign window). Replaces the old WM_ACTIVATE loss signal, which
+            // a never-activated window cannot receive.
+            Dismiss();
+            return 0;
         case WM_ACTIVATE:
+            // Vestigial under WS_EX_NOACTIVATE, kept as a backstop: if
+            // something manages to deactivate us toward a foreign thread,
+            // treat it as the old light dismiss.
             if (LOWORD(wParam) == WA_INACTIVE) {
-                // Light dismiss — unless focus went to a window of our own
-                // thread (the island's flyout popups live in sibling HWNDs).
                 const HWND other = reinterpret_cast<HWND>(lParam);
                 const DWORD ourThread = GetCurrentThreadId();
                 if (other == nullptr ||
                     GetWindowThreadProcessId(other, nullptr) != ourThread) {
-                    Dismiss(/*restoreFocus=*/false);
+                    Dismiss();
                 }
             }
             return 0;
@@ -2901,7 +3318,7 @@ private:
             return 0;
         }
         case WM_CLOSE:
-            Dismiss(/*restoreFocus=*/false);
+            Dismiss();
             return 0;
         default:
             return DefWindowProcW(hwnd_, msg, wParam, lParam);
