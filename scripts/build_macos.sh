@@ -91,6 +91,26 @@ else
     APP_PATH="$BUILD_DIR/Clipp.app"
 fi
 
+# codesign refuses to sign a bundle living on a filesystem that cannot hold
+# native extended attributes (the Windows-hosted SMB share): every xattr
+# Xcode writes becomes an AppleDouble "._*" sidecar INSIDE the .app, and
+# codesign fails with "resource fork, Finder information, or similar
+# detritus not allowed". The BUILD is fine on the share — only signing needs
+# handling: stage a copy of the app to local disk, scrub xattrs, sign there,
+# copy back (the same copy-sign-copy-back as sign_notarize_macos_app.sh).
+# Detection via df + the mount table: macOS stat cannot report fs types.
+STAGED_SIGN=0
+if [[ -n "$IDENTITY" ]]; then
+    MOUNT_POINT="$(df -P "$REPO_ROOT" 2>/dev/null | awk 'NR==2 {print $NF}')"
+    FS_TYPE="$(mount 2>/dev/null | sed -n "s|^.* on $MOUNT_POINT (\([a-z0-9]*\),.*|\1|p" | head -n1)"
+    case "$FS_TYPE" in
+        smbfs|nfs|webdav)
+            STAGED_SIGN=1
+            echo "[*] Repo filesystem is $FS_TYPE: signing will be staged through local disk."
+            ;;
+    esac
+fi
+
 if [[ "$clean" == "1" ]]; then
     echo "[*] Clean flag detected. Nuking build directory..."
     rm -rf "$BUILD_DIR"
@@ -153,7 +173,10 @@ if [[ "$USE_XCODE" == "1" ]]; then
     echo "[*] Generating Xcode build files..."
 
     SIGN_ARGS=(-DCLIPP_MACOS_ENABLE_CODE_SIGNING=OFF)
-    if [[ -n "$IDENTITY" ]]; then
+    # Staged signing builds UNSIGNED (Xcode's integrated CodeSign would run
+    # in place on the share and hit the detritus error); the staged
+    # post-build codesign below takes over.
+    if [[ -n "$IDENTITY" && "$STAGED_SIGN" == "0" ]]; then
         SIGN_ARGS=(
             -DCLIPP_MACOS_ENABLE_CODE_SIGNING=ON
             -DCLIPP_MACOS_CODE_SIGN_IDENTITY="$IDENTITY"
@@ -172,12 +195,26 @@ else
     echo "[*] Building Clipp..."
     cmake --build "$BUILD_DIR"
 
-    if [[ -n "$IDENTITY" ]]; then
+    if [[ -n "$IDENTITY" && "$STAGED_SIGN" == "0" ]]; then
         echo "[*] Signing Clipp with identity from APPLE_CODESIGN_IDENTITY..."
         codesign --force --deep --options=runtime --timestamp \
             --entitlements "$REPO_ROOT/src/platform/macos/Clipp.entitlements" \
             --sign "$IDENTITY" "$APP_PATH"
     fi
+fi
+
+if [[ -n "$IDENTITY" && "$STAGED_SIGN" == "1" ]]; then
+    STAGE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/clipp-sign.XXXXXX")"
+    echo "[*] Staging app to local disk for signing: $STAGE_DIR"
+    REPO_APP_PATH="$APP_PATH"
+    /usr/bin/ditto "$APP_PATH" "$STAGE_DIR/Clipp.app"
+    APP_PATH="$STAGE_DIR/Clipp.app"
+    # The copy carries the share's xattr detritus along; scrub before signing.
+    xattr -cr "$APP_PATH"
+    echo "[*] Signing staged copy with identity from APPLE_CODESIGN_IDENTITY..."
+    codesign --force --deep --options=runtime --timestamp \
+        --entitlements "$REPO_ROOT/src/platform/macos/Clipp.entitlements" \
+        --sign "$IDENTITY" "$APP_PATH"
 fi
 
 if [[ -n "$IDENTITY" ]]; then
@@ -248,6 +285,18 @@ if [[ "$notarize" == "1" ]]; then
     echo "[*] Re-packing stapled bundle: $ZIP_PATH"
     rm -f "$ZIP_PATH"
     /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_PATH"
+fi
+
+if [[ "$STAGED_SIGN" == "1" && -n "${REPO_APP_PATH:-}" ]]; then
+    # Copy the signed (and, with --notarize, stapled) app back over the
+    # unsigned build product; downstream paths are unchanged. Signature and
+    # staple ticket live in file CONTENT, so the share's inability to hold
+    # xattrs costs nothing here.
+    echo "[*] Copying signed app back: $REPO_APP_PATH"
+    rm -rf "$REPO_APP_PATH"
+    /usr/bin/ditto "$APP_PATH" "$REPO_APP_PATH"
+    rm -rf "$STAGE_DIR"
+    APP_PATH="$REPO_APP_PATH"
 fi
 
 echo "[*] Build complete: $APP_PATH"
