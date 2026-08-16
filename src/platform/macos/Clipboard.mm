@@ -130,6 +130,43 @@ ClipboardPayload ReadClipboardData(PlatformWindowHandle hwnd) {
                     g_logger.log(__FUNCTION__, Logger::Level::Info, L"Read PNG image from system clipboard (PNG payload: %zu bytes)", bytes.size());
                 }
             }
+            // TIFF fallback, transcoded to PNG at the edge (the mesh payload
+            // stays PNG, like the Windows CF_DIB->PNG path). This is not an
+            // exotic case: the macOS screenshot chord's "copy" publishes the
+            // image as public.tiff and NOTHING else (verified 2026-08-16 —
+            // the declared-types list was exactly [public.tiff, NeXT TIFF
+            // v4.0 pasteboard type]). Tried last: JPEG/PNG ship verbatim,
+            // TIFF costs a decode+encode.
+            if (payload.meta.formatId == CLIPP_FORMAT_NONE) {
+                NSData* tiffData = [pb dataForType:NSPasteboardTypeTIFF];
+                if (tiffData != nil && [tiffData length] > 0) {
+                    NSBitmapImageRep* rep = [NSBitmapImageRep imageRepWithData:tiffData];
+                    NSData* pngData = rep != nil
+                        ? [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}]
+                        : nil;
+                    if (pngData != nil && [pngData length] > 0) {
+                        payload.meta.formatId = CLIPP_FORMAT_PNG;
+                        const unsigned char* src = static_cast<const unsigned char*>([pngData bytes]);
+                        bytes.assign(src, src + [pngData length]);
+                        g_logger.log(__FUNCTION__, Logger::Level::Info,
+                            L"Read TIFF image from system clipboard and encoded PNG payload (TIFF: %zu bytes, PNG: %zu bytes)",
+                            static_cast<size_t>([tiffData length]), bytes.size());
+                    } else {
+                        g_logger.log(__FUNCTION__, Logger::Level::Warning,
+                            "TIFF clipboard data could not be re-encoded as PNG; skipping image payload");
+                    }
+                }
+            }
+        }
+
+        // Nothing we ingest: say what WAS there, so the next unsupported
+        // flavor is a one-log-line diagnosis (the caller's summary line
+        // cannot tell "empty" from "alien format" from "our own write").
+        if (payload.meta.formatId == CLIPP_FORMAT_NONE) {
+            NSString* declared = [[pb types] componentsJoinedByString:@", "];
+            g_logger.log(__FUNCTION__, Logger::Level::Debug,
+                "No supported clipboard flavor; declared types: %s",
+                declared != nil ? [declared UTF8String] : "<none>");
         }
     }
 
