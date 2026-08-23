@@ -40,6 +40,7 @@
 #endif
 
 #include <dwmapi.h>
+#include <shellscalingapi.h>
 #include <unknwn.h>
 #include <windows.ui.xaml.hosting.desktopwindowxamlsource.h>
 #include <winrt/Windows.Foundation.h>
@@ -3240,7 +3241,18 @@ private:
         if (!GetMonitorInfoW(monitor, &info)) {
             return;
         }
-        const UINT dpi = GetDpiForWindow(hwnd_);
+        // Size for the monitor the popup is GOING to, not the one the hidden
+        // window happens to be parked on (GetDpiForWindow): when the two
+        // disagree — mixed-DPI setups, or a DPI topology change (RDP
+        // reconnect, resolution flip) since the window was placed — the old
+        // code sized at the stale scale and left WM_DPICHANGED's mid-
+        // SetWindowPos suggested-rect rescue racing the explicit size
+        // (observed in the wild: a quarter-size popup at 200%).
+        UINT dpi = 0;
+        UINT dpiYIgnored = 0;
+        if (FAILED(GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &dpi, &dpiYIgnored)) || dpi == 0) {
+            dpi = GetDpiForWindow(hwnd_);
+        }
         const int width = DipsToPixels(CurrentWidthDips(), dpi);
         const int height = DipsToPixels(kPopupHeightDips, dpi);
         const RECT& work = info.rcWork;
