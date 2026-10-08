@@ -139,7 +139,8 @@ static bool ClipboardHasClippOriginMarker() {
 // Chromium / password-manager convention: a clipboard item that should not be
 // retained in any clipboard history (Win+V, cloud sync, third-party managers)
 // is written with both of these registered formats present. Chrome writes the
-// value 0; we don't care about the value, only the presence.
+// value 0. Snipping Tool also writes both, but with the value 1 (opt in), so
+// the value matters: see ClipboardSourceMarkedPrivate.
 static UINT CanIncludeInClipboardHistoryFormat() {
     static const UINT format = RegisterClipboardFormatW(L"CanIncludeInClipboardHistory");
     return format;
@@ -147,6 +148,13 @@ static UINT CanIncludeInClipboardHistoryFormat() {
 
 static UINT CanUploadToCloudClipboardFormat() {
     static const UINT format = RegisterClipboardFormatW(L"CanUploadToCloudClipboard");
+    return format;
+}
+
+// Older password-manager convention (KeePass and others): presence alone means
+// "do not monitor or record this item".
+static UINT ExcludeClipboardContentFromMonitorProcessingFormat() {
+    static const UINT format = RegisterClipboardFormatW(L"ExcludeClipboardContentFromMonitorProcessing");
     return format;
 }
 
@@ -242,6 +250,8 @@ static bool ClipboardOwnerIsRemoteSessionRedirector() {
     return isRedirector;
 }
 
+static bool TryReadClipboardUint32(UINT format, uint32_t* outValue);
+
 static bool ClipboardSourceMarkedPrivate() {
     // If a remote-session redirector wrote the clipboard, the privacy markers
     // it sets are session-policy, not a source-app signal. Treat as unmarked.
@@ -249,14 +259,24 @@ static bool ClipboardSourceMarkedPrivate() {
         return false;
     }
 
+    const UINT excludeFormat = ExcludeClipboardContentFromMonitorProcessingFormat();
+    if (excludeFormat != 0 && IsClipboardFormatAvailable(excludeFormat) != FALSE) {
+        return true;
+    }
+
+    // CanIncludeInClipboardHistory holds 0 = opt out, 1 = opt in. Snipping Tool
+    // (Win+Shift+S) stamps 1 on every screenshot, so presence alone is not a
+    // privacy signal. Treat a present-but-unreadable value as private.
     const UINT historyFormat = CanIncludeInClipboardHistoryFormat();
-    const UINT cloudFormat = CanUploadToCloudClipboardFormat();
-    if (historyFormat == 0 || cloudFormat == 0) {
+    if (historyFormat == 0 || IsClipboardFormatAvailable(historyFormat) == FALSE) {
         return false;
     }
 
-    return IsClipboardFormatAvailable(historyFormat) != FALSE
-        && IsClipboardFormatAvailable(cloudFormat) != FALSE;
+    uint32_t value = 0;
+    if (!TryReadClipboardUint32(historyFormat, &value)) {
+        return true;
+    }
+    return value == 0;
 }
 
 static bool WriteClipboardPrivacyMarker(UINT format, const wchar_t* description) {
