@@ -863,6 +863,43 @@ uint64_t CLPIOSPublishAndBroadcast(std::shared_ptr<const ClipboardPayload> paylo
 
 @end
 
+@implementation CLPAppleShortcutsBridge
+
++ (BOOL)copyLatestItemWithError:(NSError**)error {
+    // Shortcuts can launch us before ContentView's startup task. Start the
+    // runtime explicitly so persisted history is loaded before querying it.
+    if (!StartNetworkRuntimeIfNeeded(error)) {
+        return NO;
+    }
+    EnsureClipboardActivityWatcher();
+    {
+        // A share extension may have left a newer item while we were away.
+        // Serialize inbox ingestion with the foreground runtime restart.
+        std::lock_guard<std::mutex> lock(g_runtimeBridgeMutex);
+        CLPIOSIngestShareInbox();
+    }
+
+    // Snapshot applies retention limits and is ordered by event time, oldest
+    // first. Never fall back to an older item if the newest cannot be copied.
+    const auto snapshot = g_clipboardActivityStore.Snapshot();
+    if (snapshot.empty()) {
+        AssignError(error, kClippClipboardActivityErrorBase + 1, @"No clipboard item is available to copy. Open Clipp and sync or send an item first.");
+        return NO;
+    }
+    CLPClipboardActivityItem* item = MakeClipboardActivityItem(snapshot.back());
+    if (item == nil) {
+        AssignError(error, kClippClipboardActivityErrorBase + 2, @"The latest clipboard item is no longer available.");
+        return NO;
+    }
+    if (!item.hasTextPayload && !item.hasImagePayload) {
+        AssignError(error, kClippClipboardActivityErrorBase + 5, @"The latest clipboard item has no copyable text or image. It may have been marked private by its source app.");
+        return NO;
+    }
+    return [CLPClipboardActivityBridge copyItem:item error:error];
+}
+
+@end
+
 @implementation CLPOutgoingClipboardBridge
 
 + (CLPClipboardActivityItem*)sendCurrentPasteboardWithError:(NSError**)error {

@@ -7,6 +7,7 @@ This document covers building Clipp for Windows, macOS, and iOS from a source ch
 - [Tested platforms](#tested-platforms)
 - [Prerequisites](#prerequisites)
 - [Building](#building)
+- [Apple Shortcuts verification](#apple-shortcuts-verification)
 - [Build outputs](#build-outputs)
 - [Versioning](#versioning)
 - [Environment variables](#environment-variables)
@@ -46,7 +47,7 @@ The vcpkg manifest at [`src/vcpkg.json`](src/vcpkg.json) pulls in `libsodium`, `
 
 ### macOS
 
-- **Xcode Command Line Tools** (for the Ninja-based build path) or **full Xcode** (for the Xcode-generator build path). The script picks Xcode if `xcode-select -p` resolves to an `Xcode.app` install, otherwise Ninja.
+- **Full Xcode**, selected with `xcode-select`, including Swift and the App Intents metadata tools. The scripts use the Xcode generator when a full Xcode installation is selected. An explicit Ninja build is also supported with that toolchain; standalone Command Line Tools are no longer sufficient for the Apple Shortcuts metadata step.
 - Homebrew or MacPorts. The libsodium vcpkg port requires autotools:
   ```sh
   brew install autoconf autoconf-archive automake libtool ninja
@@ -184,6 +185,42 @@ The script downloads the pinned Symbols Nerd Font and `glyphnames.json` by defau
 pass `--symbols-font <path>` / `--glyphnames <path>` to use local copies offline. Both
 generated files are required to build on Windows (the `.ttf` is compiled into the exe);
 a fresh checkout already contains them.
+
+## Apple Shortcuts verification
+
+Both Apple apps compile the shared intent in
+`ios/Clipp/App/ClippShortcuts.swift`. The iOS synchronized source group includes
+it automatically in the app, without adding it to the Share Extension. On
+macOS, CMake enables Swift and imports `src/platform/AppleShortcutsBridge.h`.
+Xcode extracts App Intents metadata automatically; Ninja emits Swift constants
+and runs `scripts/extract_macos_shortcuts.cmake` after linking and before signing.
+The resulting macOS bundle must contain
+`Contents/Resources/Metadata.appintents/extract.actionsdata`.
+
+On Apple hardware, check the installed app with Shortcuts:
+
+1. Launch Clipp once. Confirm **Copy Latest Item** appears under Clipp's App
+   Shortcuts, and **Copy Latest Clipboard Item** can be added to a custom shortcut.
+2. Sync two different text items. Overwrite the system clipboard, run the
+   action, and paste into another app. Verify the newest Clipp item is restored
+   and connected peers receive it, with its original device attribution.
+3. Repeat with a link, PNG, JPEG, and a masked text item that still has content.
+4. Replay older history after a newer item has arrived; verify the action still
+   chooses the newest event. Re-copy an older row in Clipp; verify that row is
+   now selected by the shortcut.
+5. On iOS, background and terminate Clipp, then launch it with the shortcut.
+   Verify saved history is available. Repeat with an item deferred by the Share
+   Extension while Clipp was offline.
+6. Test an empty history, an expired newest item, and a newest source-private
+   placeholder. Empty/unavailable history and content-free placeholders must
+   produce an error without clearing the clipboard or choosing an older item;
+   expired rows must be removed according to the normal retention settings.
+7. On macOS, verify discovery using both the Xcode and Ninja build paths, and
+   the sandboxed Mac App Store bundle. A freshly launched Mac app with no
+   recovered history should report an empty-history error.
+
+See [Apple's App Intents documentation](https://developer.apple.com/documentation/appintents/appintent)
+for the system integration used by the action.
 
 ## Build outputs
 

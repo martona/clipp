@@ -145,6 +145,7 @@ endif()
 
 if (APPLE)
     enable_language(OBJCXX)
+    enable_language(Swift)
     set(CMAKE_OBJCXX_STANDARD 20)
     set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
 endif()
@@ -410,13 +411,33 @@ elseif (APPLE)
     add_executable(clipp MACOSX_BUNDLE
         ${CLIPP_COMMON_SOURCES}
         ${CLIPP_MACOS_PLATFORM_SOURCES}
+        # Also lives in the iOS app's synchronized group: one intent definition
+        # for both platforms, without adding it to the share-extension target.
+        "ios/Clipp/App/ClippShortcuts.swift"
         "${CLIPP_MACOS_APP_ICON}"
         "${CLIPP_MACOS_MENU_BAR_ICON}"
         "${CLIPP_MACOS_ABOUT_IMAGE}"
         "${CLIPP_MACOS_SYMBOLS_FONT}"
     )
     clipp_apply_common_target_settings(clipp)
-    target_compile_options(clipp PRIVATE "-Wno-deprecated-declarations")
+    target_compile_options(clipp PRIVATE
+        "$<$<COMPILE_LANGUAGE:CXX,OBJCXX>:-Wno-deprecated-declarations>"
+        # main.cpp owns the executable entry point.
+        "$<$<COMPILE_LANGUAGE:Swift>:-parse-as-library>"
+    )
+    set(CLIPP_SHORTCUTS_BRIDGING_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/AppleShortcutsBridge.h")
+    set_target_properties(clipp PROPERTIES
+        Swift_LANGUAGE_VERSION 5
+        Swift_MODULE_NAME Clipp
+        XCODE_ATTRIBUTE_PRODUCT_MODULE_NAME Clipp
+        XCODE_ATTRIBUTE_SWIFT_OBJC_BRIDGING_HEADER "${CLIPP_SHORTCUTS_BRIDGING_HEADER}"
+    )
+    if (NOT CMAKE_GENERATOR STREQUAL "Xcode")
+        target_compile_options(clipp PRIVATE
+            "$<$<COMPILE_LANGUAGE:Swift>:-import-objc-header>"
+            "$<$<COMPILE_LANGUAGE:Swift>:${CLIPP_SHORTCUTS_BRIDGING_HEADER}>"
+        )
+    endif()
     # Existing macOS .mm code relies on ARC semantics (no manual retain/release); enable it.
     # The Xcode generator ignores $<COMPILE_LANGUAGE:OBJCXX> compile options reliably, so set
     # the Xcode build setting directly. Keep the compile option for Ninja/Make generators.
@@ -446,7 +467,36 @@ elseif (APPLE)
         "-framework QuartzCore"
         # AXIsProcessTrusted + CGEventPost for the popup's paste keystroke.
         "-framework ApplicationServices"
+        "-framework AppIntents"
     )
+
+    # Xcode extracts App Intents automatically for the mixed Swift app target.
+    # Ninja needs the same metadata explicitly; otherwise the binary runs but
+    # its action is absent from Shortcuts. Generate constants from our single
+    # Swift source and package the metadata before build scripts sign the app.
+    if (NOT CMAKE_GENERATOR STREQUAL "Xcode")
+        set(CLIPP_SHORTCUTS_CONSTANTS "${CMAKE_CURRENT_BINARY_DIR}/generated/ClippShortcuts.swiftconstvalues")
+        set(CLIPP_SHORTCUTS_PROTOCOLS "${CMAKE_CURRENT_BINARY_DIR}/generated/ClippShortcuts-protocols.json")
+        file(WRITE "${CLIPP_SHORTCUTS_PROTOCOLS}" "[\"AppIntent\",\"AppShortcutsProvider\"]\n")
+        target_compile_options(clipp PRIVATE
+            "$<$<COMPILE_LANGUAGE:Swift>:-Xfrontend;-const-gather-protocols-file;-Xfrontend;${CLIPP_SHORTCUTS_PROTOCOLS}>"
+            "$<$<COMPILE_LANGUAGE:Swift>:-Xfrontend;-emit-const-values-path;-Xfrontend;${CLIPP_SHORTCUTS_CONSTANTS}>"
+        )
+        set_property(TARGET clipp APPEND PROPERTY LINK_DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/extract_macos_shortcuts.cmake")
+        add_custom_command(TARGET clipp POST_BUILD
+            COMMAND "${CMAKE_COMMAND}"
+                "-DCLIPP_APP_BUNDLE=$<TARGET_BUNDLE_DIR:clipp>"
+                "-DCLIPP_APP_BINARY=$<TARGET_FILE:clipp>"
+                "-DCLIPP_SHORTCUTS_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/ios/Clipp/App/ClippShortcuts.swift"
+                "-DCLIPP_SHORTCUTS_CONSTANTS=${CLIPP_SHORTCUTS_CONSTANTS}"
+                "-DCLIPP_SHORTCUTS_ARCH=${CMAKE_OSX_ARCHITECTURES}"
+                "-DCLIPP_SHORTCUTS_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/scripts/extract_macos_shortcuts.cmake"
+            COMMENT "Extracting Apple Shortcuts metadata"
+            VERBATIM
+        )
+    endif()
 
     # CMake substitutes ${MACOSX_BUNDLE_*} target properties into Info.plist.in
     # automatically at build time (no separate configure_file needed). The 3-part

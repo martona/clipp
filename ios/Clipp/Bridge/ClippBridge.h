@@ -1,4 +1,5 @@
 #import <Foundation/Foundation.h>
+#import "../../../src/platform/AppleShortcutsBridge.h"
 
 #include "../../../src/platform/uistrings.h"
 

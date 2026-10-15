@@ -195,6 +195,32 @@ Single-line text without whitespace is treated as a password and shown masked in
 - **macOS**: Clipp lives in the menu bar. Same minimize/exit semantics as Windows.
 - **iOS**: Clipp is a foreground app. Background clipboard sync is limited by iOS's restrictions on background clipboard and network access. A Share Extension puts Clipp in the iOS Share sheet — tap Share on any text or image and select Clipp to send it to your devices. Alternatively, open the app and tap *Send* to share whatever's on the clipboard right now, or tap any item in the activity stream to copy it back.
 
+### Apple Shortcuts
+
+On **iOS 16+ / iPadOS 16+** and **macOS 14+**, open Clipp once after installing,
+then open **Shortcuts**, create a shortcut, and add **Clipp → Copy Latest
+Clipboard Item**. A ready-made **Copy Latest Item** shortcut also appears under
+Clipp's App Shortcuts. You can assign it to a keyboard shortcut on macOS or use
+it in an iPhone/iPad shortcut or automation.
+
+The action opens Clipp and copies the newest item in **this device's Clipp
+history**, supporting text, links, PNG, and JPEG. It behaves like Copy in the
+activity stream: it also shares the item with connected peers. The action does
+not return clipboard content as a Shortcuts output.
+
+“Newest” means the item's event time, matching the activity stream, including
+items recovered from history sync. On iOS, the action loads saved history and
+deferred Share Extension items before selecting. On macOS, history is kept in
+memory; after quitting Clipp, let it reconnect and recover history from peers
+before running the action. It copies the latest item already known locally;
+it does not wait for new network traffic.
+
+If history is empty, or its newest item is unavailable, unsupported, or a
+content-free private placeholder, the action reports an error and leaves the
+clipboard alone. It does not silently substitute an older item. Privacy markers
+on items that retain copyable content follow the same rules as the existing
+Copy action.
+
 ### Command line
 
 On the desktop, the same binary doubles as a command-line tool, dispatching on its arguments. `clipp copy` reads stdin and sends it to your devices; `clipp paste` fetches the newest item and writes it to stdout. It's `pbcopy`/`pbpaste` for your Clipp network:

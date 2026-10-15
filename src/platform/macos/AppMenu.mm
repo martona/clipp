@@ -2,6 +2,8 @@
 
 #ifdef __APPLE__
 
+#import "../AppleShortcutsBridge.h"
+
 #include "Clipboard.h"
 #include "ClipboardFlowUi.h"
 #include "Logger.h"
@@ -1261,6 +1263,7 @@ void RunMacOSStatusMenu(bool showNetworkPageOnStartup) {
         controller = [[ClippStatusMenuController alloc] init];
         g_statusMenuController = controller;
         app.delegate = controller;
+        CLPRegisterAppleShortcuts();
         if (showNetworkPageOnStartup) {
             g_pendingOpenMainWindow.exchange(false);
             g_pendingOpenNetworkPage.exchange(false);
